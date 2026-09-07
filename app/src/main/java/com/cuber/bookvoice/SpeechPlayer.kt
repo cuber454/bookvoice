@@ -1,0 +1,490 @@
+package com.cuber.bookvoice
+
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.os.Handler
+import android.os.Looper
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
+import java.io.File
+
+/**
+ * Плеер озвучки, в котором звук играет САМО приложение, а не движок синтеза.
+ *
+ * Зачем. Пока голос произносил движок TextToSpeech напрямую, аудио числилось
+ * за процессом движка — Android не считал BookVoice «плеером» и не отдавал
+ * ему медиа-кнопки (гарнитура, «волшебное касание»): они уходили последнему
+ * настоящему плееру (YouTube/Nekogram). Лог диагностики это подтвердил:
+ * кнопка не доходила до приложения ни разу.
+ *
+ * Как теперь. Движок TTS только СИНТЕЗИРУЕТ предложение в wav-файл, а файл
+ * проигрывает наш MediaPlayer. Раз звук физически играет из нашего процесса,
+ * система видит BookVoice как настоящий плеер и отдаёт кнопки нам.
+ *
+ * Чтобы между предложениями не было пауз на синтез, следующее предложение
+ * синтезируется заранее: пока играет текущее, MainActivity подсказывает
+ * текст следующего через [onNeedNext], и мы готовим его впрок.
+ */
+class SpeechPlayer(context: Context) {
+
+    private val appContext = context.applicationContext
+    private val main = Handler(Looper.getMainLooper())
+
+    private var tts: TextToSpeech? = null
+    private var ready = false
+    private var engineReadyCallback: ((Boolean) -> Unit)? = null
+
+    /** Пакет текущего движка синтеза (null — системный по умолчанию). */
+    var enginePackage: String? = null
+        private set
+
+    var speed: Float = 1f
+        set(value) {
+            field = value
+            tts?.setSpeechRate(value)
+        }
+
+    /** Высота голоса (тон). Норма = 1.0. Применяется к следующему синтезу. */
+    var pitch: Float = 1f
+        set(value) {
+            field = value
+            tts?.setPitch(value)
+        }
+
+    /** Громкость собственного звука (0..1, 1 = полная, как у системы).
+     *  Умножается на системную громкость медиа. Применяется сразу к играющему
+     *  предложению и к каждому следующему при старте. */
+    var volume: Float = 1f
+        set(value) {
+            field = value.coerceIn(0f, 1f)
+            runCatching { media?.setVolume(field, field) }
+        }
+
+    private var selectedVoiceName: String? = null
+
+    /** Вызывается на главном потоке, когда предложение дочитано до конца. */
+    var onDone: (() -> Unit)? = null
+
+    /** Возвращает текст следующего предложения для предзагрузки (или null —
+     *  книга кончилась). Зовётся на главном потоке, без побочных эффектов. */
+    var onNeedNext: (() -> String?)? = null
+
+    val isReady: Boolean get() = ready
+
+    val voices: List<Voice>
+        get() = tts?.voices?.toList() ?: emptyList()
+
+    /** Пакет системного движка по умолчанию (может быть null до инициализации). */
+    val defaultEngine: String?
+        get() = tts?.defaultEngine
+
+    /** Все установленные движки: пары (пакет, название). */
+    val engines: List<Pair<String, String>>
+        get() {
+            val merged = LinkedHashMap<String, String>()
+            for ((pkg, label) in queryEngines(appContext)) merged.putIfAbsent(pkg, label)
+            tts?.engines?.forEach { e ->
+                val name = e.name ?: return@forEach
+                val label = e.label?.takeIf { it.isNotBlank() } ?: name
+                merged.putIfAbsent(name, label)
+            }
+            return merged.toList().sortedBy { it.second.lowercase() }
+        }
+
+    // ---------- Пайплайн «синтез в файл → играет MediaPlayer» ----------
+
+    private val synthDir = File(appContext.cacheDir, "tts_speech").apply {
+        if (!exists()) mkdirs()
+    }
+    private val audioSessionId =
+        (appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager).generateAudioSessionId()
+
+    private val audioAttrs = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
+
+    private var media: MediaPlayer? = null
+    /** Счётчик поколений проигрывания: защита от запоздавших callback'ов
+     *  MediaPlayer после stop()/release(). */
+    private var playGen = 0L
+
+    /** Последний текст, который попросили говорить. */
+    private var currentText: String? = null
+
+    /** Текст, чей синтез ещё идёт, а по завершении его надо СРАЗУ играть
+     *  (speak() попросил, готового файла не было). */
+    private var awaitingPlayText: String? = null
+
+    /** Текст, который синтезируется впрок (пока играет другое предложение). */
+    private var prefetchInFlightText: String? = null
+
+    /** Уже синтезированный файл следующего предложения — готов к мгновенному старту. */
+    private var prefetchText: String? = null
+    private var prefetchFile: File? = null
+
+    private var reqSeq = 0L
+    private val pending = HashMap<Long, Pending>()
+
+    private class Pending(val kind: Kind, val text: String, val file: File?) {
+        enum class Kind { FILE, DIRECT }
+        var cancelled = false
+    }
+
+    private val initListener = TextToSpeech.OnInitListener { status ->
+        main.post {
+            val ok = status == TextToSpeech.SUCCESS && tts != null
+            ready = ok
+            if (ok) {
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    // msg1818: засечка фактического старта произнесения движком —
+                    // для сопоставления с фразой TalkBack «управление мультимедиа».
+                    override fun onStart(utteranceId: String?) {
+                        Diag.log(appContext, "tts", "onStart: движок начал речь ($utteranceId)")
+                    }
+
+                    override fun onDone(utteranceId: String?) {
+                        val id = utteranceId?.toLongOrNull() ?: return
+                        main.post { synthFinished(id) }
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        val id = utteranceId?.toLongOrNull() ?: return
+                        main.post { synthFailed(id, -1) }
+                    }
+
+                    override fun onError(utteranceId: String?, errorCode: Int) {
+                        val id = utteranceId?.toLongOrNull() ?: return
+                        main.post { synthFailed(id, errorCode) }
+                    }
+                })
+                applySpeedAndVoice()
+            }
+            engineReadyCallback?.invoke(ok)
+            engineReadyCallback = null
+        }
+    }
+
+    init {
+        start(null)
+        // Старые временные файлы от прошлых запусков — почистим при старте.
+        runCatching { synthDir.listFiles()?.forEach { it.delete() } }
+    }
+
+    /** Переключиться на движок [pkg] (null — системный по умолчанию). */
+    fun setEngine(pkg: String?, onResult: ((Boolean) -> Unit)? = null) {
+        if (pkg == enginePackage && ready) {
+            onResult?.invoke(true)
+            return
+        }
+        engineReadyCallback = onResult
+        start(pkg)
+    }
+
+    private fun start(pkg: String?) {
+        enginePackage = pkg
+        runCatching { tts?.stop() }
+        runCatching { tts?.shutdown() }
+        tts = null
+        ready = false
+        pending.clear()
+        resetPipeline()
+        tts = runCatching {
+            if (pkg != null) TextToSpeech(appContext, initListener, pkg)
+            else TextToSpeech(appContext, initListener)
+        }.getOrNull()
+    }
+
+    /** Начать озвучивать одно предложение. Вызывается с главного потока. */
+    fun speak(text: String) {
+        val t = tts
+        if (t == null || !ready || text.isBlank()) return
+        currentText = text
+        releaseMedia()
+
+        // Готовый заранее файл этого же предложения — играем без задержки.
+        // ВАЖНО: забираем файл, НЕ вызывая clearPrefetch() — она удаляет его,
+        // и playFile падает с ENOENT (каждая вторая фраза уходила в запасной
+        // путь движкового произнесения). Файл удалит сам playFile по завершении.
+        if (prefetchText == text && prefetchFile != null) {
+            val f = prefetchFile!!
+            prefetchFile = null
+            prefetchText = null
+            awaitingPlayText = null
+            playFile(f)
+            return
+        }
+
+        // Синтез этого текста уже идёт впрок — просто ждём его и сыграем.
+        if (prefetchInFlightText == text) {
+            awaitingPlayText = text
+            return
+        }
+
+        // Старые заготовки не совпадают — выбрасываем и синтезируем заново.
+        clearPrefetch()
+        prefetchInFlightText = null
+        awaitingPlayText = text
+        synthToFile(text)
+    }
+
+    /** Остановить озвучку: тишина сразу, onDone не вызывается. */
+    fun stop() {
+        currentText = null
+        awaitingPlayText = null
+        clearPrefetch()
+        releaseMedia()
+        // Останавливаем и сам движок: иначе запасное прямое произнесение
+        // (fallbackDirect) пауза не прерывает — фраза «дочитывалась» до конца,
+        // а следующая глава накладывалась на её хвост.
+        runCatching { tts?.stop() }
+        // Незавершённые синтезы больше никому не нужны: отменяем и удаляем их
+        // файлы, чтобы после tts.stop() они не осиротели в pending.
+        pending.values.forEach { it.cancelled = true; it.file?.delete() }
+        pending.clear()
+    }
+
+    fun selectVoice(name: String) {
+        selectedVoiceName = name
+        applySpeedAndVoice()
+    }
+
+    private fun applySpeedAndVoice() {
+        val t = tts ?: return
+        if (!ready) return
+        t.setSpeechRate(speed)
+        t.setPitch(pitch)
+        val name = selectedVoiceName
+        if (name != null) {
+            val v = t.voices?.firstOrNull { it.name == name }
+            if (v != null) t.voice = v
+        }
+    }
+
+    // ---------- Синтез ----------
+
+    /** Запустить синтез [text] в файл. По завершении судьба файла решается в
+     *  [synthFinished]: текст ждёт [awaitingPlayText] — играем, иначе копим впрок. */
+    private fun synthToFile(text: String) {
+        val t = tts
+        if (t == null || !ready) return
+        val file = File(synthDir, "s_${reqSeq}.wav")
+        val id = reqSeq++
+        pending[id] = Pending(Pending.Kind.FILE, text, file)
+        val r = runCatching {
+            t.synthesizeToFile(text, null, file, id.toString())
+        }.getOrDefault(TextToSpeech.ERROR)
+        if (r != TextToSpeech.SUCCESS) {
+            pending.remove(id)?.let { it.file?.delete() }
+            onSynthLost(text)
+        }
+    }
+    /** Завершился синтез (или прямое произнесение) с [id]. На главном потоке. */
+    private fun synthFinished(id: Long) {
+        val p = pending.remove(id) ?: return
+        if (p.cancelled) {
+            p.file?.delete()
+            return
+        }
+        when (p.kind) {
+            Pending.Kind.DIRECT -> {
+                // Страховочное произнесение движком закончилось само.
+                onDone?.invoke()
+            }
+            Pending.Kind.FILE -> {
+                val f = p.file
+                if (f == null || !f.exists() || f.length() == 0L) {
+                    f?.delete()
+                    onSynthLost(p.text)
+                    return
+                }
+                if (p.text == awaitingPlayText) {
+                    // Это тот текст, который уже попросили говорить.
+                    awaitingPlayText = null
+                    if (prefetchInFlightText == p.text) prefetchInFlightText = null
+                    playFile(f)
+                } else if (p.text == prefetchInFlightText) {
+                    // Упреждающий синтез завершился, пока его ещё не просили.
+                    prefetchInFlightText = null
+                    prefetchText = p.text
+                    prefetchFile = f
+                } else {
+                    // Осиротевший синтез (устаревшая заготовка) — просто удаляем.
+                    f.delete()
+                }
+            }
+        }
+    }
+
+    /** Синтез с [id] сорвался — разбираемся, был ли это запрошенный текст. */
+    private fun synthFailed(id: Long, errorCode: Int) {
+        val p = pending.remove(id) ?: return
+        p.file?.delete()
+        if (p.cancelled || p.kind != Pending.Kind.FILE) return
+        Diag.log(appContext, "tts", "синтез в файл не удался (код $errorCode)")
+        onSynthLost(p.text)
+    }
+
+    /** Синтеза в файл не вышло. Если текст кто-то ждёт (speak()) — пытаемся
+     *  проговорить напрямую движком: тишина хуже, чем разовое возвращение к
+     *  движковому звуку (на время этой фразы media-кнопки будут не наши — это
+     *  редкая страховка). Упавшую заготовку просто отбрасываем. */
+    private fun onSynthLost(text: String) {
+        if (prefetchInFlightText == text) prefetchInFlightText = null
+        val wanted = text == awaitingPlayText
+        awaitingPlayText = null
+        val t = tts
+        if (t == null || !ready || !wanted) return
+        Diag.log(appContext, "tts", "страховка: движок говорит напрямую (media-кнопки на это время не наши)")
+        val id = reqSeq++
+        pending[id] = Pending(Pending.Kind.DIRECT, text, null)
+        val r = runCatching { t.speak(text, TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
+            .getOrDefault(TextToSpeech.ERROR)
+        if (r != TextToSpeech.SUCCESS) {
+            pending.remove(id)
+            // Совсем ничего не вышло — пропускаем предложение, чтобы чтение не встало.
+            onDone?.invoke()
+        }
+    }
+
+    // ---------- Проигрывание ----------
+
+    private fun playFile(f: File) {
+        val gen = ++playGen
+        val text = currentText
+        val mp = MediaPlayer()
+        try {
+            mp.setAudioAttributes(audioAttrs)
+            mp.setAudioSessionId(audioSessionId)
+            mp.setDataSource(f.absolutePath)
+            mp.setOnPreparedListener {
+                if (gen != playGen || media !== null) {
+                    // Успели остановить, пока файл готовился, — не играем.
+                    runCatching { it.release() }
+                    f.delete()
+                    return@setOnPreparedListener
+                }
+                media = it
+                it.setVolume(volume, volume)
+                it.start()
+                Diag.log(appContext, "sound", "играю свой звук: ${f.name} (${f.length()} байт)")
+                // Предложение начало звучать — готовим следующее заранее.
+                requestPrefetch()
+            }
+            mp.setOnCompletionListener {
+                runCatching { it.release() }
+                if (media === it) media = null
+                f.delete()
+                onDone?.invoke()
+            }
+            mp.setOnErrorListener { p, what, extra ->
+                runCatching { p.release() }
+                if (media === p) media = null
+                f.delete()
+                if (gen != playGen) return@setOnErrorListener true
+                Diag.log(appContext, "sound", "свой звук не заиграл (what=$what extra=$extra) — говорю напрямую")
+                fallbackDirect(text)
+                true
+            }
+            mp.prepareAsync()
+        } catch (e: Exception) {
+            runCatching { mp.release() }
+            f.delete()
+            if (gen == playGen) {
+                Diag.log(appContext, "sound", "исключение при старте своего звука: ${e.message}")
+                fallbackDirect(text)
+            }
+        }
+    }
+
+    /** Собственный аудиоплеер не смог сыграть файл (редкий случай) — чтобы
+     *  чтение не замолчало, произносим текст напрямую движком. На время этой
+     *  фразы media-кнопки будут не наши; по её окончании чтение продолжается. */
+    private fun fallbackDirect(text: String?) {
+        if (text.isNullOrBlank()) return
+        val t = tts
+        if (t == null || !ready) {
+            // Совсем ничего не вышло — пропускаем предложение, чтение не встаёт.
+            onDone?.invoke()
+            return
+        }
+        val id = reqSeq++
+        pending[id] = Pending(Pending.Kind.DIRECT, text, null)
+        val r = runCatching { t.speak(text, TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
+            .getOrDefault(TextToSpeech.ERROR)
+        if (r != TextToSpeech.SUCCESS) {
+            pending.remove(id)
+            onDone?.invoke()
+        }
+    }
+
+    /** Отменить текущее проигрывание. onDone НЕ вызывается. */
+    private fun releaseMedia() {
+        playGen++
+        media?.let { m ->
+            runCatching { m.stop() }
+            runCatching { m.release() }
+        }
+        media = null
+    }
+
+    /** Пока играет текущее — спросить MainActivity, какое предложение следующее,
+     *  и синтезировать его заранее, чтобы между предложениями не было паузы. */
+    private fun requestPrefetch() {
+        if (awaitingPlayText != null) return // текущее предложение ещё не сыграно
+        val next = onNeedNext?.invoke() ?: return
+        if (next.isBlank() || next == currentText) return
+        if (next == prefetchText && prefetchFile != null) return
+        if (next == prefetchInFlightText) return
+        prefetchInFlightText = next
+        synthToFile(next)
+    }
+
+    /** Полностью обнулить состояние пайплайна (без остановки TTS). */
+    private fun resetPipeline() {
+        awaitingPlayText = null
+        prefetchInFlightText = null
+        clearPrefetch()
+        releaseMedia()
+        currentText = null
+    }
+
+    private fun clearPrefetch() {
+        prefetchFile?.let { runCatching { it.delete() } }
+        prefetchText = null
+        prefetchFile = null
+    }
+
+    fun shutdown() {
+        onDone = null
+        onNeedNext = null
+        stop()
+        runCatching { tts?.shutdown() }
+        tts = null
+        ready = false
+        runCatching { synthDir.listFiles()?.forEach { it.delete() } }
+    }
+
+    companion object {
+        /** Резервный способ перечислить движки через PackageManager, если getEngines пуст. */
+        private fun queryEngines(context: Context): List<Pair<String, String>> {
+            val pm = context.packageManager
+            val intent = Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE)
+            val services = runCatching {
+                pm.queryIntentServices(intent, PackageManager.GET_META_DATA)
+            }.getOrElse { emptyList() }
+            return services.mapNotNull { ri ->
+                val pkg = ri.serviceInfo?.packageName ?: return@mapNotNull null
+                val label = runCatching { ri.loadLabel(pm).toString() }
+                    .getOrNull()?.takeIf { it.isNotBlank() } ?: pkg
+                pkg to label
+            }.distinctBy { it.first }.sortedBy { it.second.lowercase() }
+        }
+    }
+}

@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.BookVoice" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">#101418</item>
+    </style>
+</resources>

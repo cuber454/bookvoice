@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Вибро-подсказка при командах с гарнитуры (видно даже слепому,
+         когда TalkBack молчит). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Онлайн-каталоги книг (OPDS): скачиваем ленты и сами книги. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Foreground-медиа-сервис: без этого набора прав Android уронит
+         сервис на старте (SecurityException на startForeground). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- «После звонка» (#98): конец настоящего звонка → продолжить чтение.
+         Просится в рантайме, только когда включён этот режим. Номера не
+         читаются и не сохраняются — слушаем только начало/конец звонка. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <!-- msg1170/1172: «Доступ ко всем файлам». Нужен для ЖЕЛЕЗНОЙ записи копий
+         и скачиваний в любую выбранную папку: MixPlorer и часть других
+         проводников отдают SAF-tree, но их provider не умеет createDocument —
+         обычная запись туда падает. С этим разрешением пишем реальным путём
+         (/storage/…), как сам проводник. Просится один раз на Android 11+,
+         когда выбрана такая папка (AllFiles.kt). На Google Play это разрешение
+         ограничено, но BookVoice ставится напрямую — ок. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+    <!-- Android 11+ скрывает от приложения чужие TTS-движки, если явно
+         не объявить видимость этого сервиса. Без этого списка движков
+         виден только системный (Google). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <!-- usesCleartextTraffic=true: часть зеркал OPDS отдают каталог по http,
+         а Android 9+ по умолчанию такие запросы режет. Чувствительных данных
+         читалка не шлёт, риск принимаем ради совместимости с каталогами. -->
+    <!-- BookVoiceApp = глобальный сторож падений: пишет стек краха в diag.log
+         перед смертью приложения (см. класс). Прописан здесь, чтобы onCreate
+         сработал до первой Activity/Service. -->
+    <application
+        android:name=".BookVoiceApp"
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.BookVoice"
+        android:usesCleartextTraffic="true">
+
+        <!-- Дом (msg1676+): корневое окно «Библиотека». Нижних вкладок нет —
+             Каталог и Настройки открываются отдельными окнами ПОВЕРХ полки из
+             меню «⋮». singleTop: возврат из читалки CLEAR_TOP-интентом (и повторные
+             запуски с рабочего стола) не плодят новых копий дома. launcher и
+             «Открыть с помощью» (msg748) — как у бывшего хоста TabsActivity. -->
+        <activity
+            android:name=".LibraryWindowActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- msg748: BookVoice в списке «Открыть с помощью» для читаемых
+                 форматов (PDF, EPUB, TXT, FB2, ZIP-архив с книгой). Типы
+                 объявлены только по mimeType — так фильтр не привязан к схеме
+                 (content:// из SAF и file:// свои оба проходят). Файл дальше
+                 отсекается по расширению в LibraryActivity.handleExternalOpen. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/x-fictionbook+xml" />
+                <data android:mimeType="application/xml" />
+                <data android:mimeType="text/xml" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+        </activity>
+
+        <!-- Окна поверх полки (msg1676+): «Каталоги» и «Настройки» из меню «⋮»
+             полки, как книга. Своих intent-filter нет — вызываются только
+             явным интентом из приложения. -->
+        <activity
+            android:name=".CatalogWindowActivity"
+            android:exported="false" />
+        <activity
+            android:name=".SettingsWindowActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
+
+        <!-- Цитаты (#104) — из меню «⋮ Ещё» библиотеки. -->
+        <activity
+            android:name=".QuotesActivity"
+            android:exported="false" />
+
+        <!-- Медиа-сессия живёт в сервисе, а не в окне — так система отдаёт
+             кнопки гарнитуры и «волшебное касание» нам, а не чужому плееру. -->
+        <service
+            android:name=".MediaSessionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Медиа-кнопки гарнитуры и «волшебное касание» TalkBack приходят
+             сюда, receiver передаёт их в активную MediaSessionCompat. -->
+        <receiver
+            android:name=".MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Доступ к файлу лога для отправки его в Telegram (Настройки → лог). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

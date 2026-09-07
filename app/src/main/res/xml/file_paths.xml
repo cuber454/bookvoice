@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Пути, доступные через FileProvider (для отправки лога в чат). -->
+<paths>
+    <files-path
+        name="internal"
+        path="." />
+</paths>

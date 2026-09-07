@@ -1,0 +1,17 @@
+# Сборка
+.gradle/
+build/
+app/build/
+.kotlin/
+
+# Локальная машина: путь к SDK не общий
+local.properties
+
+# Готовые APK в git не храним — их собирают GitHub Actions и кладут в Releases
+*.apk
+dist/
+
+# Логи и временное
+*.log
+.idea/
+*.iml

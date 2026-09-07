@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Карточка книги в режиме «сетка» (msg646/649). Обложек нет — сетка текстом:
+     название крупным и автор под ним. Один фокусный узел — вся карточка; текст
+     для TalkBack (что именно озвучить) и клики выставляет BookAdapter в коде.
+     Видимые TextView помечены как несущественные для доступности, чтобы
+     TalkBack не спотыкался о них отдельно от карточки. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="92dp"
+    android:layout_margin="4dp"
+    android:background="@drawable/book_card_bg"
+    android:clickable="true"
+    android:focusable="true"
+    android:longClickable="true"
+    android:importantForAccessibility="yes"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/tvCardTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:importantForAccessibility="no"
+        android:maxLines="3"
+        android:textColor="#E8EAED"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tvCardAuthor"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:ellipsize="end"
+        android:importantForAccessibility="no"
+        android:maxLines="1"
+        android:textColor="#9AA0A6"
+        android:textSize="14sp" />
+</LinearLayout>

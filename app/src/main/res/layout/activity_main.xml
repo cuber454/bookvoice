@@ -1,0 +1,348 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#101418"
+    android:orientation="vertical"
+    android:padding="6dp">
+
+    <!-- Верх читалки: название книги ОТДЕЛЬНОЙ строкой (msg1322/1324). Раньше жило
+         в одном ряду с кнопками и ужималось до узкой полоски слева: в ощупывании
+         сверху ловились только кнопки, а заголовок «щупался» лишь у левого края
+         (msg1293/msg1322). Теперь заголовок занимает всю ширину — виден почти
+         целиком (макс. 2 строки) и в ощупывании это первый крупный элемент. -->
+    <TextView
+        android:id="@+id/tvHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:accessibilityHeading="true"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:paddingStart="4dp"
+        android:paddingTop="2dp"
+        android:paddingEnd="4dp"
+        android:paddingBottom="2dp"
+        android:text="@string/no_book"
+        android:textAppearance="?attr/textAppearanceTitleLarge"
+        android:textColor="#E8EAED" />
+
+    <!-- msg1296/1299: кнопки верхнего ряда — ТОЛЬКО иконки (без текстовых подписей),
+         чтобы не красть место у названия. Иконки не растут с системным шрифтом;
+         подписи для скринридера живут в contentDescription у каждой кнопки.
+         msg1324: ряд кнопок — своим рядом под заголовком, прижат вправо. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end|center_vertical"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnToc"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:contentDescription="@string/toc_btn"
+            android:gravity="center"
+            android:minWidth="48dp"
+            app:icon="@drawable/ic_toc"
+            app:iconSize="24dp" />
+
+        <Button
+            android:id="@+id/btnSearch"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:contentDescription="@string/search_button_cd"
+            android:gravity="center"
+            android:minWidth="48dp"
+            app:icon="@drawable/ic_search"
+            app:iconSize="24dp" />
+
+        <Button
+            android:id="@+id/btnBookmark"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:contentDescription="@string/bookmark_btn"
+            android:gravity="center"
+            android:minWidth="48dp"
+            app:icon="@drawable/ic_bookmark"
+            app:iconSize="24dp" />
+
+        <!-- #101: «⋮ Ещё» — действия читалки. Теперь здесь же (msg1176):
+             Библиотека, Настройки, Вернуться на место, Цитаты, Голос чтения.
+             Входит в конструктор экрана: выключена — кнопки нет. -->
+        <Button
+            android:id="@+id/btnMore"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:contentDescription="@string/reader_more_cd"
+            android:gravity="center"
+            android:minWidth="48dp"
+            app:icon="@drawable/ic_more"
+            app:iconSize="24dp" />
+    </LinearLayout>
+
+    <!-- Панель поиска по книге: показывается над списком, текст не перекрывает.
+         Поле с кнопкой голосового ввода, счётчик совпадений, Назад/Далее/Закрыть. -->
+    <LinearLayout
+        android:id="@+id/searchPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingTop="2dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/etSearch"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:autofillHints=""
+                android:hint="@string/search_field_hint"
+                android:imeOptions="actionSearch"
+                android:importantForAutofill="no"
+                android:inputType="text"
+                android:maxLines="1"
+                android:textColor="#E8EAED"
+                android:textColorHint="#9AA0A6"
+                android:textSize="16sp" />
+
+            <Button
+                android:id="@+id/btnSearchMic"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_marginStart="4dp"
+                android:contentDescription="@string/search_mic_cd"
+                android:minWidth="48dp"
+                android:text="🎤"
+                android:textSize="18sp" />
+
+            <Button
+                android:id="@+id/btnSearchGo"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_marginStart="4dp"
+                android:text="@string/search_find_btn"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvSearchResult"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:textAppearance="?attr/textAppearanceLabelMedium"
+            android:textColor="#9AA0A6" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnSearchPrev"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_margin="2dp"
+                android:layout_weight="1"
+                android:text="@string/search_prev_btn"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/btnSearchNext"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_margin="2dp"
+                android:layout_weight="1"
+                android:text="@string/search_next_btn"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/btnSearchClose"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_margin="2dp"
+                android:layout_weight="1"
+                android:text="@string/search_close_btn"
+                android:textSize="15sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/sentenceList"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:scrollbars="vertical" />
+
+    <TextView
+        android:id="@+id/tvPosition"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
+        android:textAppearance="?attr/textAppearanceLabelMedium"
+        android:textColor="#9AA0A6" />
+
+    <SeekBar
+        android:id="@+id/seekProgress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:contentDescription="@string/seek_progress"
+        android:max="0"
+        android:progress="0" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingBottom="6dp">
+
+        <Button
+            android:id="@+id/btnPrevSentence"
+            android:layout_width="0dp"
+            android:layout_height="64dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/prev_sentence"
+            android:text="◀ Пред."
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/btnPlayPause"
+            android:layout_width="0dp"
+            android:layout_height="72dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:text="Читать"
+            android:textSize="18sp" />
+
+        <Button
+            android:id="@+id/btnNextSentence"
+            android:layout_width="0dp"
+            android:layout_height="64dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/next_sentence"
+            android:text="След. ▶"
+            android:textSize="16sp" />
+    </LinearLayout>
+
+    <!-- Ряд кнопок скорости (#58): прячется/возвращается конструктором экрана. -->
+    <LinearLayout
+        android:id="@+id/speedRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnSpeedDown"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:text="@string/speed_down"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/tvSpeed"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:minWidth="90dp"
+            android:text="@string/speed_default"
+            android:textAppearance="?attr/textAppearanceLabelMedium"
+            android:textColor="#E8EAED" />
+
+        <Button
+            android:id="@+id/btnSpeedUp"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:text="@string/speed_up"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnPrevChapter"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:text="Предыдущая глава"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/btnNextChapter"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:text="Следующая глава"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvStats"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
+        android:textAppearance="?attr/textAppearanceLabelMedium"
+        android:textColor="#9AA0A6" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnVoice"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_margin="4dp"
+            android:text="@string/voice_settings"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/btnStatus"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:maxLines="1"
+            android:textSize="15sp" />
+    </LinearLayout>
+</LinearLayout>

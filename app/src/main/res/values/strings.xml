@@ -1,0 +1,534 @@
+<resources>
+    <string name="app_name">BookVoice</string>
+    <string name="open_book">Открыть книгу</string>
+    <string name="voice_settings">Голос чтения</string>
+    <string name="play">Читать</string>
+    <string name="pause">Пауза</string>
+    <string name="prev_sentence">Предыдущее предложение</string>
+    <string name="next_sentence">Следующее предложение</string>
+    <string name="prev_chapter">Предыдущая глава</string>
+    <string name="next_chapter">Следующая глава</string>
+    <string name="no_book">Открой книгу, чтобы начать слушать</string>
+    <string name="auto_on">Авто: вкл</string>
+    <string name="auto_off">Авто: выкл</string>
+    <string name="auto_desc_on">Автопродолжение включено, читает подряд без остановки</string>
+    <string name="auto_desc_off">Автопродолжение выключено, читает одно предложение за раз</string>
+    <string name="next_chapter_row">Следующая глава →</string>
+    <string name="engine_loading">Настраиваю движок…</string>
+
+    <!-- Библиотека -->
+    <string name="add_book">Добавить</string>
+    <string name="continue_last">Продолжить</string>
+    <string name="sort_books">Сортировать</string>
+    <string name="go_library">Библиотека</string>
+    <string name="books_empty">В библиотеке пока пусто. Нажми „Ещё“ и выбери „Открыть файл“, чтобы добавить первую книгу.</string>
+    <string name="already_in_library">Эта книга уже в библиотеке — открываю.</string>
+    <string name="unsupported_format">Формат не поддерживается. BookVoice читает TXT, FB2, ZIP, EPUB и PDF.</string>
+    <string name="pdf_no_text_layer">В этом PDF нет извлекаемого текста — похоже, это скан или картинки. Распознавание текста с картинок (OCR) пока не поддерживается.</string>
+    <string name="pdf_encrypted">PDF защищён паролем — открыть его не получается.</string>
+    <string name="no_last_book">Последней книги ещё нет — сначала добавь книгу.</string>
+    <string name="book_added">Книга добавлена.</string>
+    <string name="sort_dialog">Сортировка книг</string>
+    <string name="sort_title">По названию</string>
+    <string name="sort_date">По дате добавления</string>
+    <string name="sort_author">По автору</string>
+    <string name="sort_lastread">По последнему чтению</string>
+    <string name="status_new">новая</string>
+    <string name="status_reading">читаю</string>
+    <string name="status_finished">дочитана</string>
+    <string name="status_finished_toggle">Отметить дочитанной</string>
+    <string name="status_reading_toggle">Вернуть в читаемые</string>
+    <string name="lib_filter_reading">Читаю</string>
+    <string name="lib_filter_new">Новые</string>
+    <string name="lib_filter_finished">Прочитанные</string>
+    <string name="lib_filter_all">Все</string>
+    <string name="lib_filter_empty">Книг в этой категории пока нет.</string>
+
+    <!-- Меню «Ещё» (⋮) в библиотеке (msg646/649): все действия полки вместо
+         четырёх кнопок в шапке. Открыть файл — прежнее «Добавить». -->
+    <string name="lib_more">Ещё</string>
+    <string name="lib_menu_open_file">Открыть файл</string>
+    <string name="lib_menu_scan">Сканировать папку</string>
+    <string name="lib_menu_sort">Сортировать</string>
+    <string name="lib_menu_view">Вид: список или сетка</string>
+    <string name="lib_view_title">Как показывать книги</string>
+    <string name="lib_view_list">Списком</string>
+    <string name="lib_view_grid">Сеткой</string>
+    <string name="lib_view_changed">Вид книг: %1$s</string>
+    <!-- Прогресс чтения книги в библиотеке (msg656): процент вместо «глава/предл.» -->
+    <string name="lib_progress_pct">прочитано %1$d%%</string>
+    <string name="scan_folder">Сканировать папку</string>
+    <string name="scan_button">Сканировать</string>
+    <string name="choose_folder">Выбрать папку</string>
+    <string name="folder_picker_hint">Выбери папку, в которой лежат книги. Приложение запомнит её и будет сканировать автоматически при каждом открытии.</string>
+    <string name="other_folder">Другая папка</string>
+    <string name="rescan_now">Сканировать сейчас</string>
+    <string name="folder_added">Папка выбрана, сканирую…</string>
+    <string name="folder_scan_result">Добавлено новых книг: %1$d</string>
+    <string name="scanning_start">Сканирую и достаю названия…</string>
+
+    <!-- Онлайн-каталоги (OPDS, v0.3.20) -->
+    <string name="catalog_library_btn">🌐 Онлайн-каталоги</string>
+    <string name="catalog_title">Каталоги</string>
+    <string name="catalog_sources_title">Мои каталоги</string>
+    <string name="catalog_empty">Каталогов пока нет. Нажми „Добавить каталог“ и введи адрес — например https://flibusta.is/opds</string>
+    <string name="catalog_manage">Управление</string>
+    <string name="catalog_add">Добавить каталог</string>
+    <string name="catalog_add_ok">Добавить</string>
+    <string name="catalog_added">Каталог добавлен: %1$s</string>
+    <string name="catalog_url_dialog">Адрес каталога (OPDS)</string>
+    <string name="catalog_url_hint">https://flibusta.is/opds</string>
+    <string name="catalog_bad_url">Не похоже на адрес каталога — проверь ссылку</string>
+    <string name="catalog_remove">Удалить каталог</string>
+    <string name="catalog_remove_ask">Удалить каталог „%1$s“?</string>
+    <string name="catalog_remove_ok">Удалить</string>
+    <string name="catalog_open_short">Открыть каталог</string>
+    <string name="catalog_edit">Изменить каталог</string>
+    <string name="catalog_edit_ok">Сохранить</string>
+    <string name="catalog_edit_saved">Каталог обновлён: %1$s</string>
+    <string name="catalog_name_hint">Название</string>
+    <string name="catalog_longpress_hint">Долгое нажатие на каталог — изменить, проверить или удалить</string>
+    <string name="catalog_move_up">Передвинуть выше</string>
+    <string name="catalog_move_down">Передвинуть ниже</string>
+    <string name="catalog_moved">Каталог передвинут в списке</string>
+    <string name="catalog_check">Проверить каталог</string>
+    <string name="catalog_checking">Проверяю „%1$s“…</string>
+    <string name="catalog_check_ok">Каталог „%1$s“ отвечает</string>
+    <string name="catalog_check_fail">Каталог „%1$s“ не отвечает: %2$s</string>
+    <string name="catalog_section_cd">Раздел. %1$s</string>
+    <string name="catalog_book_cd">Книга, скачать и добавить в библиотеку. %1$s</string>
+    <string name="catalog_sections">Разделы</string>
+    <string name="catalog_books">Книги</string>
+    <string name="catalog_pages">Страницы</string>
+    <string name="catalog_next">Дальше ▸</string>
+    <string name="catalog_loading">Загружаю каталог…</string>
+    <string name="catalog_load_fail">Не получилось открыть каталог: %1$s. Проверь интернет и попробуй другой каталог из списка.</string>
+    <string name="catalog_err_unknown">неизвестная ошибка</string>
+    <string name="catalog_empty_feed">Здесь пусто — попробуй другой раздел.</string>
+    <string name="catalog_search">Поиск в каталоге</string>
+    <string name="catalog_search_dialog">Что ищем?</string>
+    <string name="catalog_search_hint">Название или автор</string>
+    <string name="catalog_search_ok">Найти</string>
+    <string name="catalog_search_voice_prompt">Продиктуйте название книги или автора</string>
+    <string name="catalog_search_voice_announce">Ищу: %1$s</string>
+    <string name="catalog_announce">Каталог: %1$s. Разделов %2$d, книг %3$d.</string>
+    <string name="catalog_dl_start">Скачиваю „%1$s“…</string>
+    <string name="catalog_dl_done">Готово: „%1$s“ добавлена в библиотеку</string>
+    <string name="catalog_dl_fail">Не скачалось: %1$s</string>
+    <string name="catalog_dl_busy">Сначала дождись текущей загрузки</string>
+    <!-- msg1264: подпись кнопки во время загрузки (размер сервер не прислал — без процента) -->
+    <string name="catalog_dl_progress">Скачивание…</string>
+    <string name="catalog_dl_progress_pct">Скачивание… %1$d%%</string>
+    <!-- msg1264: редкая голосовая веха (не каждый процент, чтобы не шуметь) -->
+    <string name="catalog_dl_announce">Скачано %1$d%%</string>
+    <string name="catalog_already">„%1$s“ уже в библиотеке</string>
+
+    <!-- Список-каталог (0.3.26): строки как в читалках, вторая строка — пояснение -->
+    <string name="catalog_search_top">Поиск. Долгое нажатие — голосовой поиск</string>
+    <string name="catalog_search_icon">🔍</string>
+    <string name="catalog_back_top">Назад</string>
+    <string name="catalog_back_icon">←</string>
+    <string name="catalog_download_btn">Скачать</string>
+    <string name="catalog_dl_cd">Скачать книгу: %1$s</string>
+    <string name="catalog_open_book">Открыть страницу книги: %1$s</string>
+    <string name="catalog_book_download">Скачать книгу и добавить в библиотеку</string>
+    <string name="catalog_book_dl_cd">Скачать книгу „%1$s“</string>
+    <string name="catalog_info_authors">Авторы: %1$s</string>
+    <string name="catalog_info_genres">Жанры: %1$s</string>
+    <string name="catalog_info_source">Каталог: %1$s</string>
+    <string name="catalog_annotation_title">Аннотация</string>
+    <string name="catalog_book_announce">Книга „%1$s“. %2$s</string>
+    <string name="catalog_more_loading">Догружаю следующие книги…</string>
+    <string name="catalog_more_fail">Не догрузилось: %1$s</string>
+    <string name="catalog_more_retry">Нажми, чтобы повторить</string>
+    <string name="catalog_end">Список загружен полностью. Разделов %1$d, книг %2$d.</string>
+
+    <!-- Настройки ридера -->
+    <string name="settings_title">Настройки</string>
+    <string name="settings_btn">Настройки</string>
+    <string name="auto_start_title">Автоматически читать при открытии книги</string>
+    <string name="auto_start_on">Авто-чтение включено</string>
+    <string name="auto_start_off">Авто-чтение выключено</string>
+    <string name="auto_resume_title">Продолжать чтение после прерывания другим плеером</string>
+    <string name="auto_resume_on">Автопродолжение после прерывания включено</string>
+    <string name="auto_resume_off">Автопродолжение после прерывания выключено</string>
+    <string name="tap_to_play_title">Начинать чтение с предложения по двойному тапу на нём</string>
+    <string name="toc_play_title">Читать сразу при выборе главы в оглавлении</string>
+    <string name="bm_play_title">Читать сразу при выборе закладки</string>
+    <string name="search_play_title">Читать сразу при переходе к найденному слову</string>
+    <!-- Диагностический лог -->
+    <string name="diag_send">📤 Отправить лог в Telegram</string>
+    <string name="diag_clear">🧹 Очистить лог</string>
+    <string name="diag_sent_hint">Выбери Telegram и отправь файл в этот чат</string>
+
+    <!-- Медиа-уведомление -->
+    <string name="media_reading">Читает…</string>
+    <string name="media_paused">Пауза</string>
+
+    <!-- Оглавление, слайдер, статистика -->
+    <string name="toc_title">Оглавление</string>
+    <string name="toc_btn">Оглавление</string>
+    <string name="toc_close">Закрыть</string>
+    <string name="toc_current">%1$d. %2$s — сейчас</string>
+    <string name="seek_progress">Позиция в книге</string>
+
+    <!-- Закладки в читалке -->
+    <string name="bookmark_btn">Закладка</string>
+    <string name="bm_new_title">Новая закладка</string>
+    <string name="bm_field_hint">Имя закладки</string>
+    <string name="bm_create">Создать</string>
+    <string name="bm_save">Сохранить</string>
+    <string name="bm_rename">Переименовать</string>
+    <string name="bm_remove">Убрать</string>
+    <string name="bm_remove_cd">Убрать закладку, %1$s</string>
+    <string name="bm_existing_title">Закладка на этом месте уже есть</string>
+    <string name="bm_rename_title">Переименовать закладку</string>
+    <string name="bm_list_title">Закладки</string>
+    <string name="bm_toc_entry">Закладки (%1$d)</string>
+    <string name="bm_none">Закладок нет</string>
+    <string name="bm_created">Закладка создана</string>
+    <string name="bm_updated">Закладка обновлена</string>
+    <string name="bm_removed">Закладка убрана</string>
+
+    <!-- Экран «Настройки» (0.3.17) -->
+    <string name="settings_back">← Назад</string>
+    <!-- Разделы настроек (0.3.32): главный экран — список групп, внутри — свой список -->
+    <string name="settings_group_voice">Голос</string>
+    <string name="settings_group_reading">Чтение</string>
+    <string name="settings_group_reader">Интерфейс</string>
+    <string name="settings_group_start">Управление</string>
+    <string name="settings_group_library">Библиотека и скачанные</string>
+    <string name="settings_group_diag">Диагностика</string>
+    <!-- Подсказки разделов (msg721): короткая статичная строка-содержимое под названием
+         в главном списке Настроек. Не значения, а «что внутри» — помогает найти раздел. -->
+    <string name="settings_group_voice_hint">Скорость, громкость, голос и синтезатор</string>
+    <string name="settings_group_reading_hint">Когда начинать чтение и что озвучивать</string>
+    <string name="settings_group_reader_hint">Что показывать в читалке</string>
+    <string name="settings_group_start_hint">Запуск, листание и шаг кнопок</string>
+    <string name="settings_group_library_hint">Папка с книгами, куда и в каком формате качать</string>
+    <string name="settings_group_diag_hint">Отправить или очистить лог</string>
+    <!-- Настраиваемые свайпы вправо/влево в читалке (#77) -->
+    <string name="gesture_hint">Свайп вправо и свайп влево по тексту открытой книги. Без экранного диктора листайте одним пальцем, с включённым TalkBack — двумя пальцами. Куда ведёт каждый свайп, выбираете ниже.</string>
+    <string name="gesture_right_title">Свайп вправо</string>
+    <string name="gesture_left_title">Свайп влево</string>
+    <string name="gesture_choose_title">Выберите действие</string>
+    <string name="g_action_next_ch">Следующая глава</string>
+    <string name="g_action_prev_ch">Предыдущая глава</string>
+    <string name="g_action_next_sent">Следующее предложение</string>
+    <string name="g_action_prev_sent">Предыдущее предложение</string>
+    <string name="g_action_play">Начать чтение</string>
+    <string name="g_action_pause">Пауза</string>
+    <string name="g_action_repeat">Повторить текущее</string>
+    <string name="g_action_position">Сообщить позицию</string>
+    <string name="g_action_speed_up">Читать быстрее</string>
+    <string name="g_action_speed_down">Читать медленнее</string>
+    <string name="g_action_toc">Оглавление</string>
+    <string name="g_action_bookmarks">Список закладок</string>
+    <string name="g_action_add_bm">Добавить закладку</string>
+
+    <!-- Конструктор экрана чтения (#58): какие элементы показывать в читалке -->
+    <string name="reader_group_hint">Флажки этого раздела убирают и возвращают элементы на экран книги. Галочка стоит — элемент показывается при чтении: текст книги, кнопки управления, перемотка, позиция, статистика, оглавление, закладки, кнопка голоса, статус, скорость. Снял галочку — элемент исчезает с экрана чтения.</string>
+    <string name="ui_sent_title">Кнопки «Предыдущее» и «Следующее» предложение</string>
+    <string name="ui_play_title">Кнопка «Читать / Пауза»</string>
+    <string name="ui_chapters_title">Кнопки «Предыдущая глава» и «Следующая глава»</string>
+    <string name="ui_slider_title">Слайдер перемотки по книге</string>
+    <string name="ui_position_title">Строка позиции (глава, предложение)</string>
+    <string name="ui_stats_title">Строка «Прочитано, осталось»</string>
+    <string name="ui_toc_title">Кнопка «Оглавление»</string>
+    <string name="ui_bookmark_title">Кнопка «Закладка»</string>
+    <string name="ui_voice_title">Кнопка «Голос чтения»</string>
+    <string name="ui_status_title">Кнопка «Отметить дочитанной»</string>
+    <string name="ui_speed_title">Кнопки скорости («Медленнее», «Быстрее»)</string>
+    <string name="ui_search_title">Кнопка «Поиск»</string>
+
+    <!-- Поиск в читалке: панель над списком предложений, основной текст не перекрывает -->
+    <string name="search_button_cd">Поиск</string>
+    <string name="search_find_btn">Найти</string>
+    <string name="search_prev_btn">Назад</string>
+    <string name="search_next_btn">Далее</string>
+    <string name="search_close_btn">Закрыть поиск</string>
+    <string name="search_mic_cd">Продиктовать слово для поиска</string>
+    <string name="search_field_hint">Слово для поиска</string>
+    <string name="search_counter">Совпадение %1$d из %2$d</string>
+    <string name="search_none">Ничего не найдено</string>
+    <string name="search_empty_hint">Сначала введите или продиктуйте слово для поиска</string>
+    <string name="search_voice_prompt">Продиктуйте слово для поиска</string>
+    <string name="search_voice_unavailable">Голосовой ввод на этом устройстве недоступен</string>
+    <string name="search_voice_retry">Не расслышал слово, попробуйте ещё раз</string>
+
+    <string name="speed_down">Медленнее</string>
+    <string name="speed_up">Быстрее</string>
+    <string name="speed_default">Скорость: 1.0</string>
+
+    <string name="speed_title">Скорость чтения</string>
+    <string name="speed_value">Скорость: %1$s</string>
+    <string name="tone_value">Тон: %1$s</string>
+    <string name="volume_value">Громкость: %1$d%%</string>
+    <string name="volume_cd">Громкость</string>
+    <string name="voice_engine_title">Голос и движок</string>
+    <string name="voice_engine_value">Голос и движок…</string>
+    <string name="voice_need_book">Чтобы сменить голос, открой любую книгу и нажми «Голос чтения» внизу экрана</string>
+    <string name="engine_step">1. Выберите движок синтеза</string>
+    <string name="engine_back">← К выбору движка</string>
+    <string name="voice_step">2. Выберите голос</string>
+    <string name="no_engines">Движки не найдены</string>
+    <string name="no_voices">В этом движке нет голосов</string>
+
+    <string name="chapter_start_title">Озвучивать название главы в начале</string>
+    <string name="chapter_start_on">Озвучка названия главы включена</string>
+    <string name="chapter_start_off">Озвучка названия главы выключена</string>
+
+    <string name="start_screen_title">Стартовый экран</string>
+    <string name="start_screen_dialog">При открытии приложения показывать</string>
+    <!-- Значения — в именительном падеже: они подставляются и в строку-резюме
+         «Стартовый экран: …», где винительный («Библиотеку») выглядел ошибкой. -->
+    <string name="start_screen_library">Библиотека</string>
+    <string name="start_screen_last">Последняя книга</string>
+
+    <string name="scroll_title">Прокручивать к читаемому предложению</string>
+    <string name="scroll_on">Прокрутка к читаемому включена</string>
+    <string name="scroll_off">Прокрутка к читаемому выключена</string>
+
+    <string name="title_page_title">Показывать титульный лист в начале книги</string>
+
+    <string name="net_permission_title">Нужен доступ в интернет</string>
+    <string name="net_permission_message">Интернет нужен BookVoice для каталогов книг, но доступ к нему у приложения отключён. Система сама об этом не спросит — откройте настройки приложения кнопкой ниже и включите переключатель «Интернет».</string>
+    <string name="net_permission_open">Открыть настройки</string>
+
+    <string name="step_title">Кнопки назад и далее шагают по</string>
+    <string name="step_dialog">Чем листать вперёд и назад</string>
+    <string name="step_sentence">Предложением</string>
+    <string name="step_chapter">Главой</string>
+    <string name="step_sentence_value">предложениям</string>
+    <string name="step_chapter_value">главам</string>
+
+    <!-- 0.3.37: по каким уровням FB2 шагают кнопки «Предыдущая/Следующая глава». -->
+    <string name="ch_nav_title">Кнопки глав шагают</string>
+    <string name="ch_nav_dialog">По чём шагают «Предыдущая» и «Следующая глава»</string>
+    <string name="ch_nav_major">По крупным разделам</string>
+    <string name="ch_nav_chapters">По главам</string>
+    <string name="ch_nav_all">По всем заголовкам</string>
+
+    <string name="folder_title">Папка с книгами</string>
+    <string name="folder_none">Папка не выбрана</string>
+    <string name="folder_pick">Выбрать папку</string>
+    <string name="folder_change">Сменить папку</string>
+    <string name="folder_hint">Книги из папки добавятся при следующем открытии библиотеки</string>
+    <string name="folder_saved">Папка выбрана</string>
+
+    <string name="log_sent_hint">Выбери Telegram и отправь файл в этот чат</string>
+    <string name="log_cleared">Лог очищен</string>
+
+    <!-- 0.3.27: меню книги в библиотеке, страница книги в каталоге, настройки -->
+    <string name="dialog_close">Закрыть</string>
+    <string name="dialog_cancel">Отмена</string>
+
+    <!-- msg1278: выход из приложения (⋮-меню библиотеки и читалки) -->
+    <string name="app_exit">Выход из приложения</string>
+
+    <string name="library_menu_share">Поделиться файлом книги</string>
+    <string name="library_menu_finish">Отметить дочитанной</string>
+    <string name="library_menu_unfinish">Вернуть в читаемые</string>
+    <string name="library_menu_info">Информация о книге</string>
+    <string name="library_menu_delete">Удалить из библиотеки</string>
+    <string name="book_info_author">Автор: %1$s</string>
+    <string name="book_info_file">Файл: %1$s</string>
+    <string name="book_info_status">Статус: %1$s</string>
+    <string name="book_info_annotation_title">Аннотация</string>
+    <string name="book_info_annotation_loading">Аннотация: читаю…</string>
+    <string name="book_info_annotation_none">Аннотации в файле нет</string>
+    <string name="book_share_missing">Файла книги больше нет на устройстве</string>
+    <string name="book_delete_title">Удалить из библиотеки</string>
+    <string name="book_delete_msg">Удалить „%1$s“ из библиотеки и сам файл с устройства? Это необратимо.</string>
+    <string name="book_delete_yes">Удалить</string>
+    <string name="book_deleted">Книга и файл удалены</string>
+
+    <string name="catalog_gesture_hint">В списке книг: короткий тап открывает страницу книги, долгий тап — сразу скачивает книгу</string>
+    <string name="catalog_book_open">Открыть в читалке</string>
+    <!-- msg1389: озвучка «Открыть в читалке»/«Скачать» — без названия книги:
+         оно уже прочитано заголовком страницы книги в каталоге. -->
+    <string name="catalog_book_open_cd">Открыть в читалке</string>
+    <string name="catalog_open_existing">„%1$s“ уже скачана — открываю в читалке</string>
+    <string name="catalog_dl_with_fmt">Скачать %1$s</string>
+    <!-- msg1284/1287: озвучка кнопки «Скачать» — без формата (формат живёт в
+         отдельной кнопке выбора и не должен рассинхрониваться с настройкой) -->
+    <string name="catalog_dl_primary_cd">Скачать</string>
+    <string name="catalog_format_btn">Формат</string>
+    <string name="catalog_format_cd">Выбрать формат скачивания. Сейчас %1$s</string>
+    <string name="catalog_fmt_dialog">Форматы скачивания</string>
+    <string name="catalog_pick_fmt_dialog">Выбери формат для скачивания</string>
+    <string name="catalog_no_formats">У этой книги нет форматов для скачивания</string>
+    <string name="catalog_no_fmt">Формата %1$s нет. Доступно: %2$s</string>
+    <string name="catalog_links_title">Похожие книги и источник</string>
+    <string name="catalog_author_link">Все книги автора</string>
+    <string name="catalog_series_link">Все книги серии</string>
+    <string name="catalog_site_link">Книга на сайте</string>
+    <string name="catalog_link_fail">Не получилось открыть ссылку: %1$s</string>
+    <string name="catalog_dl_settings_cd">Настройки скачивания: формат и папка для книг</string>
+    <string name="catalog_dl_settings_title">Настройки скачивания</string>
+    <string name="dl_folder_to_app">Скачивать в память приложения</string>
+    <string name="dl_folder_internal">Книги будут скачиваться в память приложения</string>
+
+    <string name="exit_title">Выход из открытой книги</string>
+    <string name="exit_dialog">Куда уходить кнопкой „назад“ из книги?</string>
+    <string name="exit_desktop">На рабочий стол</string>
+    <string name="exit_library">В список книг</string>
+
+    <string name="dl_folder_title">Куда скачивать книги</string>
+    <string name="dl_folder_none">в память приложения</string>
+    <string name="dl_folder_saved">Папка для скачиваний выбрана</string>
+    <string name="dl_folder_change">Сменить папку</string>
+    <string name="dl_folder_unwritable">Эта папка не поддерживает запись из приложения (так бывает с папками сторонних проводников, например MixPlorer). Выбери папку в системных «Файлах» или скачивай в память приложения</string>
+    <string name="dl_folder_fallback">Выбранная папка не поддерживает запись — книга сохранена в память приложения. Выбери папку заново в системных «Файлах», если нужно хранить файлы в ней</string>
+    <!-- msg1170/1172: «Доступ ко всем файлам» — железная запись в папки проводников -->
+    <string name="all_files_title">Доступ ко всем файлам</string>
+    <string name="all_files_explain">Не все папки разрешают BookVoice писать в себя напрямую (так бывает с папками сторонних проводников, например MixPlorer). Включи для BookVoice «Доступ ко всем файлам» — тогда копии и скачивания будут записываться в любую выбранную папку</string>
+    <string name="all_files_open">Открыть настройки</string>
+    <string name="all_files_later">Позже</string>
+    <string name="dl_format_title">Формат скачивания</string>
+
+    <!-- 0.3.42: вкладки библиотеки — порядок и видимость (#97) -->
+    <string name="lib_tabs_title">Вкладки библиотеки</string>
+    <string name="lib_tabs_hint">Вкладки-фильтры сверху Библиотеки: «Читаю», «Новые», «Прочитанные», «Все». Кнопка каждой вкладки открывает действия: скрыть или показать, передвинуть выше или ниже. Вкладку «Все» скрыть нельзя.</string>
+    <string name="lib_tabs_visible">показана</string>
+    <string name="lib_tabs_hidden">скрыта</string>
+    <string name="lib_tabs_row_cd">Вкладка «%1$s», %2$s</string>
+    <string name="lib_tabs_dialog">Вкладка «%1$s»</string>
+    <string name="lib_tabs_up">Передвинуть выше</string>
+    <string name="lib_tabs_down">Передвинуть ниже</string>
+    <string name="lib_tabs_hide">Скрыть</string>
+    <string name="lib_tabs_show">Показать</string>
+    <string name="lib_tabs_reset">Сбросить к стандартным</string>
+    <string name="lib_tabs_reset_done">Вкладки возвращены к стандартным</string>
+    <string name="lib_tabs_cannot_all">Вкладку «Все» скрыть нельзя</string>
+    <string name="lib_tabs_cannot_active">Эта вкладка сейчас открыта в Библиотеке — сначала выбери другую</string>
+    <string name="lib_tabs_cannot_last">Нельзя скрыть последнюю видимую вкладку</string>
+
+    <!-- 0.3.42: после звонка (#98) -->
+    <string name="after_call_title">После звонка</string>
+    <string name="after_call_dialog">Что делать, когда звонок закончился</string>
+    <string name="after_call_stop">Остановиться</string>
+    <string name="after_call_continue">Продолжить чтение</string>
+    <string name="after_call_stop_value">Остановиться</string>
+    <string name="after_call_continue_value">Продолжить чтение</string>
+    <string name="after_call_rewind_title">Отматывать назад после звонка</string>
+    <string name="after_call_rewind_dialog">На сколько отмотать после звонка</string>
+    <string name="after_call_rewind_none">Не отматывать</string>
+    <string name="after_call_rewind_2">На 2 предложения</string>
+    <string name="after_call_rewind_5">На 5 предложений</string>
+    <string name="after_call_rewind_10">На 10 предложений</string>
+    <string name="after_call_continue_announce">Звонок закончился. Отматываю и продолжаю чтение</string>
+    <string name="after_call_perm_message">Чтобы знать о звонках, BookVoice нужен доступ к состоянию телефона. Видны только начало и конец звонка — номера не читаются и не сохраняются.</string>
+    <string name="after_call_perm_denied">Разрешение «Телефон» не выдано — продолжать после звонка не получится. Выдай разрешение или выбери «Остановиться»</string>
+
+    <!-- 0.3.42: пауза при отключении наушников (#99) -->
+    <string name="headphones_pause_title">Останавливать чтение, когда наушники отключаются</string>
+
+    <!-- msg1254: тактильное подтверждение действий (единый рубильник, «Управление») -->
+    <string name="vibrate_title">Вибрация действий</string>
+
+    <!-- 0.3.42: резервная копия и восстановление (#100) -->
+    <string name="backup_create">Создать резервную копию</string>
+    <string name="backup_restore">Восстановить из копии</string>
+    <string name="backup_dir_title">Папка для резервных копий</string>
+    <string name="backup_dir_pick">Выбрать папку для копий</string>
+    <string name="backup_dir_change">Сменить папку для копий</string>
+    <string name="backup_dir_none">папка не выбрана</string>
+    <string name="backup_blocks_create">Что включить в копию</string>
+    <string name="backup_blocks_restore">Что восстановить</string>
+    <string name="backup_block_settings">Настройки программы</string>
+    <string name="backup_block_books">Книги, закладки и цитаты</string>
+    <string name="backup_create_go">Создать копию</string>
+    <string name="backup_created">Резервная копия создана</string>
+    <string name="backup_create_fail">Не получилось создать копию</string>
+    <string name="backup_restore_choose">Выбери файл копии (bvbak)</string>
+    <string name="backup_bad_file">Это не похоже на копию BookVoice</string>
+    <string name="backup_restore_go">Восстановить</string>
+    <string name="backup_restore_done">Резервная копия восстановлена</string>
+    <string name="backup_restore_fail">Не получилось восстановить: %1$s</string>
+    <string name="backup_auto_title">Резервные копии автоматически</string>
+    <string name="backup_auto_off">Выключено</string>
+    <string name="backup_auto_day">Каждый день</string>
+    <string name="backup_auto_week">Каждую неделю</string>
+    <string name="backup_auto_month">Каждый месяц</string>
+    <string name="backup_notification_title">Сделана резервная копия</string>
+    <string name="backup_notification_body">Книги и настройки сохранены. Нажми, чтобы поделиться копией</string>
+    <string name="backup_share_notification">Поделиться</string>
+    <string name="backup_preview_title">Копия от %1$s</string>
+    <string name="backup_line_books">Книг: %1$d, закладок: %2$d, цитат: %3$d</string>
+    <string name="backup_restore_result">Восстановлено: добавлено книг %1$d, обновлено %2$d, добавлено цитат %3$d</string>
+    <string name="backup_dir_saved">Папка для резервных копий выбрана</string>
+    <string name="backup_dir_unwritable">В эту папку приложение не может писать автоматически (так бывает с папками сторонних проводников, например MixPlorer). Выбери другую папку в системных «Файлах» или создавай копии кнопкой «Создать копию»</string>
+    <string name="backup_auto_dialog">Как часто создавать резервную копию при открытии приложения</string>
+    <string name="backup_folder_copied">Копия сохранена в папку копий</string>
+    <string name="backup_folder_copy_fail">В папку копий сохранить не вышло — она не разрешает запись. Копия открыта в меню «Поделиться», её можно отправить себе в Telegram</string>
+
+    <!-- 0.3.42: отмена перехода — меню «⋮ Ещё» в читалке (#101) -->
+    <string name="reader_more_cd">Ещё</string>
+    <string name="ui_more_title">Кнопка «Ещё»</string>
+    <string name="reader_more_title">Действия</string>
+    <string name="reader_action_back">Вернуться на предыдущее место</string>
+    <string name="reader_back_none">Нет предыдущего места — переходов ещё не было</string>
+    <string name="reader_back_done">Вернулся: %1$s</string>
+
+    <!-- 0.3.42: свой голос для книги (#102) -->
+    <string name="voice_remember_book">Запомнить для этой книги</string>
+    <string name="voice_remember_book_cd">Запомнить голос и скорость для этой книги</string>
+    <string name="voice_book_missing">Голос для этой книги не найден — читаю обычным</string>
+    <string name="voice_book_saved">Запоминаю для этой книги</string>
+    <string name="voice_book_cleared">Читаю обычным голосом</string>
+
+    <!-- 0.3.42: меню долгого нажатия на закладке (#103) -->
+    <string name="bm_actions_title">Действия с закладкой</string>
+    <string name="bm_share">Поделиться закладкой</string>
+    <string name="bm_edit">Редактировать</string>
+    <string name="bm_edit_dialog">Имя закладки</string>
+    <string name="bm_long_hint">нажатие — перейти, долгое нажатие — действия</string>
+
+    <!-- 0.3.42: выделение фрагмента и цитаты (#104/#105/#106) -->
+    <string name="sel_anchor_start">Начало отмечено. Дойди до конца и нажми и удержи предложение снова</string>
+    <string name="sel_anchor_start_short">Начало отмечено</string>
+    <string name="sel_anchor_start_cd">Начало выделения: %1$s</string>
+    <string name="sel_done">Выделено предложений: %1$d</string>
+    <string name="sel_done_quote">Выделено: „%1$s“ — „%2$s“</string>
+    <string name="sel_title">Выделено предложений: %1$d</string>
+    <string name="sel_read">Прочитать выделенное</string>
+    <string name="sel_copy">Копировать</string>
+    <string name="sel_share">Поделиться</string>
+    <string name="sel_quote">Добавить в цитаты</string>
+    <string name="sel_cancel">Отменить</string>
+    <string name="sel_copied">Скопировано</string>
+    <string name="sel_empty">Выделять нечего — сначала начни выделение</string>
+    <string name="sel_long_hint">долгое нажатие — выделить или прочитать отсюда</string>
+    <string name="sel_quote_saved">Добавлено в цитаты</string>
+
+    <string name="quotes_section">Цитаты (%1$d)</string>
+    <string name="quotes_title">Цитаты</string>
+    <string name="quotes_view_title">Цитата целиком</string>
+    <string name="quotes_empty">Цитат пока нет. Выдели фрагмент в книге и выбери „Добавить в цитаты“.</string>
+    <string name="quotes_expo">Экспортировать</string>
+    <string name="quotes_menu_export_all">Экспортировать все</string>
+    <string name="quotes_menu_export_multi">Выбрать несколько</string>
+    <string name="quotes_export_selected">Экспортировать выбранные (%1$d)</string>
+    <string name="quotes_select_all">Выбрать все</string>
+    <string name="quotes_exit_select">Выйти из выбора</string>
+    <string name="quotes_row_selected">выбрана</string>
+    <string name="quotes_row_not_selected">не выбрана</string>
+    <!-- msg1108: в режиме выбора сначала состояние, потом сам текст цитаты. -->
+    <string name="quotes_row_cd">%1$s. %2$s</string>
+    <string name="quotes_open_book">Открыть в книге</string>
+    <string name="quotes_share">Поделиться</string>
+    <string name="quotes_remove">Убрать</string>
+    <string name="quotes_export_this">Экспортировать эту</string>
+    <string name="quotes_removed">Цитата убрана</string>
+    <string name="quotes_no_book">Файла книги на устройстве нет</string>
+    <!-- msg1111/1114: короткое нажатие открывает полный текст цитаты (читает скринридер),
+         долгое нажатие — действия. -->
+    <string name="quotes_read_hint">нажатие — открыть цитату, долгое нажатие — действия</string>
+    <string name="quotes_actions_hint">Действия с цитатой:</string>
+    <string name="quotes_file_prefix">Цитаты</string>
+    <string name="quotes_one_prefix">Цитата</string>
+    <string name="quotes_exported">Экспортировано цитат: %1$d</string>
+    <string name="quotes_export_fail">Не получилось сохранить файл</string>
+
+</resources>

@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#101418"
+    android:orientation="vertical"
+    android:padding="6dp">
+
+    <!-- Название окна-дома (msg1690): заголовок «Библиотека» как в окнах
+         Каталога/Настроек. При возврате из читалки фокус ставится на него —
+         TalkBack озвучивает «Библиотека», а не имя приложения (у полки до этого
+         не было своего названия). Сам по себе не фокусируемый — цель только для
+         переноса; списока не касается (L1b). -->
+    <TextView
+        android:id="@+id/tvTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="4dp"
+        android:layout_marginBottom="2dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="@string/go_library"
+        android:textAppearance="?attr/textAppearanceTitleLarge"
+        android:textColor="#E8EAED" />
+
+    <!-- Фильтры библиотеки по статусу (msg643): «Читаю / Новые / Дочитано / Все».
+         Это вкладки, как нижние (#55/#60): активная — акцентным цветом и полоской
+         снизу, роль и озвучку выставляет код. Вкладки строятся в коде
+         (LibraryActivity.buildFilterTabs) в контейнер filterBar — стиль и
+         contentDescription переиспользуют TabNav.styleTab / tabDesc. -->
+    <LinearLayout
+        android:id="@+id/filterBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingTop="4dp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#3C4043" />
+
+    <!-- Верхние действия (msg646/649): вместо четырёх кнопок — крупный
+         «Продолжить» и справа «⋮» (озвучка «Ещё»), открывающий меню остальных
+         действий: «Открыть файл» (бывш. «Добавить»), сканирование папки,
+         «Сортировать» и вид «список/сетка». «Продолжить» занимает 2/3 ряда. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingTop="4dp">
+
+        <Button
+            android:id="@+id/btnLast"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="58dp"
+            android:layout_margin="3dp"
+            android:layout_weight="2"
+            android:ellipsize="none"
+            android:gravity="center"
+            android:maxLines="1"
+            android:text="@string/continue_last"
+            android:textSize="17sp"
+            app:autoSizeTextType="uniform"
+            app:autoSizeMinTextSize="10sp"
+            app:autoSizeMaxTextSize="17sp"
+            app:autoSizeStepGranularity="1sp" />
+
+        <Button
+            android:id="@+id/btnMore"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="58dp"
+            android:layout_margin="3dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:maxLines="1"
+            android:text="⋮"
+            android:textSize="26sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvEmpty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:padding="28dp"
+        android:text="@string/books_empty"
+        android:textColor="#9AA0A6"
+        android:textSize="18sp"
+        android:visibility="gone" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/bookList"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:scrollbars="vertical" />
+
+</LinearLayout>
