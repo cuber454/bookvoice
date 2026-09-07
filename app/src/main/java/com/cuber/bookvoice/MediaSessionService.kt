@@ -205,7 +205,14 @@ class MediaSessionService : Service() {
         if (MediaButtonReceiver.sessionRef === session) MediaButtonReceiver.sessionRef = null
         session?.release()
         session = null
-        listener = null
+        // listener НЕ обнуляем (было здесь раньше): он — мост медиа-команд к
+        // движку ReaderEngine (ставится в attach). Движок — синглтон процесса,
+        // поэтому listener живёт, пока жив процесс. Гонка при переходе между
+        // книгами: close(А) → stopService → новый attach(Б) → асинхронный
+        // onDestroy старого сервиса приходит ПОСЛЕ attach и обнулял listener —
+        // пересозданный сервис книги Б оставался без слушателя, и «волшебное
+        // касание»/гарнитура не останавливали чтение (listener=false, msg2078).
+        // mediaCommands движка безопасен и при закрытой книге (guards внутри).
         if (instance === this) instance = null
         super.onDestroy()
     }

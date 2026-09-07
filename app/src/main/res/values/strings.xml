@@ -18,8 +18,8 @@
 
     <!-- Библиотека -->
     <string name="add_book">Добавить</string>
-    <string name="continue_last">Продолжить</string>
-    <string name="continue_last_with">Продолжить: %1$s</string>
+    <string name="continue_last">Открыть книгу</string>
+    <string name="continue_last_with">Открыть книгу: %1$s</string>
     <string name="sort_books">Сортировать</string>
     <string name="go_library">Библиотека</string>
     <string name="books_empty">В библиотеке пока пусто. Нажми „Ещё“ и выбери „Открыть файл“, чтобы добавить первую книгу.</string>
@@ -250,6 +250,17 @@
     <string name="g_action_toc">Оглавление</string>
     <string name="g_action_bookmarks">Список закладок</string>
     <string name="g_action_add_bm">Добавить закладку</string>
+    <!-- Кнопки гарнитуры „назад/вперёд“ (msg2136/2152): у каждой своя настройка шага.
+         Подраздел в «Управлении», сразу после свайпов — тоже «кнопки» управления.
+         По умолчанию — „Предложение“. „Выключено“ — кнопка ничего не делает (пауза
+         у Сергея на двойном постукивании, отдельной командой play/pause). -->
+    <string name="headset_hint">Кнопки управления гарнитурой. Что делает кнопка „назад“ и кнопка „вперёд“ на наушниках. „Выключено“ — кнопка ничего не делает. Предложение, абзац или глава — кнопка листает книгу на этот шаг; если чтение шло, оно продолжится с нового места.</string>
+    <string name="headset_prev_title">Кнопка „назад“</string>
+    <string name="headset_next_title">Кнопка „вперёд“</string>
+    <string name="headset_off">Выключено</string>
+    <string name="headset_sentence">Предложение</string>
+    <string name="headset_paragraph">Абзац</string>
+    <string name="headset_chapter">Глава</string>
 
     <!-- Конструктор экрана чтения (#58): какие элементы показывать в читалке -->
     <string name="reader_group_hint">Флажки этого раздела убирают и возвращают элементы на экран книги. Галочка стоит — элемент показывается при чтении: текст книги, кнопки управления, перемотка, позиция, статистика, оглавление, закладки, кнопка голоса, статус, скорость. Снял галочку — элемент исчезает с экрана чтения.</string>
@@ -448,6 +459,14 @@
 
     <!-- 0.3.42: пауза при отключении наушников (#99) -->
     <string name="headphones_pause_title">Останавливать чтение, когда наушники отключаются</string>
+
+    <!-- msg2093: «Отступать назад при старте» — начать чтение на N предложений
+         раньше места остановки, чтобы вспомнить, что было. Выключено по умолчанию. -->
+    <string name="start_rewind_title">Отступать назад при старте</string>
+    <string name="start_rewind_dialog">На сколько отступить при старте чтения</string>
+    <string name="start_rewind_none">Выключено</string>
+    <string name="start_rewind_2">На 2 предложения</string>
+    <string name="start_rewind_5">На 5 предложений</string>
 
     <!-- msg1254: тактильное подтверждение действий (единый рубильник, «Управление») -->
     <string name="vibrate_title">Вибрация действий</string>

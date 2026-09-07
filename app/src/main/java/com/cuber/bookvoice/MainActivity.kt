@@ -46,65 +46,86 @@ import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private lateinit var binding: ActivityMainBinding
 
-    /** Плеер ридера — доступен экрану настроек через [active], чтобы голос и
-     *  скорость менялись на живой книге сразу. */
-    internal lateinit var player: SpeechPlayer
+    /** Плеер живёт в движке (#38). Окно и экран настроек берут его через этот
+     *  геттер — голос/скорость меняются на живой книге сразу. */
+    internal val player: SpeechPlayer
+        get() = ReaderEngine.player
+            ?: throw IllegalStateException("ReaderEngine не подключён (attach в onCreate)")
 
     private lateinit var layoutManager: LinearLayoutManager
 
-    private var book: BookDocument? = null
-    private var chapterIdx = 0
-    private var sentenceIdx = 0
-    private var playing = false
-    private var continuous = false
+    // Состояние чтения живёт в движке (ReaderEngine, #38 шаг 1) — окно только
+    // читает/пишет его через эти обёртки. Пока окно открыто, движок подключён
+    // (attach в onCreate), поэтому обёртки всегда валидны.
+    private var book: BookDocument?
+        get() = ReaderEngine.book
+        set(v) { ReaderEngine.book = v }
+    private var chapterIdx: Int
+        get() = ReaderEngine.chapterIdx
+        set(v) { ReaderEngine.chapterIdx = v }
+    private var sentenceIdx: Int
+        get() = ReaderEngine.sentenceIdx
+        set(v) { ReaderEngine.sentenceIdx = v }
+    private var playing: Boolean
+        get() = ReaderEngine.playing
+        set(v) { ReaderEngine.playing = v }
 
     // Прогресс по всей книге — для слайдера перемотки и оценки времени чтения.
     // chapterStart[c] — номер первого предложения главы c в глобальной нумерации,
     // cumWords[i] — сколько слов в предложениях с номерами < i.
-    private var chapterStart = intArrayOf()
-    private var cumWords = longArrayOf()
+    private var chapterStart: IntArray
+        get() = ReaderEngine.chapterStart
+        set(v) { ReaderEngine.chapterStart = v }
+    private var cumWords: LongArray
+        get() = ReaderEngine.cumWords
+        set(v) { ReaderEngine.cumWords = v }
     private var scrubbing = false
-    private var voiceName: String? = null
+    private var voiceName: String?
+        get() = ReaderEngine.voiceName
+        set(v) { ReaderEngine.voiceName = v }
 
-    // #102: свой голос/скорость книги — зеркало полей BookRecord открытой книги.
-    private var perBookEngine: String? = null
-    private var perBookVoice: String? = null
-    private var perBookSpeed: Float? = null
-    private var voiceMissingAnnounced = false
-
-    // #98: авто-продолжение после настоящего звонка.
-    private var inCall = false
-    private var wasReadingAtCallStart = false
-    private var lastTransientPauseAt = 0L
-    private var phoneListening = false
-    private var phoneListener: PhoneStateListener? = null
-
-    // #99: пауза при отключении наушников (ACTION_AUDIO_BECOMING_NOISY).
-    private var noisyRegistered = false
+    // #102: свой голос/скорость книги — зеркало полей BookRecord открытой книги
+    // (движок тоже держит их для применения при открытии).
+    private var perBookEngine: String?
+        get() = ReaderEngine.perBookEngine
+        set(v) { ReaderEngine.perBookEngine = v }
+    private var perBookVoice: String?
+        get() = ReaderEngine.perBookVoice
+        set(v) { ReaderEngine.perBookVoice = v }
+    private var perBookSpeed: Float?
+        get() = ReaderEngine.perBookSpeed
+        set(v) { ReaderEngine.perBookSpeed = v }
+    private var voiceMissingAnnounced: Boolean
+        get() = ReaderEngine.voiceMissingAnnounced
+        set(v) { ReaderEngine.voiceMissingAnnounced = v }
 
     // #101: история явных переходов для «Вернуться на предыдущее место».
-    private data class Place(val chapter: Int, val sentence: Int)
+    // Тип Place объявлен в ReaderEngine.kt — общий с движком.
     private val backStack = java.util.ArrayDeque<Place>()
 
     // #105/#106: выделение фрагмента. selAnchor — начало (первое удержание);
     // второе удержание открывает окно действий. rangeEnd — конец куска при
-    // «Прочитать выделенное»: чтение останавливается ровно на его границе.
+    // «Прочитать выделенное»: движок проверяет его в автопродолжении.
     private var selAnchor: Place? = null
-    private var rangeEnd: Place? = null
+    private var rangeEnd: Place?
+        get() = ReaderEngine.rangeEnd
+        set(v) { ReaderEngine.rangeEnd = v }
 
-    // msg1137/1139: книга восстановилась на (restoredPlace); userMoved — была ли
-    // после открытия ручная навигация. Отличаем настоящий выбор «начать с начала»
-    // от тихого сброса позиции к (0,0) без действий читателя (слайдер/жест/гонка).
-    private var restoredPlace: Place? = null
-    private var userMoved = false
-    // msg1137/1139/0.3.46: пока идёт открытие книги (весь синхронный хвост
-    // openBook), никакого настоящего действия читателя быть не может — главный
-    // поток занят. Любой goTo(0,0) в это окно — авто-сброс, игнорируем.
-    private var openingWindow = false
+    // msg1137/1139: восстановленное место и флаги навигации — в движке
+    // (guardResetToStart читает их и при чтении без окна).
+    private var restoredPlace: Place?
+        get() = ReaderEngine.restoredPlace
+        set(v) { ReaderEngine.restoredPlace = v }
+    private var userMoved: Boolean
+        get() = ReaderEngine.userMoved
+        set(v) { ReaderEngine.userMoved = v }
+    private var openingWindow: Boolean
+        get() = ReaderEngine.openingWindow
+        set(v) { ReaderEngine.openingWindow = v }
     // msg1725: название книги попало в шапку ещё ДО разбора файла (из записи) —
     // заголовок уже объявлен при показе окна, дублирующая озвучка по готовности
     // не нужна.
@@ -134,112 +155,44 @@ class MainActivity : AppCompatActivity() {
     /** Команды с гарнитуры/TalkBack, пришедшие из [MediaSessionService].
      *  Диагностические тосты и вибрация убраны (0.3.14): кнопки уже доходят
      *  до нас, озвучивать каждое нажатие не нужно. */
-    private val mediaCommands = object : MediaSessionService.Listener {
-        override fun onMediaPlay() {
-            handler.post {
-                if (book == null) return@post
-                if (!playing) requestStart()
-            }
-        }
+    // #38: окно — экран движка. Что движок решает нарисовать (текущее
+    // предложение, смена главы, кнопка play/pause, тост, озвучка) — приходит
+    // сюда через [ReaderEngine.Host]. Медиа-команды с гарнитуры идут движку
+    // напрямую (MediaSessionService.listener ставит attach), окну они не нужны.
 
-        override fun onMediaPause() {
-            handler.post {
-                if (playing) {
-                    // Пользовательская пауза — фокус держим, чтобы следующий
-                    // магик-тап снова попал к нам.
-                    pausePlayback(keepFocus = true)
-                }
-            }
-        }
+    override fun onShowCurrent() = showCurrent()
 
-        override fun onMediaSkip(delta: Int) {
-            // Кнопки «дальше/назад» гарнитуры тоже делаем паузой/продолжением:
-            // у разных наушников двойное нажатие шлёт play/pause ИЛИ next —
-            // Сергею нужен именно стоп/продолжение, а не перемотка.
-            handler.post {
-                if (book == null) return@post
-                if (playing) pausePlayback(keepFocus = true) else requestStart()
-            }
-        }
+    override fun onChapterLoaded() = loadChapter()
+
+    override fun onPlayStateChanged() = updatePlayButton()
+
+    override fun onMovedInChapter(s: Int) {
+        adapter.setCurrent(s)
+        scrollToSentence(s)
+        updatePosition()
     }
 
-    private var currentUri: String? = null
-    private var currentName: String? = null
+    override fun onToast(msg: String) = toast(msg)
 
-    private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
-    private var haveAudioFocus = false
-    private var focusRetried = false
-    private var audioFocusReq: android.media.AudioFocusRequest? = null
-
-    /** Чтение было прервано тем, что заиграл ДРУГОЙ плеер (а не остановлено
-     *  пользователем). Когда тот плеер замолчит и фокус вернётся к нам —
-     *  читалка продолжит сама: так двойное касание «пауза → снова играть»
-     *  работает, даже если кнопка физически ушла чужому приложению. */
-    private var pausedByFocusLoss = false
-
-    /** #99: наушники отключились (звук ушёл бы в динамик) — ставим чтение на
-     *  паузу. Сами не продолжаем: пользователь сам решает, когда вернуться. */
-    private val noisyReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (playing) pausePlayback(keepFocus = true)
-        }
+    override fun onAnnounce(text: String) {
+        binding.sentenceList.announceForAccessibility(text)
     }
 
-    private fun focusLabel(code: Int): String = when (code) {
-        AudioManager.AUDIOFOCUS_GAIN -> "GAIN (фокус вернулся)"
-        AudioManager.AUDIOFOCUS_LOSS -> "LOSS (забрали насовсем)"
-        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> "LOSS_TRANSIENT (короткая потеря)"
-        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> "CAN_DUCK (можно тише)"
-        else -> "код $code"
+    override fun onSpeedUiRefresh() {
+        refreshSpeedValue()
+        updateStats()
     }
 
-    private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
-        Diag.log(
-            this, "focus",
-            "событие фокуса: ${focusLabel(change)}, playing=$playing, pausedByFocusLoss=$pausedByFocusLoss"
-        )
-        when (change) {
-            // Фокус забрали насовсем — заиграл другой плеер (например,
-            // сработало «волшебное касание», а кнопка ушла YouTube/Nekogram).
-            // Ставим на паузу, но наш запрос фокуса НЕ отзываем и запоминаем:
-            // когда чужой плеер остановят, фокус вернётся к нам и чтение
-            // продолжится само (см. AUDIOFOCUS_GAIN ниже). haveAudioFocus=false
-            // помечаем честно: теперь фокус не наш, и повторное нажатие Play
-            // должно сделать НАСТОЯЩИЙ перезапрос и отобрать фокус обратно.
-            AudioManager.AUDIOFOCUS_LOSS -> handler.post {
-                haveAudioFocus = false
-                if (playing) pausePlayback(keepFocus = true, byFocusLoss = true)
-            }
+    private var currentUri: String?
+        get() = ReaderEngine.currentUri
+        set(v) { ReaderEngine.currentUri = v }
+    private var currentName: String?
+        get() = ReaderEngine.currentName
+        set(v) { ReaderEngine.currentName = v }
 
-            // Короткая потеря (звонок, уведомление, TalkBack озвучил экран).
-            // Паузу ставим, фокус держим, но «продолжение само» не включаем —
-            // иначе читалка оживала бы после каждого слова TalkBack.
-            // #98: запоминаем момент прерывания — если следом начнётся НАСТОЯЩИЙ
-            // звонок (событие CALL_STATE может прийти чуть позже потери фокуса),
-            // по его концу продолжим читать (см. handleCallState).
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> handler.post {
-                if (playing) lastTransientPauseAt = SystemClock.elapsedRealtime()
-                pausePlayback(keepFocus = true)
-            }
-
-            // Фокус вернулся к нам (чужой плеер остановили) — а мы были
-            // прерваны им, а не пользователем: продолжаем чтение, если в
-            // настройках разрешено автопродолжение после прерывания.
-            AudioManager.AUDIOFOCUS_GAIN -> handler.post {
-                haveAudioFocus = true
-                if (pausedByFocusLoss && book != null && !playing &&
-                    prefs.getBoolean(KEY_AUTO_RESUME, true)
-                ) {
-                    pausedByFocusLoss = false
-                    Diag.log(this, "focus", "возврат фокуса — продолжаю чтение сам")
-                    requestStart()
-                }
-            }
-
-            // Можно говорить тише — читалку не трогаем.
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {}
-        }
-    }
+    // Аудиофокус (#98/#99), состояние звонков и наушников целиком переехали в
+    // движок (ReaderEngine): там живут haveAudioFocus, pausedByFocusLoss,
+    // audioFocusListener, noisyReceiver и их регистрация.
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -322,23 +275,32 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        player = SpeechPlayer(this)
-        player.onDone = { handler.post { if (playing) onUtteranceDone() } }
-        // Пока играет предложение, плеер синтезирует следующее впрок (наш
-        // собственный звук → система считает читалку плеером). peekNextText
-        // ничего не меняет — только подсказывает, что будет дальше.
-        player.onNeedNext = { peekNextText() }
-        player.speed = prefs.getFloat(KEY_SPEED, 1f)
-        player.pitch = prefs.getFloat(KEY_PITCH, 1f)
-        player.volume = prefs.getFloat(KEY_VOLUME, 1f)
-        // Чтение всегда непрерывное: кнопка «по одному предложению» убрана.
-        continuous = true
-        voiceName = prefs.getString(KEY_VOICE, null)
-
-        // Медиа-сессия живёт в сервисе; команды с гарнитуры приходят сюда.
-        MediaSessionService.listener = mediaCommands
-        restoreEngineAndVoice()
-        restoreSession()
+        // #38 шаг 2: если книга уже читается БЕЗ окна (мы вышли из неё, а голос
+        // продолжил — см. ReaderEngine.windowGoneWhilePlaying), новое окно не
+        // переразбирает файл и не сбрасывает позицию: оно рисуется вокруг живого
+        // чтения движка и попадает туда, где книга сейчас звучит. Открывают
+        // ДРУГУЮ книгу — гасим живую (close) и открываем как обычно.
+        val liveUri = ReaderEngine.liveWindowlessUri()
+        val requested = intent.getStringExtra(EXTRA_URI)
+        if (liveUri != null && (requested == null || requested == liveUri)) {
+            rejoinLiveReading()
+        } else {
+            // #38: «сердце» чтения — плеер, состояние, цикл, аудиофокус — живёт в
+            // движке ReaderEngine. Окно лишь подключается к нему и рисует по его
+            // событиям (см. ReaderEngine.Host). attach создаёт плеер и ставит
+            // MediaSessionService.listener на команды движка.
+            if (liveUri != null) {
+                // Живую книгу бросаем ради другой: сначала фиксируем её место в
+                // записи (вдали от окна позиция шла вперёд только в prefs).
+                ReaderEngine.savePosition()
+                ReaderEngine.close()
+            }
+            ReaderEngine.attach(this)
+            ReaderEngine.host = this
+            // Название книги из записи в шапку — до показа окна (msg1725/1736).
+            restoreEngineAndVoice()
+            restoreSession()
+        }
         // Android 13+: медиа-уведомление в шторке требует разрешения.
         requestNotificationPermission()
     }
@@ -362,12 +324,12 @@ class MainActivity : AppCompatActivity() {
         // читалки показывать, скорость и голос — применяем к живой книге.
         applyReaderUi()
         refreshSpeedValue()
-        // Медиа-сессия живёт в сервисе. Карточка рождается только когда книга
-        // реально начала читаться (startSpeakingCurrent) — msg1779: при просто
-        // открытой, но молчащей книге её появление TalkBack озвучивает как
-        // «мусор». При возврате в ридер добиваем сервис до актуального
-        // состояния, только если мы играли (процесс мог быть пересоздан).
-        MediaSessionService.listener = mediaCommands
+        // Карточка рождается только когда книга реально начала читаться
+        // (startSpeakingCurrent) — msg1779: при просто открытой, но молчащей
+        // книге её появление TalkBack озвучивает как «мусор». При возврате в
+        // ридер добиваем сервис до актуального состояния, только если мы играли
+        // (процесс мог быть пересоздан). Слушатель медиа-сессии уже стоит
+        // движком (attach в onCreate).
         if (book != null && playing) ensureMediaService(true)
         // Голос «по умолчанию» трогаем, только если у книги нет своего голоса —
         // иначе затрём запомненный для книги (voiceName показывает активный).
@@ -379,15 +341,13 @@ class MainActivity : AppCompatActivity() {
             player.volume = prefs.getFloat(KEY_VOLUME, 1f)
             updateStats() // возврат из настроек: скорость могла поменяться.
         }
-        // #98/#99: слушатели живут, пока ридер на экране.
-        registerNoisyReceiver()
-        registerPhoneListener()
+        // #98/#99: слушатели живут, пока ридер на экране (вешает движок).
+        ReaderEngine.onWindowStart()
     }
 
     override fun onStop() {
         super.onStop()
-        unregisterNoisyReceiver()
-        unregisterPhoneListener()
+        ReaderEngine.onWindowStop()
     }
 
     // ---------------- Открытие и сохранение книги ----------------
@@ -435,19 +395,33 @@ class MainActivity : AppCompatActivity() {
         // (цитата из QuotesActivity: EXTRA_EXPLICIT_PLACE) открывает где указано.
         val explicit = intent.getBooleanExtra(EXTRA_EXPLICIT_PLACE, false)
         val rec = if (explicit) null else BookStore.byUri(this, u)
+        // #38 шаг 2: чтение без окна пишет место в prefs на КАЖДОМ прочитанном
+        // предложении, а в запись книги — только при паузе/выходе/конце. Поэтому
+        // для книги, которая открывалась/слушалась последней (KEY_URI совпадает),
+        // место из prefs всегда свежее записи: у новой книги запись так и стоит
+        // на (0,0), и перезапуск вернул бы её в начало. Для любой ДРУГОЙ книги
+        // место по-прежнему из записи (msg1245).
+        val sameAsLast = u == prefs.getString(KEY_URI, null)
         val ch: Int
         val s: Int
         if (explicit) {
             ch = intent.getIntExtra(EXTRA_CHAPTER, 0)
             s = intent.getIntExtra(EXTRA_SENTENCE, 0)
+        } else if (sameAsLast) {
+            ch = prefs.getInt(KEY_CHAPTER, 0)
+            s = prefs.getInt(KEY_SENTENCE, 0)
+            Diag.log(this, "activity", "место из prefs (последняя книга): глава $ch, предл. $s")
         } else if (rec != null) {
             ch = rec.chapter
             s = rec.sentence
+            Diag.log(this, "activity", "место из записи: глава $ch, предл. $s")
         } else {
             ch = prefs.getInt(KEY_CHAPTER, 0)
             s = prefs.getInt(KEY_SENTENCE, 0)
         }
-        openBook(Uri.parse(u), ch, s)
+        // msg2093: книга открывается на сохранённом месте (не по явному переходу
+        // из цитаты) — вооружаем откат при старте. Внутри openBook, после разбора.
+        openBook(Uri.parse(u), ch, s, rewindOnOpen = !explicit)
         // msg1725/1721/1736: заголовок книги — в шапке с ПЕРВОГО кадра. Пока файл
         // разбирается, у окна нет своего имени, и при показе скринридер объявляет
         // имя приложения («BookVoice»); поздний фокус (после разбора) не перебивает,
@@ -471,6 +445,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** #38 шаг 2: книга уже читается в движке БЕЗ окна (мы вышли из неё, голос
+     *  продолжил, см. windowGoneWhilePlaying). Новое окно рисуется вокруг живого
+     *  состояния: файл не переразбираем, чтение не перезапускаем — голос звучит
+     *  как звучал, а окно показывает место, где книга сейчас. Заголовок в шапке
+     *  и имя окна — название живой книги, с первого кадра (msg1725/1736). */
+    private fun rejoinLiveReading() {
+        ReaderEngine.attach(this)
+        ReaderEngine.host = this
+        headerAnnouncedAtOpen = true
+        val explicit = intent.getBooleanExtra(EXTRA_EXPLICIT_PLACE, false)
+        val eCh = intent.getIntExtra(EXTRA_CHAPTER, 0)
+        val eS = intent.getIntExtra(EXTRA_SENTENCE, 0)
+        // Пока новое окно рисуется вокруг живой книги, любой goTo(0,0) — тот же
+        // авто-сброс, что при холодном открытии (0.3.46, msg2064): перерисовка
+        // шлёт переход к началу, и без guard он затирает живое место и гонит
+        // чтение с первой главы. Держим guard на время отрисовки, как openBook.
+        openingWindow = true
+        refreshChrome()
+        loadChapter()
+        openingWindow = false
+        // Цитата (EXTRA_EXPLICIT_PLACE): намеренный переход на указанное место
+        // живой книги — уже после guard, чтобы переход к (0,0) из цитаты прошёл.
+        // goTo сам остановит/продолжит чтение по состоянию.
+        if (explicit) goTo(eCh, eS)
+        // Сервис мог прилечь, пока окна не было, — добиваем до живого состояния.
+        if (playing) ensureMediaService(true)
+        Diag.log(this, "activity", "rejoin: окно вернулось к живой книге «${book?.title}»")
+    }
+
     private fun showEmpty() {
         adapter.submit(emptyList(), false)
         closeSearchPanel()
@@ -480,8 +483,9 @@ class MainActivity : AppCompatActivity() {
     /** Уйти на полку — дом приложения (редизайн msg1676+). Библиотека это
      *  КОРНЕВОЕ окно задачи; между ним и ридером может лежать окно Каталога
      *  (книга открыта из каталога) — уходим на корень CLEAR_TOP, чтобы снять
-     *  всё, что поверх полки. Книга закрывается (onDestroy гасит чтение),
-     *  место сохранено. */
+     *  всё, что поверх полки. Место сохранено (onPause). Если голос звучит —
+     *  #38 шаг 2: он продолжает читать без окна, на полке (onDestroy зовёт
+     *  windowGoneWhilePlaying); если молчит — чтение гаснет как раньше (close). */
     private fun startLibrary() {
         // Полка показывается не «с рабочего стола» — авто-открытие книги гасим.
         LibraryActivity.suppressNextAutoOpen = true
@@ -534,7 +538,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openBook(uri: Uri, chapter: Int, sentence: Int) {
+    private fun openBook(uri: Uri, chapter: Int, sentence: Int, rewindOnOpen: Boolean = false) {
         // msg1739: «Открываю…» убрано — скринридер читал тост при входе и перебивал
         // объявление названия книги (в FBReader при открытии нет «открытия», есть
         // название). Имя окна уже несёт название (restoreSession → setTitle).
@@ -595,6 +599,10 @@ class MainActivity : AppCompatActivity() {
                 // если сохранённое место всё же не совпадёт с восстановленным.
                 Diag.log(this, "activity", "книга открылась: глава $chapterIdx, предл. $sentenceIdx")
                 registerOpen(doc)
+                // prefs-место обязано стать местом ИМЕННО этой книги (KEY_URI уже
+                // указывает на неё): иначе после перезапуска приложение подхватит
+                // место предыдущей книги (restoreSession выбирает по KEY_URI).
+                ReaderEngine.persistPosition()
                 // Новая книга — история переходов (#101), выделение (#105) и
                 // режим чтения куска (#106) больше недействительны.
                 backStack.clear()
@@ -605,6 +613,11 @@ class MainActivity : AppCompatActivity() {
                 player.stop()
                 refreshChrome()
                 loadChapter()
+                // msg2093: книга открылась на сохранённом месте (не из цитаты) —
+                // вооружаем откат при старте. Первый реальный старт чтения начнётся
+                // на N предложений раньше; движок сам не даст откату уехать в
+                // сохранённое место, пока чтение не дочитает до него.
+                if (rewindOnOpen) ReaderEngine.armStartRewind()
                 // msg1840 (0.3.88): карточку рождаем УЖЕ при открытии книги, в
                 // состоянии паузы. Причина: «управление мультимедиа» (msg1815)
                 // TalkBack говорит, когда BookVoice рождает media-сессию «из
@@ -637,77 +650,19 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    /** Начать чтение, если движок ещё инициализируется — подождать и повторить. */
-    private fun maybeAutoStart() {
-        if (book == null || playing) return
-        requestStart()
-    }
+    /** Начать чтение (если движок ещё не готов — он сам подождёт и повторит). */
+    private fun maybeAutoStart() = ReaderEngine.maybeAutoStart()
 
-    /** Надёжный старт чтения: если движок синтеза не готов, пробуем ещё
-     *  несколько раз (движок грузится в фоне после открытия книги). */
-    private fun requestStart() {
-        if (book == null || playing) return
-        if (!player.isReady) {
-            retryStart(0)
-            return
-        }
-        startSpeakingCurrent()
-    }
-
-    private fun retryStart(attempt: Int) {
-        if (attempt > 10) return // ~2.5с — движок так и не поднялся, молчим
-        handler.postDelayed({
-            if (book == null || playing) return@postDelayed
-            if (!player.isReady) retryStart(attempt + 1) else startSpeakingCurrent()
-        }, 250)
-    }
+    /** Надёжный старт чтения: логика (готовность синтеза, повторы) в движке. */
+    private fun requestStart() = ReaderEngine.requestStart()
 
     /** Поднять медиа-сервис. Карточка рождается при ОТКРЫТИИ книги, в состоянии
-     *  паузы (0.3.88, msg1840): система успевает «познакомиться» с сессией ДО
-     *  первого звука — как у настоящих плееров (YouTube), у которых старт
-     *  чтения не озвучивается как «управление мультимедиа». Старт чтения
-     *  (startSpeakingCurrent → ensureMediaService(true)) лишь переводит уже
-     *  существующую сессию в PLAYING, не рождая карточку заново. [playing] —
-     *  состояние ПЕРВОГО уведомления. Повторные start() идемпотентны: if сервис
-     *  уже поднят, onStartCommand ничего не пересоздаёт, состояние шлёт
-     *  setPlaying. */
-    private fun ensureMediaService(playing: Boolean = true) {
-        if (book == null) return
-        MediaSessionService.start(this, book?.title ?: currentName, playing = playing)
-    }
+     *  паузы (0.3.88, msg1840); [playing] — состояние ПЕРВОГО уведомления.
+     *  Логика в движке (он же держит сервис при чтении без окна). */
+    private fun ensureMediaService(playing: Boolean = true) = ReaderEngine.ensureMediaService(playing)
 
     /** После успешного открытия — обновить запись книги в библиотеке. */
-    private fun registerOpen(doc: BookDocument) {
-        val u = currentUri ?: return
-        val now = System.currentTimeMillis()
-        val existing = BookStore.byUri(this, u)
-        prefs.edit().putString(KEY_URI, u).apply()
-        val status = when (existing?.status) {
-            BookRecord.STATUS_FINISHED -> BookRecord.STATUS_FINISHED
-            else -> BookRecord.STATUS_READING
-        }
-        BookStore.upsert(this, BookRecord(
-            uri = u,
-            name = existing?.name ?: currentName ?: "book",
-            title = doc.title ?: existing?.title,
-            author = doc.author ?: existing?.author,
-            // Аннотацию в ридере не парсим — сохраняем уже найденную в записи,
-            // чтобы дозаполненная в «Информации» не затиралась при чтении.
-            annotation = existing?.annotation,
-            // Ссылку скачивания и запомненный голос книги сохраняем — иначе
-            // каждый «просто открыл книгу» стирал бы их из записи (#100/#102).
-            sourceUrl = existing?.sourceUrl,
-            voiceEngine = existing?.voiceEngine,
-            voice = existing?.voice,
-            voiceSpeed = existing?.voiceSpeed,
-            addedAt = existing?.addedAt ?: now,
-            lastOpenedAt = now,
-            status = status,
-            chapter = chapterIdx,
-            sentence = sentenceIdx,
-            readPct = readPercent(),
-        ))
-    }
+    private fun registerOpen(doc: BookDocument) = ReaderEngine.registerOpen(doc)
 
     private fun readBook(uri: Uri): BookDocument? {
         val name = if (uri.scheme == "file") {
@@ -741,55 +696,12 @@ class MainActivity : AppCompatActivity() {
             null
         }
 
-    /** msg1119: полная запись позиции (prefs + запись книги) в моменты паузы,
-     *  конца чтения и выхода с экрана. Раньше звалась ТОЛЬКО в onPause — если
-     *  процесс умирал без него (свайп из недавних, «закрыть все»), место терялось
-     *  на момент последнего ухода с экрана. Теперь дублируется в pausePlayback и
-     *  stopAtEnd, а по каждому предложению/переходу пишется persistPosition (prefs). */
-    private fun savePosition() {
-        if (book == null) return
-        guardResetToStart()
-        Diag.log(this, "activity", "сохранено место: глава $chapterIdx, предл. $sentenceIdx")
-        persistPosition()
-        val u = currentUri ?: return
-        val ex = BookStore.byUri(this, u) ?: return
-        BookStore.upsert(this, ex.copy(
-            chapter = chapterIdx,
-            sentence = sentenceIdx,
-            readPct = readPercent(),
-            lastOpenedAt = System.currentTimeMillis(),
-            status = if (ex.status == BookRecord.STATUS_NEW) BookRecord.STATUS_READING else ex.status,
-        ))
-    }
+    /** msg1119: полная запись позиции (prefs + запись книги). Логика в движке —
+     *  ему сохранять место нужно и при чтении без окна. */
+    private fun savePosition() = ReaderEngine.savePosition()
 
-    /** Быстрая запись позиции в prefs — зовётся часто (каждое предложение,
-     *  каждый переход слайдером/главами), поэтому только prefs, без DB-записи. */
-    private fun persistPosition() {
-        if (book == null) return
-        guardResetToStart()
-        prefs.edit()
-            .putInt(KEY_CHAPTER, chapterIdx)
-            .putInt(KEY_SENTENCE, sentenceIdx)
-            .apply()
-    }
-
-    /** msg1139: книга открылась с сохранённого места, а позиция без ручной
-     *  навигации вдруг в (0,0) — так в начало не попасть (автопереход только
-     *  вперёд, в начало ведут лишь явные переходы goTo, а они ставят userMoved).
-     *  Значит это тихий сброс: не даём паузе/старту/выходу записать 0/0 поверх
-     *  сохранённого места. Зовётся из savePosition/persistPosition/startSpeakingCurrent. */
-    private fun guardResetToStart() {
-        val rp = restoredPlace ?: return
-        if (userMoved) return
-        if (!(rp.chapter > 0 || rp.sentence > 0)) return
-        if (chapterIdx != 0 || sentenceIdx != 0) return
-        Diag.log(
-            this, "activity",
-            "сброс к началу без навигации — держу место: глава ${rp.chapter}, предл. ${rp.sentence}"
-        )
-        chapterIdx = rp.chapter
-        sentenceIdx = rp.sentence
-    }
+    /** Быстрая запись позиции в prefs (каждое предложение/переход). В движке. */
+    private fun persistPosition() = ReaderEngine.persistPosition()
 
     /** Переключатель «читаю / дочитана». */
     private fun toggleStatus() {
@@ -820,15 +732,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        // Ридер закрыт — сессию и сервис гасим, чтобы не отбирать
-        // медиа-кнопки у других плееров. Фокус отдаём и авто-продолжение
-        // гасим: вернуться «по фокусу» уже некому.
+        // Ридер закрыт. Если голос ЗВУЧИТ — #38 шаг 2: чтение остаётся жить без
+        // окна (движок держит книгу, плеер и медиа-сервис; управление дальше —
+        // гарнитура, «волшебное касание», кнопка в шторке). Если молчит — как
+        // раньше: движок сам гасит сессию, отдаёт фокус и глушит
+        // авто-продолжение (см. ReaderEngine.close): медиа-кнопки не должны
+        // остаться у нас, а чтение не должно «ожить» без окна.
         if (active === this) active = null
-        pausedByFocusLoss = false
-        dropAudioFocus()
-        playing = false
-        MediaSessionService.stop(this)
-        player.shutdown()
+        if (ReaderEngine.playing) ReaderEngine.windowGoneWhilePlaying()
+        else ReaderEngine.close()
         super.onDestroy()
     }
 
@@ -1036,57 +948,7 @@ class MainActivity : AppCompatActivity() {
         if (stepIsChapter()) moveByChapter(delta) else moveBySentence(delta)
     }
 
-    private fun goTo(ch: Int, s: Int) {
-        val bk = book ?: return
-        // Любой ручной переход отменяет режим «прочитать выделенный кусок» (#106).
-        rangeEnd = null
-        val chClamped = ch.coerceIn(0, bk.chapters.lastIndex)
-        val cur = bk.chapters[chClamped].sentences
-        if (cur.isEmpty()) return
-        val sClamped = s.coerceIn(0, cur.lastIndex)
-        // 0.3.46: пока идёт открытие книги, настоящий переход к началу невозможен
-        // (главный поток занят) — значит это авто-сброс позиции к (0,0), а не
-        // выбор читателя. Молча блокируем, чтобы восстановленное место устояло.
-        if (openingWindow && chClamped == 0 && sClamped == 0) {
-            Diag.log(this, "activity", "переход к началу в момент открытия — игнорирую (авто-сброс)")
-            return
-        }
-        val wasPlaying = playing
-        if (wasPlaying) {
-            playing = false
-            player.stop()
-        }
-        val changedChapter = chClamped != chapterIdx
-        chapterIdx = chClamped
-        sentenceIdx = sClamped
-        // msg1139: любой переход через goTo — ручная навигация (слайдер/тап/
-        // главы/оглавление/жест). Пишем куда ушли в diag.log: если позиция
-        // «сама» уезжает к началу, лог покажет, какой путь её сбросил.
-        // 0.3.46: а если к (0,0) едет ПОСЛЕ открытия и без ручной навигации —
-        // записываем цепочку вызовов, чтобы поймать источник авто-сброса.
-        if (chClamped == 0 && sClamped == 0 && !userMoved) {
-            val rp = restoredPlace
-            if (rp != null && (rp.chapter > 0 || rp.sentence > 0)) {
-                val callers = Thread.currentThread().stackTrace
-                    .take(7).drop(2).joinToString(" <- ") { it.methodName }
-                Diag.log(this, "activity", "goTo(0,0) без ручной навигации; цепочка: $callers")
-            }
-        }
-        userMoved = true
-        Diag.log(this, "activity", "переход: глава $chClamped, предл. $sClamped")
-        // msg1119: переходы (слайдер/главы/оглавление/двойной тап) сразу пишут
-        // позицию в prefs — перемотка на 30% не должна теряться при закрытии.
-        persistPosition()
-        if (changedChapter) {
-            loadChapter()
-        } else {
-            adapter.setCurrent(sClamped)
-            scrollToSentence(sClamped)
-            updatePosition()
-        }
-        updatePlayButton()
-        if (wasPlaying) startSpeakingCurrent()
-    }
+    private fun goTo(ch: Int, s: Int) = ReaderEngine.goTo(ch, s)
 
     /** Двойной тап по предложению (при чтении TalkBack'ом — активация строки).
      *  Всегда переводит читаемую позицию на это предложение; если чтение ещё
@@ -1098,57 +960,6 @@ class MainActivity : AppCompatActivity() {
         if (!playing && prefs.getBoolean(KEY_TAP_TO_PLAY, true)) requestStart()
     }
 
-    private fun onUtteranceDone() {
-        if (!playing) return
-        if (!continuous) {
-            stopAtEnd()
-            return
-        }
-        if (!advanceOneUnit()) {
-            stopAtEnd()
-            return
-        }
-        startSpeakingCurrent()
-    }
-
-    /** Чтение дошло до конца книги (или было одноразовым) — отпускаем фокус. */
-    private fun stopAtEnd() {
-        Diag.log(this, "activity", "чтение закончилось само (конец/остановка)")
-        playing = false
-        dropAudioFocus()
-        // msg1119: дочитал до конца — фиксируем, чтобы повторно не начать с начала.
-        savePosition()
-        updatePlayButton()
-    }
-
-    /** Перейти на следующее предложение (или главу) — для автопродолжения. */
-    private fun advanceOneUnit(): Boolean {
-        val bk = book ?: return false
-        val cur = bk.chapters[chapterIdx].sentences
-        if (sentenceIdx + 1 < cur.size) {
-            sentenceIdx++
-        } else if (chapterIdx + 1 < bk.chapters.size) {
-            chapterIdx++
-            sentenceIdx = 0
-            loadChapter()
-        } else {
-            return false
-        }
-        // #106: «Прочитать выделенное» — остановиться ровно на конце куска,
-        // не продолжая читать дальше.
-        val re = rangeEnd
-        if (re != null &&
-            (chapterIdx > re.chapter || (chapterIdx == re.chapter && sentenceIdx >= re.sentence))
-        ) {
-            rangeEnd = null
-            return false
-        }
-        // msg1119: каждое прочитанное предложение — в prefs (дёшево), чтобы
-        // при любом обрыве процесса место не откатывалось к последнему выходу.
-        persistPosition()
-        return true
-    }
-
     // ---------------- Воспроизведение ----------------
 
     private fun togglePlay() {
@@ -1157,142 +968,14 @@ class MainActivity : AppCompatActivity() {
         if (playing) pausePlayback(keepFocus = true) else startSpeakingCurrent()
     }
 
-    /** Пауза чтения.
-     *  keepFocus=true — когда паузу нажал сам пользователь (кнопка, наушники,
-     *  слайдер): фокус держим, чтобы система продолжала отдавать медиа-кнопки
-     *  нам, а не уводила их чужому плееру. keepFocus=false — когда фокус
-     *  отобрала система (звонок) — тут спорить не с чем.
-     *  byFocusLoss=true — чтение прервал ДРУГОЙ плеер, а не пользователь:
-     *  запоминаем это, чтобы самим продолжиться, когда тот плеер замолчит
-     *  (см. AUDIOFOCUS_GAIN). Любая явная пользовательская пауза это
-     *  намерение сбрасывает. */
-    private fun pausePlayback(keepFocus: Boolean = false, byFocusLoss: Boolean = false) {
-        if (!playing) return
-        Diag.log(
-            this, "activity",
-            "пауза: ${if (byFocusLoss) "прерван чужим плеером" else "по команде пользователя"}, " +
-                "keepFocus=$keepFocus"
-        )
-        playing = false
-        player.stop()
-        pausedByFocusLoss = byFocusLoss
-        if (!keepFocus) dropAudioFocus()
-        // msg1119: пауза — ключевой момент, позицию фиксируем сразу, не дожидаясь
-        // выхода с экрана (иначе «остановил → закрыл» теряло место).
-        savePosition()
-        updatePlayButton()
-    }
+    /** Пауза чтения. Логика (фокус, запись места, кнопка) — в движке: паузу
+     *  нужно уметь делать и при чтении без окна. */
+    private fun pausePlayback(keepFocus: Boolean = false, byFocusLoss: Boolean = false) =
+        ReaderEngine.pausePlayback(keepFocus, byFocusLoss)
 
-    /** Забираем аудиофокус на время чтения. Читалка — «владелец» звука, пока
-     *  идёт чтение: фокус держим и на пользовательской паузе, чтобы другой
-     *  плеер не просыпался и не перехватывал кнопки наушника (см. onPause). */
-    private fun requestAudioFocus() {
-        if (haveAudioFocus) return
-        val r: Int
-        if (Build.VERSION.SDK_INT >= 26) {
-            val attrs = android.media.AudioAttributes.Builder()
-                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build()
-            val req = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(attrs)
-                .setOnAudioFocusChangeListener(audioFocusListener, handler)
-                .setWillPauseWhenDucked(false)
-                .build()
-            audioFocusReq = req
-            r = audioManager.requestAudioFocus(req)
-        } else {
-            @Suppress("DEPRECATION")
-            r = audioManager.requestAudioFocus(
-                audioFocusListener,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN,
-            )
-        }
-        haveAudioFocus = r == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        Diag.log(
-            this, "focus",
-            "запрос фокуса → ${if (haveAudioFocus) "ДАНО" else "ОТКАЗАНО ($r)"}, SDK=" +
-                Build.VERSION.SDK_INT
-        )
-        if (haveAudioFocus) focusRetried = false
-        // Сразу не дали (например, фокус ещё не освободился) — пробуем ещё раз
-        // один раз, если чтение продолжается.
-        if (!haveAudioFocus && !focusRetried && Build.VERSION.SDK_INT >= 26) {
-            focusRetried = true
-            handler.postDelayed({
-                Diag.log(this, "focus", "повторный запрос фокуса через 400мс")
-                if (playing) requestAudioFocus()
-            }, 400)
-        }
-    }
-
-    private fun dropAudioFocus() {
-        if (!haveAudioFocus) return
-        Diag.log(this, "focus", "отдаю фокус")
-        haveAudioFocus = false
-        focusRetried = false
-        if (Build.VERSION.SDK_INT >= 26) {
-            audioFocusReq?.let { audioManager.abandonAudioFocusRequest(it) }
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.abandonAudioFocus(audioFocusListener)
-        }
-        audioFocusReq = null
-    }
-
-    private fun startSpeakingCurrent() {
-        val bk = book ?: return
-        // msg1139: если позицию тихо сбросило к началу — стартуем не с (0,0),
-        // а с места, на котором книга открылась.
-        guardResetToStart()
-        if (bk.chapters.getOrNull(chapterIdx)?.sentences.isNullOrEmpty()) return
-        if (!player.isReady) {
-            toast("Движок синтеза речи ещё не готов, попробуйте через секунду")
-            return
-        }
-        // Пользователь запускает чтение явно — прерванность чужим плеером
-        // больше не актуальна, сами не «оживём» не вовремя.
-        pausedByFocusLoss = false
-        playing = true
-        ensureMediaService()
-        Diag.log(this, "activity", "старт чтения (глава $chapterIdx, предл. $sentenceIdx)")
-        requestAudioFocus()
-        showCurrent()
-        speakCurrent()
-        updatePlayButton()
-    }
-
-    /** Текст, который будет реально озвучен на позиции (ch, s). На первом
-     *  предложении главы спереди добавляется её название (если есть и в
-     *  настройках включено «Озвучивать название главы в начале») — так Сергей
-     *  слышит, в какую главу попал. Название, дословно совпадающее с первым
-     *  предложением, не дублируем. */
-    private fun spokenText(ch: Int, s: Int): String? {
-        val bk = book ?: return null
-        val cur = bk.chapters.getOrNull(ch)?.sentences ?: return null
-        val text = cur.getOrNull(s)?.text ?: return null
-        if (s != 0 || !prefs.getBoolean(KEY_SAY_CHAPTER_START, true)) return text
-        val title = bk.chapters[ch].title?.trim()?.takeIf { it.isNotEmpty() } ?: return text
-        return if (title == text.trim()) text else "$title. $text"
-    }
-
-    private fun speakCurrent() {
-        val t = spokenText(chapterIdx, sentenceIdx) ?: return
-        player.speak(t)
-    }
-
-    /** Текст предложения, которое пойдёт следующим за текущим — без побочных
-     *  эффектов (не двигает позицию). Используется плеером для упреждающего
-     *  синтеза, чтобы между предложениями не было тишины. Содержит то же, что
-     *  будет озвучено по-настоящему (с названием главы на её границе). */
-    private fun peekNextText(): String? {
-        val bk = book ?: return null
-        val cur = bk.chapters.getOrNull(chapterIdx)?.sentences ?: return null
-        if (sentenceIdx + 1 < cur.size) return spokenText(chapterIdx, sentenceIdx + 1)
-        if (chapterIdx + 1 < bk.chapters.size) return spokenText(chapterIdx + 1, 0)
-        return null
-    }
+    /** Старт чтения с текущей позиции. Логика (guard места, фокус, медиа-сервис,
+     *  кнопка) — в движке, ему стартовать нужно и при чтении без окна. */
+    private fun startSpeakingCurrent() = ReaderEngine.startSpeakingCurrent()
 
     // ---------------- UI ----------------
 
@@ -1951,105 +1634,6 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    // ---------------- #98/#99: звонки и наушники ----------------
-
-    private fun afterCallContinue(): Boolean =
-        prefs.getString(KEY_AFTER_CALL, AFTER_CALL_STOP) == AFTER_CALL_CONTINUE
-
-    private fun hasPhonePerm(): Boolean =
-        checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
-
-    @Suppress("DEPRECATION")
-    private val callListener = object : PhoneStateListener() {
-        override fun onCallStateChanged(state: Int, phoneNumber: String?) {
-            handler.post { handleCallState(state) }
-        }
-    }
-
-    private fun handleCallState(state: Int) {
-        when (state) {
-            TelephonyManager.CALL_STATE_RINGING,
-            TelephonyManager.CALL_STATE_OFFHOOK -> {
-                if (!inCall) {
-                    inCall = true
-                    // Читало ли до звонка? Смотрим и текущий флаг, и недавний
-                    // разрыв по потере фокуса (CALL_STATE может прийти чуть позже
-                    // самой потери) — чтобы продолжить после НАСТОЯЩЕГО звонка,
-                    // а не после уведомления/TalkBack.
-                    val now = SystemClock.elapsedRealtime()
-                    wasReadingAtCallStart = playing ||
-                        (lastTransientPauseAt != 0L && now - lastTransientPauseAt < 3000)
-                    Diag.log(this, "call", "звонок начался (читало=$wasReadingAtCallStart)")
-                }
-            }
-            TelephonyManager.CALL_STATE_IDLE -> {
-                if (inCall) {
-                    inCall = false
-                    Diag.log(this, "call", "звонок закончился")
-                    afterCallEnded()
-                }
-            }
-        }
-    }
-
-    /** Конец настоящего звонка (#98). Если до звонка шло чтение — отматываем
-     *  назад на выбранное число предложений и продолжаем. Уведомления и
-     *  озвучка TalkBack сюда не попадают: у них нет событий телефонии. */
-    private fun afterCallEnded() {
-        val resume = wasReadingAtCallStart
-        wasReadingAtCallStart = false
-        if (!resume || book == null || playing) return
-        val n = when (prefs.getString(KEY_AFTER_CALL_REWIND, AFTER_CALL_REWIND_5)) {
-            AFTER_CALL_REWIND_NONE -> 0
-            AFTER_CALL_REWIND_2 -> 2
-            AFTER_CALL_REWIND_5 -> 5
-            AFTER_CALL_REWIND_10 -> 10
-            else -> 5
-        }
-        if (n > 0) moveBySentence(-n)
-        binding.sentenceList.announceForAccessibility(getString(R.string.after_call_continue_announce))
-        requestStart()
-    }
-
-    private fun registerPhoneListener() {
-        if (!afterCallContinue() || !hasPhonePerm()) return
-        if (phoneListening) return
-        val tm = getSystemService(TELEPHONY_SERVICE) as? TelephonyManager ?: return
-        phoneListening = true
-        @Suppress("DEPRECATION")
-        tm.listen(callListener, PhoneStateListener.LISTEN_CALL_STATE)
-    }
-
-    private fun unregisterPhoneListener() {
-        if (!phoneListening) return
-        val tm = getSystemService(TELEPHONY_SERVICE) as? TelephonyManager
-        @Suppress("DEPRECATION")
-        tm?.listen(callListener, PhoneStateListener.LISTEN_NONE)
-        phoneListening = false
-        inCall = false
-        wasReadingAtCallStart = false
-    }
-
-    private fun registerNoisyReceiver() {
-        if (noisyRegistered || !prefs.getBoolean(KEY_PAUSE_HEADSET, true)) return
-        val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
-        runCatching {
-            if (Build.VERSION.SDK_INT >= 33) {
-                registerReceiver(noisyReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("DEPRECATION")
-                registerReceiver(noisyReceiver, filter)
-            }
-            noisyRegistered = true
-        }
-    }
-
-    private fun unregisterNoisyReceiver() {
-        if (!noisyRegistered) return
-        runCatching { unregisterReceiver(noisyReceiver) }
-        noisyRegistered = false
-    }
-
     // ---------------- #101: «⋮ Ещё» — вернуться на прежнее место ----------------
 
     /** Запомнить текущее место перед явным переходом (глава по кнопке/жесту,
@@ -2134,71 +1718,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** При открытии книги: применить запомненный голос/скорость (#102).
-     *  Каскад: своё у книги → глобальное → системное. Скорость — всегда
-     *  числом, если запомнена. Голос/движок ждут готовности синтеза. */
-    private fun applyBookVoiceAtOpen() {
-        val rec = currentBookRecord() ?: return
-        perBookEngine = rec.voiceEngine
-        perBookVoice = rec.voice
-        perBookSpeed = rec.voiceSpeed
-        if (perBookSpeed != null && perBookSpeed!! > 0f) {
-            player.speed = perBookSpeed!!
-            refreshSpeedValue()
-            updateStats()
-        }
-        if (perBookEngine != null || perBookVoice != null) waitApplyBookVoice(0)
-    }
-
-    private fun waitApplyBookVoice(attempt: Int) {
-        val eng = perBookEngine
-        val vce = perBookVoice
-        if (book == null) return
-        if (!player.isReady) {
-            if (attempt > 40) return // ~8с — движок так и не поднялся
-            handler.postDelayed({ waitApplyBookVoice(attempt + 1) }, 200)
-            return
-        }
-        if (eng != null && eng != player.enginePackage) {
-            player.setEngine(eng) { ok ->
-                handler.post {
-                    if (ok) {
-                        if (vce != null) {
-                            player.selectVoice(vce)
-                            voiceName = vce
-                        }
-                        announceIfBookVoiceMissing(vce)
-                        refreshSpeedValue()
-                    } else {
-                        // Движок книги недоступен — читаем обычным. Запись не
-                        // удаляем: пользователь увидит/услышит, что голос пропал.
-                        player.setEngine(null) { _ ->
-                            handler.post {
-                                if (vce != null) announceIfBookVoiceMissing(vce)
-                                refreshSpeedValue()
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            if (vce != null && vce != voiceName) {
-                player.selectVoice(vce)
-                voiceName = vce
-            }
-            announceIfBookVoiceMissing(vce)
-            refreshSpeedValue()
-        }
-    }
-
-    /** Запомненный для книги голос не найден среди голосов движка — один раз
-     *  сказать об этом. Запись не трогаем. */
-    private fun announceIfBookVoiceMissing(vce: String?) {
-        if (vce == null || voiceMissingAnnounced || !player.isReady) return
-        if (player.voices.none { it.name == vce }) {
-            voiceMissingAnnounced = true
-            binding.sentenceList.announceForAccessibility(getString(R.string.voice_book_missing))
-        }
-    }
+     *  Логика каскада и ожидания готовности синтеза — в движке. */
+    private fun applyBookVoiceAtOpen() = ReaderEngine.applyBookVoiceAtOpen()
 
     /** Диалог «Голос и речь» закрыт с включённой галочкой — зафиксировать
      *  текущие движок/голос/скорость как свои для этой книги. */
@@ -2829,6 +2350,15 @@ class MainActivity : AppCompatActivity() {
         internal const val AFTER_CALL_REWIND_5 = "5"
         internal const val AFTER_CALL_REWIND_10 = "10"
 
+        // msg2093: «Отступать назад при старте» — при первом старте чтения после
+        // открытия книги начать на N предложений раньше места остановки (вспомнить,
+        // что там было). NONE — выключено (по умолчанию). Работает и для авто-старта,
+        // и для ручного «Читать»; один раз за открытие.
+        internal const val KEY_START_REWIND = "start_rewind"
+        internal const val START_REWIND_NONE = "none"
+        internal const val START_REWIND_2 = "2"
+        internal const val START_REWIND_5 = "5"
+
         internal const val START_LIBRARY = "library"
         internal const val START_LAST = "last"
 
@@ -2836,6 +2366,19 @@ class MainActivity : AppCompatActivity() {
         internal const val KEY_EXIT = "exit_reader"
         internal const val EXIT_DESKTOP = "desktop"
         internal const val EXIT_LIBRARY = "library"
+
+        // msg2136: кнопки гарнитуры „назад/вперёд“ — у каждой своя настройка шага
+        // („Выключено“ / предложение / абзац / глава). Значение pref — одна из
+        // HS_* констант. По умолчанию — „Предложение“ (msg2152): тройное постукивание
+        // листает книгу. „Выключено“ — кнопка ничего не делает: паузу/продолжение
+        // Сергей держит на двойном постукивании (отдельная команда play/pause), а не
+        // на next/prev, поэтому прежнее „next = пауза“ больше не нужно.
+        internal const val KEY_HS_PREV = "headset_prev"
+        internal const val KEY_HS_NEXT = "headset_next"
+        internal const val HS_OFF = "off"
+        internal const val HS_SENTENCE = "sentence"
+        internal const val HS_PARAGRAPH = "paragraph"
+        internal const val HS_CHAPTER = "chapter"
 
         // Назначаемые свайпы влево/вправо (#77). Значение pref — id действия;
         // палитра [GESTURE_ACTIONS] общая для диспетчера в ридере и экрана

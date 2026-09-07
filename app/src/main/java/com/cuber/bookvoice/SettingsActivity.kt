@@ -82,9 +82,14 @@ class SettingsActivity(private val act: SectionActivity) {
     // Строки-резюме назначенных жестов (#77).
     private var gestureRightRow: Button? = null
     private var gestureLeftRow: Button? = null
+    // Строки-резюме кнопок гарнитуры „назад/вперёд“ (msg2136).
+    private var headsetPrevRow: Button? = null
+    private var headsetNextRow: Button? = null
     // Строки-резюме блока «После звонка» (#98).
     private var afterCallRow: Button? = null
     private var afterCallRewindRow: Button? = null
+    // Строка-резюме «Отступать назад при старте» (msg2093, раздел «Чтение»).
+    private var startRewindRow: Button? = null
     // Строки-кнопки вкладок Библиотеки (#97): id режима → кнопка «<Имя>: показана/скрыта».
     private val tabRowButtons = ArrayList<Pair<Int, Button>>()
     private var resetTabsRow: Button? = null
@@ -296,6 +301,9 @@ class SettingsActivity(private val act: SectionActivity) {
         addCheck(R.string.chapter_start_title, MainActivity.KEY_SAY_CHAPTER_START, true)
         addCheck(R.string.auto_start_title, MainActivity.KEY_AUTO_START, true)
         addCheck(R.string.auto_resume_title, MainActivity.KEY_AUTO_RESUME, true)
+        // msg2093: «Отступать назад при старте» — начать на N предложений раньше
+        // места остановки, чтобы вспомнить, что было. Выключено по умолчанию.
+        startRewindRow = addValueButton { pickStartRewind() }
         addCheck(R.string.tap_to_play_title, MainActivity.KEY_TAP_TO_PLAY, true)
         addCheck(R.string.toc_play_title, MainActivity.KEY_TOC_PLAY, true)
         addCheck(R.string.bm_play_title, MainActivity.KEY_BM_PLAY, true)
@@ -446,6 +454,60 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
+    /** Строки кнопок гарнитуры „назад/вперёд“ (msg2136). Сразу после свайпов —
+     *  тоже «кнопки» управления чтением. У каждой кнопки свой выбор шага:
+     *  „Выключено“ / предложение / абзац / глава. */
+    private fun addHeadsetRows() {
+        content().addView(TextView(act).apply {
+            text = getString(R.string.headset_hint)
+            textSize = 14f
+            setTextColor(0xFF9AA0A6.toInt())
+            setPadding(0, dp(6), 0, dp(6))
+        })
+        headsetPrevRow = addValueButton {
+            pickHeadset(MainActivity.KEY_HS_PREV)
+        }
+        headsetNextRow = addValueButton {
+            pickHeadset(MainActivity.KEY_HS_NEXT)
+        }
+    }
+
+    /** Диалог выбора шага для одной кнопки гарнитуры. */
+    private fun pickHeadset(key: String) {
+        val values = arrayOf(
+            MainActivity.HS_OFF, MainActivity.HS_SENTENCE,
+            MainActivity.HS_PARAGRAPH, MainActivity.HS_CHAPTER,
+        )
+        val cur = values.indexOf(
+            prefs.getString(key, MainActivity.HS_SENTENCE) ?: MainActivity.HS_SENTENCE
+        ).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.gesture_choose_title)
+            .setSingleChoiceItems(
+                arrayOf(
+                    getString(R.string.headset_off),
+                    getString(R.string.headset_sentence),
+                    getString(R.string.headset_paragraph),
+                    getString(R.string.headset_chapter),
+                ),
+                cur,
+            ) { d, which ->
+                prefs.edit().putString(key, values[which]).apply()
+                d.dismiss()
+                refreshRows()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Название выбранного шага кнопки гарнитуры — для строки-резюме. */
+    private fun headsetLabel(id: String?): String = getString(when (id) {
+        MainActivity.HS_SENTENCE -> R.string.headset_sentence
+        MainActivity.HS_PARAGRAPH -> R.string.headset_paragraph
+        MainActivity.HS_CHAPTER -> R.string.headset_chapter
+        else -> R.string.headset_off
+    })
+
     /** Диалог выбора действия для одного свайпа (общая палитра жестов). */
     private fun pickGesture(key: String, def: String) {
         val labels = MainActivity.GESTURE_ACTIONS.map { getString(it.second) }.toTypedArray()
@@ -535,6 +597,8 @@ class SettingsActivity(private val act: SectionActivity) {
         // по всем заголовкам. Для TXT/EPUB иерархии нет, режим не влияет.
         chNavRow = addValueButton { pickChapterNav() }
         addGestureRows()
+        // msg2136: кнопки гарнитуры — сразу после свайпов.
+        addHeadsetRows()
     }
 
     private fun buildLibraryGroup() {
@@ -786,8 +850,14 @@ class SettingsActivity(private val act: SectionActivity) {
         gestureLeftRow?.text = getString(R.string.gesture_left_title) + ": " +
             gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_CH))
 
+        headsetPrevRow?.text = getString(R.string.headset_prev_title) + ": " +
+            headsetLabel(prefs.getString(MainActivity.KEY_HS_PREV, MainActivity.HS_SENTENCE))
+        headsetNextRow?.text = getString(R.string.headset_next_title) + ": " +
+            headsetLabel(prefs.getString(MainActivity.KEY_HS_NEXT, MainActivity.HS_SENTENCE))
+
         afterCallRow?.text = getString(R.string.after_call_title) + ": " + afterCallLabel()
         afterCallRewindRow?.text = getString(R.string.after_call_rewind_title) + ": " + rewindLabel()
+        startRewindRow?.text = getString(R.string.start_rewind_title) + ": " + startRewindLabel()
 
         val hiddenTabs = LibraryActivity.tabsHidden(prefs)
         for ((mode, b) in tabRowButtons) {
@@ -855,6 +925,46 @@ class SettingsActivity(private val act: SectionActivity) {
             .setNegativeButton(R.string.toc_close, null)
             .show()
     }
+
+    // ---------------- «Отступать назад при старте» (msg2093) ----------------
+
+    /** Выбор отката при старте: выключено / 2 / 5 предложений. */
+    private fun pickStartRewind() {
+        val values = arrayOf(
+            MainActivity.START_REWIND_NONE,
+            MainActivity.START_REWIND_2,
+            MainActivity.START_REWIND_5,
+        )
+        val cur = values.indexOf(
+            prefs.getString(MainActivity.KEY_START_REWIND, MainActivity.START_REWIND_NONE)
+        ).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.start_rewind_dialog)
+            .setSingleChoiceItems(
+                arrayOf(
+                    getString(R.string.start_rewind_none),
+                    getString(R.string.start_rewind_2),
+                    getString(R.string.start_rewind_5),
+                ),
+                cur,
+            ) { d, which ->
+                prefs.edit().putString(MainActivity.KEY_START_REWIND, values[which]).apply()
+                d.dismiss()
+                rebuildCurrentGroup()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Название выбранного отката при старте — для строки-резюме. */
+    private fun startRewindLabel(): String = getString(when (
+        prefs.getString(MainActivity.KEY_START_REWIND, MainActivity.START_REWIND_NONE)
+            ?: MainActivity.START_REWIND_NONE
+    ) {
+        MainActivity.START_REWIND_NONE -> R.string.start_rewind_none
+        MainActivity.START_REWIND_2 -> R.string.start_rewind_2
+        else -> R.string.start_rewind_5
+    })
 
     /** Откат после звонка (виден только при «Продолжить чтение»). */
     private fun pickAfterCallRewind() {
