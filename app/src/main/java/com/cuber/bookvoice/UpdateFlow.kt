@@ -18,10 +18,22 @@ object UpdateFlow {
     private const val PREFS = "reader"
     private const val KEY_OFFERED = "update_offered_version"
 
+    /** Режим авто-проверки (0.3.91, msg1918): строка-резюме в «Разном» над кнопкой
+     *  «Проверить обновление». MODE_AUTO — тихая проверка при открытии не чаще раза
+     *  в день; MODE_MANUAL — только кнопка, GitHub зря не дёргаем. */
+    const val KEY_MODE = "update_mode"
+    const val MODE_AUTO = "auto"
+    const val MODE_MANUAL = "manual"
+    private const val KEY_LAST_DAY = "update_auto_last_day"
+
     /** Ровно одна авто-проверка за процесс: первый «тихий» показ полки или
      *  возврат из книги её запускает, дальше GitHub до перезапуска не дёргаем. */
     @Volatile
     private var autoCheckedRun = false
+
+    private fun today(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.ROOT)
+            .format(java.util.Date())
 
     private val main = Handler(Looper.getMainLooper())
 
@@ -32,6 +44,18 @@ object UpdateFlow {
 
     private fun toast(act: SectionActivity, msg: String) =
         Toast.makeText(act, msg, Toast.LENGTH_LONG).show()
+
+    /** Результат — окном, которое висит (msg1942): тост и announceForAccessibility
+     *  скринридер может оборвать или не успеть дочитать целиком. Модальный диалог
+     *  с текстом ответа и кнопкой «Закрыть» остаётся на экране, пока юзер сам его
+     *  не закроет, — ответ можно спокойно прочитать и переслушать пальцем. */
+    private fun resultDialog(act: SectionActivity, msg: String) {
+        if (act.isFinishing || act.isDestroyed) return
+        MaterialAlertDialogBuilder(act)
+            .setMessage(msg)
+            .setPositiveButton(str(act, R.string.toc_close), null)
+            .show()
+    }
 
     /** Ручная проверка (кнопка в Настройках): всегда спрашивает GitHub и
      *  показывает результат — «последняя версия» либо предложение скачать. */
@@ -49,22 +73,28 @@ object UpdateFlow {
                 runCatching { loading.dismiss() }
                 if (act.isFinishing || act.isDestroyed) return@runOnUiThread
                 when {
-                    release == null -> toast(act, str(act, R.string.update_fail_net))
-                    !newer -> toast(act, str(act, R.string.update_latest, cur))
+                    release == null -> resultDialog(act, str(act, R.string.update_fail_net))
+                    !newer -> resultDialog(act, str(act, R.string.update_latest, cur))
                     else -> offer(act, release)
                 }
             }
         }
     }
 
-    /** Тихая авто-проверка (полка): один раз за процесс, только если эту версию
-     *  ещё не предлагали (пользователь не сказал «Позже»). Диалог — с паузой,
-     *  чтобы не накрыть озвучку имени окна, на которую полка только что вернулась. */
+    /** Тихая авто-проверка (полка). Режим «Вручную» (#37) её отключает: GitHub зря
+     *  не дёргаем. Иначе — не чаще раза в день (KEY_LAST_DAY) и только если эту
+     *  версию ещё не предлагали («Позже»). Диалог — с паузой, чтобы не накрыть
+     *  озвучку имени окна, на которую полка только что вернулась. */
     fun auto(act: SectionActivity) {
         if (autoCheckedRun) return
         autoCheckedRun = true
+        if (prefs(act).getString(KEY_MODE, MODE_AUTO) == MODE_MANUAL) return
         thread {
+            // Сегодня уже сверялись — повторный запрос до завтра не нужен.
+            if (prefs(act).getString(KEY_LAST_DAY, null) == today()) return@thread
             val release = Updater.latestRelease() ?: return@thread
+            // GitHub ответил — запомнили день; если сети не было, сегодня ещё попробуем.
+            prefs(act).edit().putString(KEY_LAST_DAY, today()).apply()
             val cur = Updater.currentVersion(act)
             if (!Updater.isNewer(release.version, cur)) return@thread
             if (prefs(act).getString(KEY_OFFERED, null) == release.version) return@thread
@@ -135,13 +165,13 @@ object UpdateFlow {
                 runCatching { dlg.dismiss() }
                 if (act.isFinishing || act.isDestroyed) return@runOnUiThread
                 if (file == null) {
-                    toast(act, str(act, R.string.update_fail_dl))
+                    resultDialog(act, str(act, R.string.update_fail_dl))
                     return@runOnUiThread
                 }
                 Vibra.confirm(act)
                 toast(act, str(act, R.string.update_download_ok))
                 if (!Updater.launchInstaller(act)) {
-                    toast(act, str(act, R.string.update_fail_install))
+                    resultDialog(act, str(act, R.string.update_fail_install))
                 }
             }
         }

@@ -91,6 +91,8 @@ class SettingsActivity(private val act: SectionActivity) {
     // Резервная копия (#100): папка и частота (строка-резюме).
     private var backupDirRow: Button? = null
     private var backupAutoRow: Button? = null
+    // Режим авто-проверки обновлений (0.3.91): «Автоматически» / «Вручную».
+    private var updateModeRow: Button? = null
 
     // Открытый раздел (null = экран списка групп).
     private var group: Group? = null
@@ -594,6 +596,7 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     private fun buildDiagGroup() {
+        updateModeRow = addValueButton { pickUpdateMode() }
         addButton(getString(R.string.update_check)) { UpdateFlow.manual(act) }
         addButton(getString(R.string.diag_send)) { sendDiagLog() }
         addButton(getString(R.string.diag_clear)) {
@@ -796,6 +799,7 @@ class SettingsActivity(private val act: SectionActivity) {
         backupDirRow?.text = getString(R.string.backup_dir_title) + ": " +
             if (dir == null) getString(R.string.backup_dir_none) else folderLabel(dir)
         backupAutoRow?.text = getString(R.string.backup_auto_title) + ": " + backupAutoLabel()
+        updateModeRow?.text = getString(R.string.update_mode_title) + ": " + updateModeLabel()
 
     }
 
@@ -1218,6 +1222,35 @@ class SettingsActivity(private val act: SectionActivity) {
             "month" -> R.string.backup_auto_month
             else -> R.string.backup_auto_week
         }
+    )
+
+    // ---------------- Режим авто-проверки обновлений (0.3.91) ----------------
+
+    private fun pickUpdateMode() {
+        val values = arrayOf(UpdateFlow.MODE_AUTO, UpdateFlow.MODE_MANUAL)
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.update_mode_dialog)
+            .setMessage(R.string.update_mode_explain)
+            .setSingleChoiceItems(
+                arrayOf(
+                    getString(R.string.update_mode_auto),
+                    getString(R.string.update_mode_manual),
+                ),
+                values.indexOf(prefs.getString(UpdateFlow.KEY_MODE, UpdateFlow.MODE_AUTO))
+                    .coerceAtLeast(0),
+            ) { d, which ->
+                prefs.edit().putString(UpdateFlow.KEY_MODE, values[which]).apply()
+                d.dismiss()
+                refreshRows()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    private fun updateModeLabel(): String = getString(
+        if (prefs.getString(UpdateFlow.KEY_MODE, UpdateFlow.MODE_AUTO) == UpdateFlow.MODE_AUTO)
+            R.string.update_mode_auto
+        else R.string.update_mode_manual
     )
 
     private fun startIndex(): Int =

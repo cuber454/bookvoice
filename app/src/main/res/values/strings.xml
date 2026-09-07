@@ -19,6 +19,7 @@
     <!-- Библиотека -->
     <string name="add_book">Добавить</string>
     <string name="continue_last">Продолжить</string>
+    <string name="continue_last_with">Продолжить: %1$s</string>
     <string name="sort_books">Сортировать</string>
     <string name="go_library">Библиотека</string>
     <string name="books_empty">В библиотеке пока пусто. Нажми „Ещё“ и выбери „Открыть файл“, чтобы добавить первую книгу.</string>
@@ -177,6 +178,13 @@
     <string name="update_fail_net">Не удалось проверить обновление. Проверь интернет.</string>
     <string name="update_fail_dl">Не удалось скачать обновление.</string>
     <string name="update_fail_install">Не удалось открыть установку обновления.</string>
+    <!-- Режим авто-проверки (0.3.91, msg1918): «Автоматически» — тихая проверка при
+         открытии, не чаще раза в день; «Вручную» — только по кнопке. -->
+    <string name="update_mode_title">Проверять обновления</string>
+    <string name="update_mode_auto">Автоматически</string>
+    <string name="update_mode_manual">Вручную</string>
+    <string name="update_mode_dialog">Как проверять обновления</string>
+    <string name="update_mode_explain">Автоматически: приложение само тихо проверяет при открытии, но не чаще раза в день, и предложит обновиться, если вышла новая версия. Вручную: только по кнопке „Проверить обновление“.</string>
 
     <!-- Медиа-уведомление -->
     <string name="media_reading">Читает…</string>
@@ -215,7 +223,7 @@
     <string name="settings_group_reader">Интерфейс</string>
     <string name="settings_group_start">Управление</string>
     <string name="settings_group_library">Библиотека и скачанные</string>
-    <string name="settings_group_diag">Диагностика</string>
+    <string name="settings_group_diag">Разное</string>
     <!-- Подсказки разделов (msg721): короткая статичная строка-содержимое под названием
          в главном списке Настроек. Не значения, а «что внутри» — помогает найти раздел. -->
     <string name="settings_group_voice_hint">Скорость, громкость, голос и синтезатор</string>
@@ -223,7 +231,7 @@
     <string name="settings_group_reader_hint">Что показывать в читалке</string>
     <string name="settings_group_start_hint">Запуск, листание и шаг кнопок</string>
     <string name="settings_group_library_hint">Папка с книгами, куда и в каком формате качать</string>
-    <string name="settings_group_diag_hint">Отправить или очистить лог</string>
+    <string name="settings_group_diag_hint">Проверка обновлений и журнал приложения</string>
     <!-- Настраиваемые свайпы вправо/влево в читалке (#77) -->
     <string name="gesture_hint">Свайп вправо и свайп влево по тексту открытой книги. Без экранного диктора листайте одним пальцем, с включённым TalkBack — двумя пальцами. Куда ведёт каждый свайп, выбираете ниже.</string>
     <string name="gesture_right_title">Свайп вправо</string>

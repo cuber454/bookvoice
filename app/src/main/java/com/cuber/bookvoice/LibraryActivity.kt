@@ -550,7 +550,23 @@ class LibraryActivity(private val act: SectionActivity) {
                 if (all.isEmpty()) R.string.books_empty else R.string.lib_filter_empty
             )
         }
-        binding.btnLast.isEnabled = prefs.getString(MainActivity.KEY_URI, null) != null
+        updateContinueButton()
+    }
+
+    /** msg1938: умная кнопка «Продолжить» — текст с названием последней книги,
+     *  чтобы было слышно, куда ведёт («Продолжить: Война и мир»). Нет доступной
+     *  последней книги — кнопки нет вовсе, на полке ничего не висит впустую.
+     *  Название берём из каталога (displayTitle); запись удалили — пробуем имя
+     *  файла напрямую (как openLastBook), файл тоже пропал — прячем. */
+    private fun updateContinueButton() {
+        val u = prefs.getString(MainActivity.KEY_URI, null)
+        val title = u?.let {
+            BookStore.byUri(act, it)?.displayTitle ?: queryDisplayName(Uri.parse(it))
+        }
+        binding.btnLast.visibility = if (title == null) View.GONE else View.VISIBLE
+        binding.btnLast.isEnabled = title != null
+        binding.btnLast.text = if (title == null) getString(R.string.continue_last)
+        else getString(R.string.continue_last_with, title)
     }
 
     private fun rowText(rec: BookRecord): String {
@@ -1042,7 +1058,8 @@ class LibraryActivity(private val act: SectionActivity) {
                     3 -> confirmDelete(rec)
                 }
             }
-            .setNegativeButton(getString(R.string.dialog_close), null)
+            // msg1977: «Закрыть» убрана — жест «назад»/тап мимо и так закрывает
+            // меню, лишняя кнопка только плодит шум в озвучке.
             .show()
     }
 

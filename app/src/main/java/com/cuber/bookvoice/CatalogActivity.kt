@@ -1003,17 +1003,14 @@ class CatalogActivity(private val act: SectionActivity) {
                 if (fresh != null) openInReader(fresh) else renderTop()
             }
         } else {
-            // Большая кнопка скачивания (формат из настроек) + маленький выбор формата.
+            // Большая кнопка скачивания (формат из настроек), на всю ширину — единственная
+            // на странице (msg1996: маленький выбор формата убран, живёт в ⋮-меню окна).
             val dlKey = dlFmtKey()
             val fmt = b.downloads.firstOrNull { it.ext == ".$dlKey" }
             val fmtLabel = opdsFormatLabel(dlKey)
             if (b.downloads.isEmpty()) {
                 addReadableText(getString(R.string.catalog_no_formats))
             } else {
-                val row = LinearLayout(act).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                }
                 val primary = Button(act).apply {
                     text = getString(R.string.catalog_dl_with_fmt, fmtLabel)
                     contentDescription = getString(R.string.catalog_dl_primary_cd)
@@ -1032,28 +1029,8 @@ class CatalogActivity(private val act: SectionActivity) {
                         }
                     }
                 }
-                row.addView(
-                    primary,
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
-                )
-                val pick = Button(act).apply {
-                    text = getString(R.string.catalog_format_btn)
-                    contentDescription = getString(R.string.catalog_format_cd, fmtLabel)
-                    textSize = 13f
-                    minWidth = dp(92)
-                    minHeight = dp(48)
-                    setOnClickListener { showFormatDialog(b, null) }
-                }
-                row.addView(
-                    pick,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { marginStart = dp(6) },
-                )
-                content().addView(row, lp().apply { topMargin = dp(2); bottomMargin = dp(2) })
+                content().addView(primary, lp().apply { topMargin = dp(2); bottomMargin = dp(2) })
                 currentButtons.add(primary)
-                currentButtons.add(pick)
                 // msg1264: запоминаем большую кнопку — на неё пойдёт живой прогресс.
                 // Если книга уже качается (вошёл на страницу посреди загрузки) —
                 // сразу показываем текущую подпись вместо «Скачать».
@@ -1064,14 +1041,11 @@ class CatalogActivity(private val act: SectionActivity) {
                 }
             }
         }
-
-        // Настройки скачивания — кнопка прямо на странице книги. Шестерёнка в
-        // шапке остаётся «за спиной» при свайпе по порядку — незрячий до неё
-        // не добирается (#301).
-        addButton(
-            getString(R.string.catalog_dl_settings_title),
-            getString(R.string.catalog_dl_settings_cd),
-        ) { openDlSettings() }
+        // msg1990/1993/1996: со страницы книги убраны маленькая кнопка выбора
+        // формата и отдельная «Настройки скачивания» — Сергею на виду нужна одна
+        // большая кнопка «Скачать», остальное живёт в ⋮-меню окна (там «Настройки
+        // скачивания» уже есть, формат меняется внутри них). Формат по умолчанию
+        // недоступен — большая кнопка сама покажет список доступных (#45).
 
         if (authorsLine.isNotEmpty()) {
             addReadableText(getString(R.string.catalog_info_authors, authorsLine))
