@@ -58,7 +58,12 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Сборка
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: |
+          # В gradle.properties лимиты JVM ужаты под локальный контейнер
+          # (~1.5 GB RAM) — на раннере от них Metaspace OOM. Поднимаем только
+          # для CI: у ubuntu-latest памяти достаточно.
+          sed -i 's|^org.gradle.jvmargs=.*|org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8|' gradle.properties
+          ./gradlew --no-daemon :app:assembleDebug
 
       - name: Версия из тега
         id: ver
