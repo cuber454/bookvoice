@@ -594,6 +594,7 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     private fun buildDiagGroup() {
+        addButton(getString(R.string.update_check)) { UpdateFlow.manual(act) }
         addButton(getString(R.string.diag_send)) { sendDiagLog() }
         addButton(getString(R.string.diag_clear)) {
             Diag.clear(act)

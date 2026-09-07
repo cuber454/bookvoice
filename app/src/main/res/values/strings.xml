@@ -161,6 +161,23 @@
     <string name="diag_clear">🧹 Очистить лог</string>
     <string name="diag_sent_hint">Выбери Telegram и отправь файл в этот чат</string>
 
+    <!-- Автообновление (#35) -->
+    <string name="update_check">Проверить обновление</string>
+    <string name="update_checking">Проверяю наличие новой версии…</string>
+    <string name="update_latest">Установлена последняя версия (%1$s)</string>
+    <string name="update_available_title">Доступна новая версия</string>
+    <string name="update_available_msg">Вышла версия %1$s. Скачать и установить?</string>
+    <string name="update_download">Скачать и установить</string>
+    <string name="update_later">Позже</string>
+    <string name="update_downloading">Скачиваю обновление… %1$d%%</string>
+    <string name="update_downloading_wait">Скачиваю обновление…</string>
+    <string name="update_download_ok">Обновление скачано. Сейчас откроется установка.</string>
+    <string name="update_perm_need">Чтобы установить обновление, разреши BookVoice ставить приложения. Сейчас откроется нужный экран — включи разрешение там.</string>
+    <string name="update_perm_open">Открыть разрешение</string>
+    <string name="update_fail_net">Не удалось проверить обновление. Проверь интернет.</string>
+    <string name="update_fail_dl">Не удалось скачать обновление.</string>
+    <string name="update_fail_install">Не удалось открыть установку обновления.</string>
+
     <!-- Медиа-уведомление -->
     <string name="media_reading">Читает…</string>
     <string name="media_paused">Пауза</string>

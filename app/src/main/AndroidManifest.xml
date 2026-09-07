@@ -19,6 +19,11 @@
          читаются и не сохраняются — слушаем только начало/конец звонка. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
+    <!-- Автообновление (#35): BookVoice сам ставит скачанный APK поверх текущей
+         версии. Android 8+ просит у пользователя разрешение на установку из
+         этого источника; сам диалог системы — при первом запуске установщика. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- msg1170/1172: «Доступ ко всем файлам». Нужен для ЖЕЛЕЗНОЙ записи копий
          и скачиваний в любую выбранную папку: MixPlorer и часть других
          проводников отдают SAF-tree, но их provider не умеет createDocument —
