@@ -42,11 +42,12 @@ jobs:
       - name: Restore debug keystore
         # Подпись обязана совпасть с той, что стоит у пользователя: иначе
         # апдейт не встанет поверх (signature mismatch) и придётся сносить
-        # приложение. Восстанавливаем тот же debug keystore, что и на машине
-        # разработки (залит base64 в секрет).
+        # приложение. Ключ (залит base64 в секрет) кладём в runner.temp и
+        # отдаём сборке явно через BV_DEBUG_KEYSTORE — AGP на раннере сам
+        # ищет debug-keystore не в $HOME/.android и молча родил бы новый.
         run: |
-          mkdir -p "$HOME/.android"
-          printf '%s' "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > "$HOME/.android/debug.keystore"
+          mkdir -p "$RUNNER_TEMP/keystore"
+          printf '%s' "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/keystore/debug.keystore"
 
       - name: Компоненты Android SDK
         run: |
@@ -58,6 +59,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Сборка
+        env:
+          BV_DEBUG_KEYSTORE: ${{ runner.temp }}/keystore/debug.keystore
         run: |
           # В gradle.properties лимиты JVM ужаты под локальный контейнер
           # (~1.5 GB RAM) — на раннере от них Metaspace OOM. Поднимаем только

@@ -15,7 +15,29 @@ android {
         versionName = "0.3.90"
     }
 
+    signingConfigs {
+        // CI (#35): APK автообновления обязан быть подписан тем же ключом, что и
+        // установленная версия, иначе апдейт не встанет поверх. На GitHub-раннере
+        // AGP ищет debug-keystore не в $HOME/.android, а где-то ещё, и молча
+        // генерирует новый — поэтому на CI путь к ключу задаём явно через env.
+        // Локально env нет — остаётся стандартный ~/.android/debug.keystore.
+        val ciKs = System.getenv("BV_DEBUG_KEYSTORE")
+        if (ciKs != null) {
+            create("ciDebug") {
+                storeFile = file(ciKs)
+                storePassword = System.getenv("BV_DEBUG_KEYSTORE_PW") ?: "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = System.getenv("BV_DEBUG_KEY_PW") ?: "android"
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (System.getenv("BV_DEBUG_KEYSTORE") != null) {
+                signingConfig = signingConfigs.getByName("ciDebug")
+            }
+        }
         release {
             isMinifyEnabled = false
         }
