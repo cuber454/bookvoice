@@ -1,0 +1,89 @@
+name: build-apk
+
+# Автосборка APK (#35). Раньше APK собирал агент вручную и заливал в релиз —
+# теперь это делает GitHub: при публикации релиза workflow собирает debug-сборку
+# из кода и прикрепляет APK к релизу. Приложение у пользователя при следующем
+# запуске видит новую версию в релизе и само предлагает обновиться.
+#
+# Соглашение о версиях: тег релиза = "v" + versionName из app/build.gradle.kts
+# (например, тег v0.3.91 для версии 0.3.91). Имя файла и внутренний номер
+# берутся из тега — важно выпускать их в паре.
+#
+# workflow_dispatch позволяет запустить сборку вручную для проверки — без
+# создания релиза (APK уйдёт в артефакт, и его можно сверить по подписи).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Тег существующего релиза для загрузки APK (пусто = только артефакт)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Сборка debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Restore debug keystore
+        # Подпись обязана совпасть с той, что стоит у пользователя: иначе
+        # апдейт не встанет поверх (signature mismatch) и придётся сносить
+        # приложение. Восстанавливаем тот же debug keystore, что и на машине
+        # разработки (залит base64 в секрет).
+        run: |
+          mkdir -p "$HOME/.android"
+          printf '%s' "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > "$HOME/.android/debug.keystore"
+
+      - name: Компоненты Android SDK
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Сборка
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Версия из тега
+        id: ver
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then TAG="${{ github.event.inputs.tag }}"; fi
+          VER="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Именовать APK
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          VER="${{ steps.ver.outputs.ver }}"
+          if [ -n "$VER" ]; then cp "$APK" "BookVoice-$VER.apk"; else cp "$APK" "BookVoice-dev.apk"; fi
+
+      - name: Артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: BookVoice-*.apk
+          if-no-files-found: error
+
+      - name: Прикрепить к релизу
+        if: steps.ver.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ steps.ver.outputs.tag }}" BookVoice-*.apk --clobber
