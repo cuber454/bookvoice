@@ -86,6 +86,28 @@ internal object ReaderEngine {
     var chapterIdx = 0
     var sentenceIdx = 0
     var playing = false
+
+    // ——— Таймер сна (msg2567) ———
+    // Живёт в движке, а не в окне: чтение «без окна» продолжается в фоне, и
+    // таймер должен досчитать и поставить на паузу независимо от того, есть ли
+    // на экране читалка. Отсчёт — по wall-clock (elapsedRealtime): «уснуть через
+    // 20 минут» означает через 20 минут реального времени, как в плеерах.
+    const val SLEEP_OFF = 0
+    const val SLEEP_MINUTES = 1
+    const val SLEEP_CHAPTER = 2
+
+    @Volatile
+    var sleepMode = SLEEP_OFF
+
+    @Volatile
+    var sleepMinutes = 0
+
+    @Volatile
+    private var sleepEndAt = 0L
+
+    private val sleepRunnable = Runnable { fireSleepTimer() }
+
+    val sleepTimerActive: Boolean get() = sleepMode != SLEEP_OFF
     var continuous = false
 
     // Прогресс по всей книге — для слайдера перемотки и оценки времени чтения.
@@ -222,6 +244,7 @@ internal object ReaderEngine {
         pausedByFocusLoss = false
         dropAudioFocus()
         playing = false
+        cancelSleepTimer()
         MediaSessionService.stop(ctx)
         player?.shutdown()
         player = null
@@ -595,6 +618,7 @@ internal object ReaderEngine {
     /** Чтение дошло до конца книги (или было одноразовым) — отпускаем фокус. */
     private fun stopAtEnd() {
         Diag.log(ctx, "activity", "чтение закончилось само (конец/остановка)")
+        cancelSleepTimer() // таймер сна дальше не нужен — дочитали или встали на границе
         playing = false
         dropAudioFocus()
         // msg1119: дочитал до конца — фиксируем, чтобы повторно не начать с начала.
@@ -609,6 +633,13 @@ internal object ReaderEngine {
         if (sentenceIdx + 1 < cur.size) {
             sentenceIdx++
         } else if (chapterIdx + 1 < bk.chapters.size) {
+            // msg2567: «уснуть до конца главы» — глава дочитана, дальше не идём.
+            // Позиция остаётся на её последнем предложении; повторный старт
+            // обычным путём перейдёт в следующую главу.
+            if (sleepMode == SLEEP_CHAPTER) {
+                sleepMode = SLEEP_OFF
+                return false
+            }
             chapterIdx++
             sentenceIdx = 0
             host?.onChapterLoaded()
@@ -640,6 +671,10 @@ internal object ReaderEngine {
         playing = false
         player?.stop()
         pausedByFocusLoss = byFocusLoss
+        // Пользовательская пауза/стоп снимает таймер сна: он ставился «уснуть
+        // под чтение», а чтение уже прервали руками (msg2567). Прерывание чужим
+        // плеером (звонок) — временное, таймер продолжает тикать.
+        if (!byFocusLoss) cancelSleepTimer()
         if (!keepFocus) dropAudioFocus()
         // msg1119: пауза — ключевой момент, позицию фиксируем сразу.
         savePosition()
@@ -650,6 +685,58 @@ internal object ReaderEngine {
     private fun pushPlayState() {
         host?.onPlayStateChanged()
         MediaSessionService.setPlaying(playing)
+    }
+
+    // ---------------- Таймер сна (msg2567) ----------------
+
+    /** Поставить таймер «уснуть через [minutes] минут». Прежний режим снимается. */
+    fun setSleepTimerMinutes(minutes: Int) {
+        removeSleepRunnable()
+        if (minutes <= 0) {
+            sleepMode = SLEEP_OFF
+            sleepMinutes = 0
+            return
+        }
+        sleepMode = SLEEP_MINUTES
+        sleepMinutes = minutes
+        sleepEndAt = SystemClock.elapsedRealtime() + minutes * 60_000L
+        main.postDelayed(sleepRunnable, minutes * 60_000L)
+        Diag.log(ctx, "sleep", "таймер сна: через $minutes минут")
+    }
+
+    /** Поставить таймер «уснуть, когда закончится глава»: дочитываем текущую
+     *  главу и встаём на паузу на её последнем предложении (см. [advanceOneUnit]). */
+    fun setSleepTimerChapterEnd() {
+        removeSleepRunnable()
+        sleepMode = SLEEP_CHAPTER
+        sleepMinutes = 0
+        Diag.log(ctx, "sleep", "таймер сна: до конца главы")
+    }
+
+    /** Снять таймер. Зовётся при ручной паузе/остановке — сработавший ночью
+     *  таймер не должен выстрелить утром, когда чтение продолжили. */
+    fun cancelSleepTimer() {
+        removeSleepRunnable()
+        sleepMode = SLEEP_OFF
+        sleepMinutes = 0
+    }
+
+    private fun removeSleepRunnable() {
+        sleepEndAt = 0L
+        main.removeCallbacks(sleepRunnable)
+    }
+
+    private fun fireSleepTimer() {
+        sleepEndAt = 0L
+        val byTime = sleepMode == SLEEP_MINUTES
+        sleepMode = SLEEP_OFF
+        sleepMinutes = 0
+        // Играет — ставим на паузу (сохранит место и отдаст фокус). Уже стоит на
+        // паузе (например, прервали звонком) — просто сбрасываем режим.
+        if (byTime && playing) {
+            pausePlayback(keepFocus = false)
+            Diag.log(ctx, "sleep", "таймер сна сработал — чтение на паузе")
+        }
     }
 
     // ---------------- Аудиофокус ----------------

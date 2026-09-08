@@ -551,6 +551,16 @@
     <string name="reader_back_none">Нет предыдущего места — переходов ещё не было</string>
     <string name="reader_back_done">Вернулся: %1$s</string>
 
+    <!-- msg2567/2575: таймер сна в ⋮-меню читалки -->
+    <string name="sleep_menu">Таймер сна</string>
+    <string name="sleep_menu_active">Таймер сна: %1$s</string>
+    <string name="sleep_min">%1$d минут</string>
+    <string name="sleep_chapter">До конца главы</string>
+    <string name="sleep_menu_chapter_active">Таймер сна: до конца главы</string>
+    <string name="sleep_off">Выключить таймер</string>
+    <string name="sleep_off_done">Таймер сна выключен</string>
+    <string name="sleep_dialog_title">Таймер сна</string>
+
     <!-- 0.3.42: свой голос для книги (#102) -->
     <string name="voice_remember_book">Запомнить для этой книги</string>
     <string name="voice_remember_book_cd">Запомнить голос и скорость для этой книги</string>

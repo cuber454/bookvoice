@@ -1788,6 +1788,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         actions.add(getString(R.string.quotes_title) to {  // 0.3.44 (msg1092): Цитаты из читалки
             startActivity(Intent(this, QuotesActivity::class.java))
         })
+        // msg2567: таймер сна — пункт-переключатель. Подпись показывает режим,
+        // клик открывает выбор времён/«выключить» (см. showSleepTimerDialog).
+        actions.add(sleepTimerMenuLabel() to { showSleepTimerDialog() })
         actions.add(getString(R.string.voice_settings) to { toggleVoicePanel() })  // msg2403: та же шторка.
         actions.add(getString(R.string.app_exit) to { exitApp() })  // msg1278: последним.
         MaterialAlertDialogBuilder(this)
@@ -1796,6 +1799,49 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 actions[which].second()
             }
             .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».
+    }
+
+    /** msg2567: подпись пункта «Таймер сна» в ⋮-меню читалки. Показывает
+     *  активный режим: «Таймер сна: N минут» / «Таймер сна: до конца главы»;
+     *  таймера нет — просто «Таймер сна». */
+    private fun sleepTimerMenuLabel(): String = when (ReaderEngine.sleepMode) {
+        ReaderEngine.SLEEP_MINUTES -> getString(
+            R.string.sleep_menu_active,
+            getString(R.string.sleep_min, ReaderEngine.sleepMinutes)
+        )
+        ReaderEngine.SLEEP_CHAPTER -> getString(R.string.sleep_menu_chapter_active)
+        else -> getString(R.string.sleep_menu)
+    }
+
+    /** msg2567/2575: выбор таймера сна. Таймер живёт в движке — работает и при
+     *  погашенном экране, и «без окна» (см. ReaderEngine.setSleepTimerMinutes).
+     *  Активный режим первым пунктом снимается; затем времена и «До конца главы». */
+    private fun showSleepTimerDialog() {
+        val opts = ArrayList<Pair<String, () -> Unit>>()
+        if (ReaderEngine.sleepTimerActive) {
+            opts.add(getString(R.string.sleep_off) to {
+                ReaderEngine.cancelSleepTimer()
+                toast(getString(R.string.sleep_off_done))
+            })
+        }
+        for (m in SLEEP_TIMER_CHOICES) {
+            opts.add(getString(R.string.sleep_min, m) to {
+                ReaderEngine.setSleepTimerMinutes(m)
+                Vibra.confirm(this)
+                toast(getString(R.string.sleep_menu_active, getString(R.string.sleep_min, m)))
+            })
+        }
+        opts.add(getString(R.string.sleep_chapter) to {
+            ReaderEngine.setSleepTimerChapterEnd()
+            Vibra.confirm(this)
+            toast(getString(R.string.sleep_menu_chapter_active))
+        })
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.sleep_dialog_title))
+            .setItems(opts.map { it.first }.toTypedArray()) { _, which ->
+                opts[which].second()
+            }
+            .show()
     }
 
     /** msg1278: «Выход из приложения». Если звучит чтение — гасим (сохраняет
@@ -2412,6 +2458,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // скорость/голос сразу, а не «на следующий запуск».
         @Volatile
         internal var active: MainActivity? = null
+
+        // msg2567: набор времён таймера сна в диалоге выбора (минуты).
+        internal val SLEEP_TIMER_CHOICES = intArrayOf(10, 20, 30, 45, 60)
 
         /** Короткий снимок живой читалки для строки о падении (пишет
          *  BookVoiceApp в diag.log): какая книга открыта, читает ли, скорость.
