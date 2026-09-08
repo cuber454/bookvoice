@@ -12,6 +12,13 @@
     <string name="next_paragraph">Следующий абзац</string>
     <string name="prev_chapter">Предыдущая глава</string>
     <string name="next_chapter">Следующая глава</string>
+    <!-- msg2531/2535: имена кнопок «◀ Глава/Глава ▶» следуют режиму «Кнопки глав
+         шагают» (ch_nav): «По главам» → глава, «По крупным разделам» → раздел,
+         «По всем заголовкам» → заголовок. Код ставит нужную пару в contentDescription. -->
+    <string name="prev_section">Предыдущий раздел</string>
+    <string name="next_section">Следующий раздел</string>
+    <string name="prev_header">Предыдущий заголовок</string>
+    <string name="next_header">Следующий заголовок</string>
     <string name="no_book">Открой книгу, чтобы начать слушать</string>
     <string name="auto_on">Авто: вкл</string>
     <string name="auto_off">Авто: выкл</string>

@@ -368,6 +368,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Там же могли сменить шаг кнопок «Пред.»/«След.» — переименовываем
         // их для скринридера под выбранный шаг (msg2471).
         updateSentenceButtonNames()
+        // Там же могли сменить режим «Кнопки глав шагают» (по главам/разделам/
+        // заголовкам) — имя «◀ Глава/Глава ▶» для скринридера следует режиму (msg2535).
+        updateChapterButtonNames()
         refreshSpeedValue()
         // Карточка рождается только когда книга реально начала читаться
         // (startSpeakingCurrent) — msg1779: при просто открытой, но молчащей
@@ -1010,6 +1013,22 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
         binding.btnPrevSentence.contentDescription = getString(prev)
         binding.btnNextSentence.contentDescription = getString(next)
+    }
+
+    /** Имена кнопок «◀ Глава/Глава ▶» для скринридера следуют режиму «Кнопки глав
+     *  шагают» (msg2531/2535): по главам → «Предыдущая/Следующая глава», по крупным
+     *  разделам → «…раздел», по всем заголовкам → «…заголовок». Раньше имя всегда
+     *  было «глава», хотя сами кнопки при режимах major/all прыгают по разделам и
+     *  заголовкам — скринридер говорил не то, куда реально ведёт переход.
+     *  Вызывается в onStart вместе с updateSentenceButtonNames. */
+    private fun updateChapterButtonNames() {
+        val (prev, next) = when (prefs.getString(KEY_CH_NAV, CH_NAV_ALL)) {
+            CH_NAV_MAJOR -> R.string.prev_section to R.string.next_section
+            CH_NAV_CHAPTERS -> R.string.prev_chapter to R.string.next_chapter
+            else -> R.string.prev_header to R.string.next_header
+        }
+        binding.btnPrevChapter.contentDescription = getString(prev)
+        binding.btnNextChapter.contentDescription = getString(next)
     }
 
     private fun goTo(ch: Int, s: Int) = ReaderEngine.goTo(ch, s)
