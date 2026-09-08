@@ -11,6 +11,7 @@ import android.util.TypedValue
 import android.view.View
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.cuber.bookvoice.databinding.ActivityQuotesBinding
@@ -74,15 +75,23 @@ class QuotesActivity : AppCompatActivity() {
 
         quotes = QuoteStore.all(this)
         rebuild()
-    }
 
-    override fun onBackPressed() {
-        if (openQuote != null) {
-            openQuote = null
-            rebuild()
-        } else {
-            exitToLauncher()
-        }
+        // msg2233/2239: на Android 16 (targetSdk 36) системный «назад» уходит в
+        // predictive-back диспетчер, и без явного callback системный default
+        // может закрыть окно сам, минуя нашу логику (см. комментарий в
+        // SectionActivity.onCreate — тот же фикс всем окнам). Явный callback:
+        // открытая цитата → к списку; иначе → закрыть окно с подавлением
+        // авто-открытия книги на полке.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (openQuote != null) {
+                    openQuote = null
+                    rebuild()
+                } else {
+                    exitToLauncher()
+                }
+            }
+        })
     }
 
     /** «Назад» из шапки: как системная кнопка. */

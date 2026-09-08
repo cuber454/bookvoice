@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.FrameLayout
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -90,6 +91,25 @@ abstract class SectionActivity : AppCompatActivity() {
         // шапка окна уедет под статус-бар, а низ — под навигационную полосу.
         edgeToEdge(container)
         buildSection(intent)
+
+        // msg2233/2239: на Android 16 (targetSdk 36) системный «назад» уходит в
+        // predictive-back диспетчер, и без явного callback системный default
+        // МОЖЕТ закрыть окно сам, минуя onSectionBackKey (замечено в diag.log
+        // 0.4.1: окно Настроек исчезло, а наших веток «назад» в логе нет — как
+        // раз «то на полку, то в книгу»). Регистрируем ЯВНЫЙ OnBackPressedCallback:
+        // каждый back приходит сюда → onSectionBackKey (в разделе — уровень вверх,
+        // в корне — rootBack с подавлением авто-открытия книги). deprecated
+        // onBackPressed() в predictive-режиме может не зваться, поэтому здесь
+        // единственный источник правды (см. манифест enableOnBackInvokedCallback).
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (!onSectionBackKey()) {
+                    // Страница «назад» не взяла — отдать системному default (finish).
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
     }
 
     override fun onResume() {
@@ -97,10 +117,6 @@ abstract class SectionActivity : AppCompatActivity() {
         val arrival = !shownOnce
         shownOnce = true
         resumeSection(arrival)
-    }
-
-    override fun onBackPressed() {
-        if (!onSectionBackKey()) super.onBackPressed()
     }
 
     override fun onDestroy() {

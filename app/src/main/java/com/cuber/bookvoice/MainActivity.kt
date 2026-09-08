@@ -35,6 +35,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.cuber.bookvoice.databinding.ActivityMainBinding
@@ -306,6 +307,35 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
         // Android 13+: медиа-уведомление в шторке требует разрешения.
         requestNotificationPermission()
+
+        // msg2233/2239: на Android 16 (targetSdk 36) «назад» гонится в
+        // predictive-back диспетчер; без явного callback системный default
+        // может закрыть читалку сам, минуя onBackPressed (и тогда полка снизу
+        // не получит suppress — авто-открытие вернёт «в книгу»). Тот же фикс,
+        // что окнам-секциям (SectionActivity): явный OnBackPressedCallback.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                // Открыта панель поиска — «назад» сначала закрывает её, а не
+                // выходит из книги (системная кнопка и жест работают одинаково).
+                if (book != null && searchPanelOpen()) {
+                    closeSearchPanel()
+                    return
+                }
+                if (fromCatalog) {
+                    finish()
+                    return
+                }
+                val exit = prefs.getString(KEY_EXIT, EXIT_LIBRARY)
+                if (exit == EXIT_LIBRARY) {
+                    // «В список книг»: хост под читалкой показывает Библиотеку;
+                    // suppress гасит авто-открытие последней книги.
+                    startLibrary()
+                } else {
+                    // «На рабочий стол»: сворачиваем задачу (полка под читалкой).
+                    moveTaskToBack(true)
+                }
+            }
+        })
     }
 
     /** На Android 13+ спрашиваем разрешение на уведомления (показывает
@@ -513,33 +543,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  каталога (он лежит под читалкой в стеке), а не в список библиотеки. */
     private val fromCatalog: Boolean
         get() = intent.getBooleanExtra(EXTRA_FROM_CATALOG, false)
-
-    /** Выход из книги: настройка — на рабочий стол или в список книг (#43).
-     *  По умолчанию — в список (так раньше «Назад» выкидывал на рабочий стол,
-     *  и читать дальше было неудобно). Книга из каталога всегда возвращает
-     *  в каталог (#52) — «настройка выхода» к ней не применяется. */
-    override fun onBackPressed() {
-        // Открыта панель поиска — «назад» сначала закрывает её, а не выходит
-        // из книги (системная кнопка и жест работают одинаково).
-        if (book != null && searchPanelOpen()) {
-            closeSearchPanel()
-            return
-        }
-        if (fromCatalog) {
-            finish()
-            return
-        }
-        val exit = prefs.getString(KEY_EXIT, EXIT_LIBRARY)
-        if (exit == EXIT_LIBRARY) {
-            // «В список книг»: хост под читалкой показывает Библиотеку; suppress
-            // гасит авто-открытие последней книги (полка и так будет видна).
-            startLibrary()
-        } else {
-            // «На рабочий стол»: хост теперь всегда под читалкой, поэтому простой
-            // finish() показал бы полку, а не рабочий стол — сворачиваем задачу.
-            moveTaskToBack(true)
-        }
-    }
 
     private fun openBook(uri: Uri, chapter: Int, sentence: Int, rewindOnOpen: Boolean = false) {
         // msg1739: «Открываю…» убрано — скринридер читал тост при входе и перебивал
