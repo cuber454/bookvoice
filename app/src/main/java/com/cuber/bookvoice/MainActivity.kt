@@ -1952,6 +1952,24 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         savePerBook(player.enginePackage, vce, player.speed)
     }
 
+    /** #55 (msg2669): панель голоса закрыта БЕЗ галочки и что-то меняли — текущие
+     *  движок/голос/скорость плеера становятся глобальными (голос «для всех книг
+     *  без своего голоса»). Зовётся при закрытии панели, а не в момент кликов:
+     *  тогда настройка книги с галочкой не успевает заразить глобальные, в каком
+     *  порядке ни выбирай. Если глобально движок не был выбран (null — системный),
+     *  движок не «прилипает»: пишем только когда панель действительно что-то
+     *  меняла (voicePanelDirty). */
+    private fun persistGlobalProfile() {
+        if (!player.isReady) return
+        val e = prefs.edit()
+        val eng = player.enginePackage
+        if (eng != null) e.putString(KEY_ENGINE, eng) else e.remove(KEY_ENGINE)
+        val vc = voiceName?.takeIf { player.voices.any { v -> v.name == it } }
+        if (vc != null) e.putString(KEY_VOICE, vc) else e.remove(KEY_VOICE)
+        e.putFloat(KEY_SPEED, player.speed)
+        e.apply()
+    }
+
     /** Галочку «Запомнить для этой книги» сняли — свой голос забываем и
      *  возвращаемся к глобальным настройкам (включая системный движок, если
      *  глобально движок не выбран). [onDone] зовётся, когда движок переключён. */
@@ -2268,6 +2286,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // при закрытии шторки, чтобы зафиксировать профиль книги.
     private var voiceRememberChecked = false
 
+    // #55 (msg2669): в этой сессии панели голоса что-то меняли (движок/голос/
+    // скорость)? Закрыли без галочки и без изменений — глобальные настройки не
+    // перезаписываем, чтобы простое «открыл-закрыл» не прибивало системный движок.
+    private var voicePanelDirty = false
+
     // #54 (msg2643): полноэкранный режим панели голоса. На время панели прячем
     // остальную читалку (всех соседей voiceArea в корне + список предложений),
     // чтобы панель со скроллом заняла весь экран; при закрытии всё возвращаем.
@@ -2294,6 +2317,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Перестраиваем шторку из текущих значений при каждом открытии.
         val body = binding.voiceBody
         body.removeAllViews()
+        voicePanelDirty = false
         body.setPadding(dp2px(4f), dp2px(8f), dp2px(4f), dp2px(8f))
 
         // #102: «Запомнить для этой книги». Видна, когда открыта книга; включена —
@@ -2347,7 +2371,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
 
         fun revealVoices() {
-            populateVoiceList(voiceContainer, rememberCb)
+            populateVoiceList(voiceContainer)
             showStep(2)
         }
 
@@ -2357,9 +2381,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 revealVoices()
                 return
             }
-            // #102: с включённой галочкой глобальный движок не трогаем — выбранный
-            // уйдёт в запись книги при закрытии шторки (persistPerBookProfile).
-            if (!rememberCb.isChecked) prefs.edit().putString(KEY_ENGINE, pkg).apply()
+            // #55 (msg2669): движок в глобальные настройки в момент клика НЕ пишем —
+            // иначе выбор «до галочки» заражал все книги без своего голоса (msg2671).
+            // Куда писать решает hideVoicePanel при закрытии: галочка → запись книги,
+            // без галочки → глобальные (persistGlobalProfile). Порядок «сначала голос,
+            // потом галочка» перестаёт иметь значение.
+            voicePanelDirty = true
             voiceContainer.removeAllViews()
             voiceContainer.addView(TextView(this@MainActivity).apply {
                 text = getString(R.string.engine_loading)
@@ -2369,7 +2396,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     if (ok) {
                         revealVoices()
                     } else {
-                        if (!rememberCb.isChecked) prefs.edit().remove(KEY_ENGINE).apply()
                         player.setEngine(null) { _ ->
                             handler.post { revealVoices() }
                         }
@@ -2380,17 +2406,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
 
         // Ползунки — как Настройки → «Голос»: скорость, тон, громкость.
-        // Скорость: при галочке «Запомнить для этой книги» глобальную не трогаем —
-        // книге зафиксируем текущую при закрытии шторки (persistPerBookProfile),
-        // чтобы не писать library.json на каждый тик слайдера. Без галочки — как
-        // в настройках.
+        // Скорость: применяем к плееру сразу (новую слышно на лету), но в
+        // глобальные НЕ пишем до закрытия панели — #55 (msg2669): выбор «до галочки»
+        // не должен заражать общие настройки. Куда писать решает hideVoicePanel
+        // (галочка → запись книги, без → глобальные). В отличие от тон/громкость,
+        // которые всегда общие, скорость может быть своя у книги (#102).
         addRateSliderTo(body, R.string.speed_value, "Скорость", currentSpeed()) { v ->
-            if (hasBook && rememberCb.isChecked) {
-                if (player.isReady) player.speed = v
-            } else {
-                prefs.edit().putFloat(KEY_SPEED, v).apply()
-                if (player.isReady) player.speed = v
-            }
+            voicePanelDirty = true
+            if (player.isReady) player.speed = v
             refreshSpeedValue()
             updateStats()
         }
@@ -2410,6 +2433,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
         rememberRow.addView(rememberCb)
         body.addView(rememberRow)
+        // #55 (msg2669): статичная подсказка под галочкой — что будет с выбранным
+        // голосом при закрытии панели. Одна фраза на обе стороны, чтобы незрячему
+        // не приходилось угадывать по названию галочки (msg2659/msg2671).
+        body.addView(TextView(this).apply {
+            text = getString(R.string.voice_remember_hint)
+            textSize = 14f
+            setTextColor(0xFF9AA0A6.toInt())
+            setPadding(dp2px(4f), 0, dp2px(4f), dp2px(8f))
+        })
         rememberCb.setOnCheckedChangeListener { _, checked ->
             voiceRememberChecked = checked
             if (checked) {
@@ -2479,8 +2511,17 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             persistPerBookProfile()
             refreshSpeedValue()
             updateStats()
+        } else if (voicePanelDirty) {
+            // #55 (msg2669): галочки нет (или книги нет) и что-то меняли — закрыли
+            // панель, значит выбранные движок/голос/скорость становятся ГЛОБАЛЬНЫМИ
+            // («для всех книг без своего голоса»). Запись здесь, а не в момент
+            // клика, чинит порядок «выбрал голос, потом поставил галочку»: при
+            // галочке белорусский выбор уже ушёл в книгу выше и глобальные не задел.
+            persistGlobalProfile()
+            refreshSpeedValue()
         }
         voiceRememberChecked = false
+        voicePanelDirty = false
     }
 
     /** #54: развернуть панель голоса на весь экран. Прячем всех соседей voiceArea
@@ -2524,7 +2565,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         )
     }
 
-    private fun populateVoiceList(container: LinearLayout, rememberCb: CheckBox? = null) {
+    private fun populateVoiceList(container: LinearLayout) {
         container.removeAllViews()
         val voices = player.voices
         if (voices.isEmpty()) {
@@ -2543,11 +2584,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             rb.setOnClickListener {
                 val sel = rb.tag as String
                 voiceName = sel
-                // #102: при галочке «Запомнить для этой книги» глобальный голос
-                // не трогаем — выбранный уйдёт в запись книги при закрытии.
-                if (rememberCb?.isChecked != true) {
-                    prefs.edit().putString(KEY_VOICE, sel).apply()
-                }
+                // #55 (msg2669): голос в глобальные в момент выбора НЕ пишем — выбор
+                // до установки галочки заражал все книги без своего голоса. Куда
+                // писать решает hideVoicePanel при закрытии панели.
+                voicePanelDirty = true
                 player.selectVoice(sel)
             }
             group.addView(rb)

@@ -568,6 +568,7 @@
     <string name="voice_book_missing">Голос для этой книги не найден — читаю обычным</string>
     <string name="voice_book_saved">Запоминаю для этой книги</string>
     <string name="voice_book_cleared">Читаю обычным голосом</string>
+    <string name="voice_remember_hint">С галочкой голос запомнится только для этой книги. Без галочки голос станет общим для всех книг без своего голоса.</string>
 
     <!-- 0.4.14 (#54): полноэкранная панель голоса — кнопка проверки голоса -->
     <string name="voice_test_play">Проверить голос</string>
