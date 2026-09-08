@@ -446,16 +446,11 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     /** Строки свайпов вправо/влево (#77). Раньше были отдельным разделом «Жесты»,
-     *  по просьбе перенесены в «Старт и кнопки». Палитра действий общая с ридером
+     *  по просьбе перенесены в «Управление». Палитра действий общая с ридером
      *  (MainActivity.GESTURE_ACTIONS): выбранный id хранится в prefs и читается
-     *  диспетчером жестов при свайпе. */
+     *  диспетчером жестов при свайпе. msg2455: серая подсказка над строками убрана —
+     *  в разделе остаются только сами строки выбора. */
     private fun addGestureRows() {
-        content().addView(TextView(act).apply {
-            text = getString(R.string.gesture_hint)
-            textSize = 14f
-            setTextColor(0xFF9AA0A6.toInt())
-            setPadding(0, 0, 0, dp(6))
-        })
         gestureRightRow = addValueButton {
             pickGesture(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_CH)
         }
@@ -466,14 +461,9 @@ class SettingsActivity(private val act: SectionActivity) {
 
     /** Строки кнопок гарнитуры „назад/вперёд“ (msg2136). Сразу после свайпов —
      *  тоже «кнопки» управления чтением. У каждой кнопки свой выбор шага:
-     *  „Выключено“ / предложение / абзац / глава. */
+     *  „Выключено“ / предложение / абзац / глава. msg2455: серая подсказка над
+     *  строками убрана — в разделе остаются только сами строки выбора. */
     private fun addHeadsetRows() {
-        content().addView(TextView(act).apply {
-            text = getString(R.string.headset_hint)
-            textSize = 14f
-            setTextColor(0xFF9AA0A6.toInt())
-            setPadding(0, dp(6), 0, dp(6))
-        })
         headsetPrevRow = addValueButton {
             pickHeadset(MainActivity.KEY_HS_PREV)
         }
