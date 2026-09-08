@@ -326,9 +326,9 @@
     <string name="net_permission_open">Открыть настройки</string>
 
     <string name="step_title">Кнопки назад и далее шагают по</string>
-    <string name="step_dialog">Чем листать вперёд и назад</string>
-    <string name="step_sentence">Предложением</string>
-    <string name="step_chapter">Главой</string>
+    <string name="step_dialog">Какой шаг у кнопок „назад“ и „далее“?</string>
+    <string name="step_sentence">Предложение</string>
+    <string name="step_chapter">Глава</string>
     <string name="step_sentence_value">предложениям</string>
     <string name="step_chapter_value">главам</string>
 
