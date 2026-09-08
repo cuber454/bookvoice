@@ -6,6 +6,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityEvent
 import android.widget.TextView
+import androidx.core.view.ViewCompat
 
 /** Набор стилей и a11y-приёмов главных экранов (редизайн навигации msg1676+).
  *
@@ -178,9 +179,30 @@ object TabNav {
      *  нажатый элемент. */
     fun focusHeader(v: View, delayMs: Long = 550) {
         if (!v.isFocusable) v.isFocusable = true
+        // msg2296 (законы TalkBack): чтобы заголовок был КАНДИДАТОМ на фокус,
+        // focusable мало — TalkBack по «правилу первенства» садится на первую
+        // кнопку окна (⋮/Назад), а перенос на «пассивный» текст отклоняет.
+        // screenReaderFocusable делает текст полноправной целью (в layout это же
+        // стоит атрибутом с первого кадра; здесь — страховка на всех API).
+        ViewCompat.setScreenReaderFocusable(v, true)
         v.postDelayed({
-            if (v.isShown) a11yFocus(v)
+            if (v.isShown) focusHeaderAttempt(v, 0)
         }, delayMs)
+    }
+
+    /** Перенос фокуса на заголовок с подтверждением. Однократная отправка в
+     *  [a11yFocus] могла теряться в гонке с авто-выбором ридера (msg2254: событие
+     *  ушло, «ИТОГ: фокус на btnMore»). Здесь после паузы сверяем, что фокус
+     *  реально на [v]; нет — повторяем (до 3 попыток). Повтор не даёт дубля
+     *  озвучки: если фокус уже встал, a11yFocus сам не шлёт событие. */
+    private fun focusHeaderAttempt(v: View, attempt: Int) {
+        a11yFocus(v)
+        v.postDelayed({
+            if (v.isShown && !v.isAccessibilityFocused() && attempt < 2) {
+                Diag.log(v.context, "focus", "заголовок не подтверждён — повтор ${attempt + 2}")
+                focusHeaderAttempt(v, attempt + 1)
+            }
+        }, 400)
     }
 
     /** Полный выход из приложения (msg1278): гасим службу чтения и закрываем

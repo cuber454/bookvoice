@@ -26,6 +26,7 @@
             android:accessibilityHeading="true"
             android:ellipsize="end"
             android:focusable="true"
+            android:screenReaderFocusable="true"
             android:maxLines="2"
             android:paddingStart="4dp"
             android:paddingTop="2dp"

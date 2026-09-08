@@ -30,6 +30,8 @@
             android:layout_weight="1"
             android:ellipsize="end"
             android:focusable="true"
+            android:screenReaderFocusable="true"
+            android:accessibilityHeading="true"
             android:maxLines="1"
             android:text="@string/go_library"
             android:textAppearance="?attr/textAppearanceTitleLarge"
