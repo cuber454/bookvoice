@@ -227,6 +227,9 @@ class CatalogActivity(private val act: SectionActivity) {
         // «Мои каталоги» — rootBack окна на полку (suppress авто-открытия ставит
         // onDestroy, фикс 0.3.75).
         binding.btnBack.setOnClickListener { onBackKey() }
+        // msg2339/2343: «Добавить каталог» — плавающая кнопка в правом нижнем углу
+        // корня (была кнопкой в потоке после заголовка «Управление»).
+        binding.btnAddFab.setOnClickListener { showAddDialog() }
 
         setupAutoLoad()
         renderTop()
@@ -410,6 +413,9 @@ class CatalogActivity(private val act: SectionActivity) {
         v.removeAllViews()
         currentButtons.clear()
         removePending()
+        // msg2339/2343: FAB «Добавить каталог» живёт только в корне «Мои каталоги»
+        // (нижний правый угол); в ленте источника и на странице книги скрыт.
+        binding.btnAddFab.visibility = if (cur == null) View.VISIBLE else View.GONE
         when (cur) {
             null -> {
                 // msg1700: корень каталога — одна строка сверху «Мои каталоги».
@@ -442,18 +448,6 @@ class CatalogActivity(private val act: SectionActivity) {
         if (sources.isEmpty()) {
             hint(getString(R.string.catalog_empty))
         }
-        // Подсказка про долгое нажатие. НЕ focusable (msg1456): иначе при входе
-        // в корень (переключение на вкладку «Каталоги») фокус падал бы на неё,
-        // а не на первый каталог списка — как просил Сергей. Остальные подсказки
-        // (hint/addHintRow) тоже не в пути фокуса — единообразно.
-        if (sources.isNotEmpty()) {
-            content().addView(TextView(act).apply {
-                text = getString(R.string.catalog_longpress_hint)
-                textSize = 15f
-                setTextColor(0xFF9AA0A6.toInt())
-                setPadding(dp(4), dp(0), dp(4), dp(6))
-            }, lp())
-        }
         for (s in sources) {
             // Строка каталога без роли «кнопка» и с короткой озвучкой — только имя
             // (как строки книг в списках): «Флибуста», а не «Открыть каталог… кнопка».
@@ -471,8 +465,6 @@ class CatalogActivity(private val act: SectionActivity) {
                 true
             }
         }
-        header(getString(R.string.catalog_manage))
-        addButton(getString(R.string.catalog_add)) { showAddDialog() }
         focusRootIfReturning()
     }
 

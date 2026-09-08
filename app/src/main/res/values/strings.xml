@@ -73,7 +73,6 @@
     <string name="catalog_title">Каталоги</string>
     <string name="catalog_sources_title">Мои каталоги</string>
     <string name="catalog_empty">Каталогов пока нет. Нажми „Добавить каталог“ и введи адрес — например https://flibusta.is/opds</string>
-    <string name="catalog_manage">Управление</string>
     <string name="catalog_add">Добавить каталог</string>
     <string name="catalog_add_ok">Добавить</string>
     <string name="catalog_added">Каталог добавлен: %1$s</string>
@@ -88,7 +87,6 @@
     <string name="catalog_edit_ok">Сохранить</string>
     <string name="catalog_edit_saved">Каталог обновлён: %1$s</string>
     <string name="catalog_name_hint">Название</string>
-    <string name="catalog_longpress_hint">Долгое нажатие на каталог — изменить, проверить или удалить</string>
     <string name="catalog_move_up">Передвинуть выше</string>
     <string name="catalog_move_down">Передвинуть ниже</string>
     <string name="catalog_moved">Каталог передвинут в списке</string>
@@ -263,7 +261,7 @@
     <string name="headset_chapter">Глава</string>
 
     <!-- Конструктор экрана чтения (#58): какие элементы показывать в читалке -->
-    <string name="reader_group_hint">Флажки этого раздела убирают и возвращают элементы на экран книги. Галочка стоит — элемент показывается при чтении: текст книги, кнопки управления, перемотка, позиция, статистика, оглавление, закладки, кнопка голоса, статус, скорость. Снял галочку — элемент исчезает с экрана чтения.</string>
+    <string name="reader_group_hint">Галочка показывает элемент на экране книги, без галочки элемент скрыт.</string>
     <string name="ui_sent_title">Кнопки «Предыдущее» и «Следующее» предложение</string>
     <string name="ui_play_title">Кнопка «Читать / Пауза»</string>
     <string name="ui_chapters_title">Кнопки «Предыдущая глава» и «Следующая глава»</string>
