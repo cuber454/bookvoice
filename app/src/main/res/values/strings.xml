@@ -6,6 +6,10 @@
     <string name="pause">Пауза</string>
     <string name="prev_sentence">Предыдущее предложение</string>
     <string name="next_sentence">Следующее предложение</string>
+    <!-- msg2471: имена кнопок «Пред.»/«След.» для скринридера меняются по выбранному
+         шагу (предложение/абзац/глава) — код ставит нужную пару в contentDescription. -->
+    <string name="prev_paragraph">Предыдущий абзац</string>
+    <string name="next_paragraph">Следующий абзац</string>
     <string name="prev_chapter">Предыдущая глава</string>
     <string name="next_chapter">Следующая глава</string>
     <string name="no_book">Открой книгу, чтобы начать слушать</string>
@@ -328,8 +332,10 @@
     <string name="step_title">Кнопки назад и далее шагают по</string>
     <string name="step_dialog">Какой шаг у кнопок „назад“ и „далее“?</string>
     <string name="step_sentence">Предложение</string>
+    <string name="step_paragraph">Абзац</string>
     <string name="step_chapter">Глава</string>
     <string name="step_sentence_value">предложениям</string>
+    <string name="step_paragraph_value">абзацам</string>
     <string name="step_chapter_value">главам</string>
 
     <!-- 0.3.37: по каким уровням FB2 шагают кнопки «Предыдущая/Следующая глава». -->

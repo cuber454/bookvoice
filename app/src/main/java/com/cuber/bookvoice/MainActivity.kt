@@ -365,6 +365,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Возврат из экрана настроек: там могли поменять, какие элементы
         // читалки показывать, скорость и голос — применяем к живой книге.
         applyReaderUi()
+        // Там же могли сменить шаг кнопок «Пред.»/«След.» — переименовываем
+        // их для скринридера под выбранный шаг (msg2471).
+        updateSentenceButtonNames()
         refreshSpeedValue()
         // Карточка рождается только когда книга реально начала читаться
         // (startSpeakingCurrent) — msg1779: при просто открытой, но молчащей
@@ -922,6 +925,39 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         goTo(target, 0)
     }
 
+    /** Шаг «Абзац» (msg2471) для кнопок «Пред.»/«След.» — тем же правилом, что
+     *  кнопки гарнитуры (ReaderEngine.headsetParagraphTarget): первое предложение
+     *  абзаца помечено парсером (Sentence.paragraphStart) по структуре книги —
+     *  в FB2/EPUB это абзацы вёрстки, в TXT — куски, отделённые пустой строкой.
+     *  Вперёд — к началу следующего абзаца (в главе кончились — в первую абзац
+     *  следующей главы). Назад — из середины абзаца в его начало, ещё раз назад —
+     *  в начало предыдущего абзаца; в начале книги — стоп. */
+    private fun moveByParagraph(delta: Int) {
+        val bk = book ?: return
+        val cur = bk.chapters[chapterIdx].sentences
+        if (delta > 0) {
+            for (i in sentenceIdx + 1 until cur.size) {
+                if (cur[i].paragraphStart) { goTo(chapterIdx, i); return }
+            }
+            if (chapterIdx + 1 >= bk.chapters.size) return
+            val next = bk.chapters[chapterIdx + 1].sentences
+            val i = next.indexOfFirst { it.paragraphStart }
+            goTo(chapterIdx + 1, if (i >= 0) i else 0)
+            return
+        }
+        for (i in sentenceIdx - 1 downTo 0) {
+            if (cur[i].paragraphStart) { goTo(chapterIdx, i); return }
+        }
+        if (chapterIdx == 0) {
+            if (sentenceIdx != 0) goTo(0, 0)
+            return
+        }
+        val prev = bk.chapters[chapterIdx - 1].sentences
+        if (prev.isEmpty()) return
+        val i = prev.indexOfLast { it.paragraphStart }
+        goTo(chapterIdx - 1, if (i >= 0) i else 0)
+    }
+
     /** По каким «главам» ходят «Предыдущая/Следующая глава» и свайп-глава
      *  (настройка «Кнопки глав», 0.3.37). Фильтрует плоский список глав по
      *  разметке FB2: [CH_NAV_MAJOR] — только начала крупных разделов (parts),
@@ -945,14 +981,35 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         return out.toIntArray()
     }
 
-    /** Шаг «дальше/назад» — настройка: предложением (по умолчанию) или главой. */
-    private fun stepIsChapter(): Boolean =
-        prefs.getString(KEY_STEP, STEP_SENTENCE) == STEP_CHAPTER
+    /** Шаг «дальше/назад» (настройка в «Управлении»): предложение / абзац / глава. */
+    private fun stepMode(): String =
+        prefs.getString(KEY_STEP, STEP_SENTENCE) ?: STEP_SENTENCE
 
-    /** Кнопки «◀ Пред»/«След ▶» и свайп листают шагом из настроек: если там
-     *  выбрано «главой», обычные кнопки переходят по главам, как ⏮/⏭. */
+    /** Кнопки «Пред.»/«След.» листают шагом из настроек: по умолчанию — по
+     *  предложениям; «Абзац» — переходят к началу абзаца (msg2471); «Глава» —
+     *  по главам, как кнопки ⏮/⏭. */
     private fun stepMove(delta: Int) {
-        if (stepIsChapter()) moveByChapter(delta) else moveBySentence(delta)
+        when (stepMode()) {
+            STEP_PARAGRAPH -> moveByParagraph(delta)
+            STEP_CHAPTER -> moveByChapter(delta)
+            else -> moveBySentence(delta)
+        }
+    }
+
+    /** Имена кнопок «Пред.»/«След.» для скринридера следуют выбранному шагу
+     *  (msg2471): предложение → «Предыдущее/Следующее предложение», абзац →
+     *  «Предыдущий/Следующий абзац», глава → «Предыдущая/Следующая глава».
+     *  Вызывается в onStart — при старте читалки и после возврата из Настроек
+     *  (там менялся шаг). Видимые короткие подписи «Пред.»/«След.» не трогаем —
+     *  их запрещено растягивать (msg2431). */
+    private fun updateSentenceButtonNames() {
+        val (prev, next) = when (stepMode()) {
+            STEP_PARAGRAPH -> R.string.prev_paragraph to R.string.next_paragraph
+            STEP_CHAPTER -> R.string.prev_chapter to R.string.next_chapter
+            else -> R.string.prev_sentence to R.string.next_sentence
+        }
+        binding.btnPrevSentence.contentDescription = getString(prev)
+        binding.btnNextSentence.contentDescription = getString(next)
     }
 
     private fun goTo(ch: Int, s: Int) = ReaderEngine.goTo(ch, s)
@@ -2337,6 +2394,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_SAY_CHAPTER_START = "say_chapter_start"
         internal const val KEY_STEP = "step"
         internal const val STEP_SENTENCE = "sentence"
+        internal const val STEP_PARAGRAPH = "paragraph"
         internal const val STEP_CHAPTER = "chapter"
         // «Кнопки глав шагают» (0.3.37): по каким уровням разметки FB2 ходит
         // «Предыдущая/Следующая глава». Default CH_NAV_ALL — как раньше.

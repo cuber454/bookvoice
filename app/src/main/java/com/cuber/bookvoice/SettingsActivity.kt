@@ -575,17 +575,22 @@ class SettingsActivity(private val act: SectionActivity) {
                 .setNegativeButton(R.string.toc_close, null)
                 .show()
         }
+        // Шаг кнопок «Пред.»/«След.» (msg2459/2471): предложение / абзац / глава.
+        // От выбранного шага в читалке меняется и имя кнопок для скринридера
+        // («…предложение»/«…абзац»/«…глава», MainActivity.updateSentenceButtonNames).
+        val stepOptions = listOf(
+            getString(R.string.step_sentence) to MainActivity.STEP_SENTENCE,
+            getString(R.string.step_paragraph) to MainActivity.STEP_PARAGRAPH,
+            getString(R.string.step_chapter) to MainActivity.STEP_CHAPTER,
+        )
         stepRow = addValueButton {
+            val cur = prefs.getString(MainActivity.KEY_STEP, MainActivity.STEP_SENTENCE)
+                ?: MainActivity.STEP_SENTENCE
+            val checked = stepOptions.indexOfFirst { it.second == cur }.coerceAtLeast(0)
             MaterialAlertDialogBuilder(act)
                 .setTitle(R.string.step_dialog)
-                .setSingleChoiceItems(
-                    arrayOf(getString(R.string.step_sentence), getString(R.string.step_chapter)),
-                    if (prefs.getString(MainActivity.KEY_STEP, MainActivity.STEP_SENTENCE) == MainActivity.STEP_CHAPTER) 1 else 0,
-                ) { d, which ->
-                    prefs.edit().putString(
-                        MainActivity.KEY_STEP,
-                        if (which == 0) MainActivity.STEP_SENTENCE else MainActivity.STEP_CHAPTER,
-                    ).apply()
+                .setSingleChoiceItems(stepOptions.map { it.first }.toTypedArray(), checked) { d, which ->
+                    prefs.edit().putString(MainActivity.KEY_STEP, stepOptions[which].second).apply()
                     d.dismiss()
                     refreshRows()
                 }
@@ -828,9 +833,12 @@ class SettingsActivity(private val act: SectionActivity) {
         exitRow?.text = getString(R.string.exit_title) + ": " +
             if (exitLibrary) getString(R.string.exit_library) else getString(R.string.exit_desktop)
 
-        val byChapter = prefs.getString(MainActivity.KEY_STEP, MainActivity.STEP_SENTENCE) == MainActivity.STEP_CHAPTER
-        stepRow?.text = getString(R.string.step_title) + " " +
-            if (byChapter) getString(R.string.step_chapter_value) else getString(R.string.step_sentence_value)
+        val stepValueRes = when (prefs.getString(MainActivity.KEY_STEP, MainActivity.STEP_SENTENCE)) {
+            MainActivity.STEP_PARAGRAPH -> R.string.step_paragraph_value
+            MainActivity.STEP_CHAPTER -> R.string.step_chapter_value
+            else -> R.string.step_sentence_value
+        }
+        stepRow?.text = getString(R.string.step_title) + " " + getString(stepValueRes)
 
         chNavRow?.text = getString(R.string.ch_nav_title) + ": " + chNavLabel()
 
