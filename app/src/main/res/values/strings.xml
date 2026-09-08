@@ -569,6 +569,9 @@
     <string name="voice_book_saved">Запоминаю для этой книги</string>
     <string name="voice_book_cleared">Читаю обычным голосом</string>
 
+    <!-- 0.4.14 (#54): полноэкранная панель голоса — кнопка проверки голоса -->
+    <string name="voice_test_play">Проверить голос</string>
+
     <!-- 0.3.42: меню долгого нажатия на закладке (#103) -->
     <string name="bm_actions_title">Действия с закладкой</string>
     <string name="bm_share">Поделиться закладкой</string>

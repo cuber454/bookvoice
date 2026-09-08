@@ -219,6 +219,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Открытая шторка держит нижние кнопки видимыми — скорость слышна на лету.
         binding.btnVoice.setOnClickListener { toggleVoicePanel() }
         binding.btnVoiceClose.setOnClickListener { hideVoicePanel() }
+        // #54 (msg2643): кнопка ▶ в полноэкранной панели голоса — послушать
+        // выбранный голос/скорость на тексте книги сразу, ничего не сворачивая.
+        binding.btnVoiceTest.setOnClickListener { togglePlay() }
         binding.btnToc.setOnClickListener { showTocDialog() }
         // Поиск по книге: короткое нажатие — панель (поле, микрофон,
         // Найти/Назад/Далее/Закрыть); долгое — сразу голосовой ввод слова.
@@ -1179,6 +1182,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // значка ▶/⏸ в строке (msg1144: значок скринридер читал отдельным словом)
         // и без contentDescription: одно изменение = одно объявление.
         binding.btnPlayPause.text = if (playing) "Пауза" else "Читать"
+        // #54: та же кнопка в полноэкранной панели голоса — «Проверить голос»/«Пауза».
+        binding.btnVoiceTest.text = if (playing) "Пауза" else getString(R.string.voice_test_play)
         MediaSessionService.setPlaying(playing)
     }
 
@@ -2263,12 +2268,18 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // при закрытии шторки, чтобы зафиксировать профиль книги.
     private var voiceRememberChecked = false
 
-    /** «Голос чтения» (кнопка в нижнем ряду и пункт меню «⋮», #1104): открывает
-     *  ШТОРКУ voicePanel в верхней части читалки, а не всплывающее окно
-     *  (msg2403/2415). Содержимое прежнее — ползунки скорости/тона/громкости,
-     *  галочка «Запомнить для этой книги» (#102), двухшаговый выбор движок →
-     *  голоса. Нижний ряд «◀ Читать ▶» остаётся видимым: параметры меняются на
-     *  лету, новую скорость/голос слышно сразу, не закрывая настройки. */
+    // #54 (msg2643): полноэкранный режим панели голоса. На время панели прячем
+    // остальную читалку (всех соседей voiceArea в корне + список предложений),
+    // чтобы панель со скроллом заняла весь экран; при закрытии всё возвращаем.
+    private var voiceFullscreen = false
+    private val voiceSavedViews = ArrayList<Pair<View, Int>>()
+
+    /** «Голос чтения» (кнопка в нижнем ряду и пункт меню «⋮»): #54 (msg2643)
+     *  открывает панель voicePanel НА ВЕСЬ ЭКРАН — читалка временно прячется
+     *  (enterVoiceFullscreen). Содержимое прежнее — ползунки скорости/тона/
+     *  громкости, галочка «Запомнить для этой книги» (#102), двухшаговый выбор
+     *  движок → голоса. Кнопка «Проверить голос» (▶/⏸) в шапке слушает выбранный
+     *  голос/скорость на тексте книги, не сворачивая панель. */
     private fun toggleVoicePanel() {
         if (binding.voicePanel.visibility == View.VISIBLE) {
             hideVoicePanel()
@@ -2298,6 +2309,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             } == true
         }
         voiceRememberChecked = rememberCb.isChecked
+
+        // #54: кнопка «Проверить голос» в шапке панели — только когда открыта книга
+        // (без книги читать нечего). Текст обновляет и updatePlayButton на лету.
+        binding.btnVoiceTest.visibility = if (hasBook) View.VISIBLE else View.GONE
+        binding.btnVoiceTest.text = if (playing) "Пауза" else getString(R.string.voice_test_play)
 
         // Шаг 2 → к шагу 1: «← К выбору движка».
         val btnBack = Button(this).apply {
@@ -2435,19 +2451,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         btnBack.setOnClickListener { showStep(1) }
         showStep(1)
 
-        // Показываем шторку. Она живёт в средней зоне (voiceArea) вместе со
-        // списком предложений, поэтому может ужать только список — нижний ряд
-        // «◀ Читать ▶» физически остаётся на месте (msg2627). Если шторка всё же
-        // выше зоны — ограничиваем её высотой зоны, лишнее уходит в скролл.
+        // #54 (msg2643): панель голоса «на весь экран» — прячем остальную
+        // читалку, а не показываем шторку над списком. Кнопка «Проверить голос»
+        // (▶/⏸) в шапке слушает выбранный голос/скорость на тексте книги прямо
+        // из панели. Скролл внутри занимает весь экран, поэтому галочка
+        // «Запомнить для этой книги» (msg2639) больше не обрезается невидимым
+        // краем шторки — до неё всегда можно доскроллить.
+        enterVoiceFullscreen()
         binding.voicePanel.visibility = View.VISIBLE
         binding.voicePanel.post {
-            binding.voicePanel.post {
-                val area = binding.voiceArea.height
-                if (area > 0 && binding.voicePanel.height > area) {
-                    binding.voicePanel.layoutParams =
-                        binding.voicePanel.layoutParams.apply { height = area }
-                }
-            }
             binding.tvVoiceTitle.announceForAccessibility(getString(R.string.voice_settings))
         }
     }
@@ -2459,15 +2471,57 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private fun hideVoicePanel() {
         if (binding.voicePanel.visibility != View.VISIBLE) return
         binding.voicePanel.visibility = View.GONE
-        binding.voicePanel.layoutParams = binding.voicePanel.layoutParams.apply {
-            height = LinearLayout.LayoutParams.WRAP_CONTENT
-        }
+        // Возвращаем читалку: соседи voiceArea и список предложений на место,
+        // панели/скроллу — исходные параметры (следующее открытие заново
+        // развернёт их через enterVoiceFullscreen).
+        exitVoiceFullscreen()
         if (book != null && voiceRememberChecked) {
             persistPerBookProfile()
             refreshSpeedValue()
             updateStats()
         }
         voiceRememberChecked = false
+    }
+
+    /** #54: развернуть панель голоса на весь экран. Прячем всех соседей voiceArea
+     *  в корневом вертикальном ряду (шапку, иконки, позицию, слайдер, скорость,
+     *  главы, статистику, нижний ряд) и список предложений; панели и её скроллу
+     *  задаём вес 1, чтобы она заполнила экран и внутри реально скроллилась. */
+    private fun enterVoiceFullscreen() {
+        if (voiceFullscreen) return
+        voiceFullscreen = true
+        voiceSavedViews.clear()
+        val root = binding.root as LinearLayout
+        for (i in 0 until root.childCount) {
+            val v = root.getChildAt(i)
+            if (v !== binding.voiceArea) {
+                voiceSavedViews.add(v to v.visibility)
+                v.visibility = View.GONE
+            }
+        }
+        voiceSavedViews.add(binding.sentenceList to binding.sentenceList.visibility)
+        binding.sentenceList.visibility = View.GONE
+        binding.voicePanel.layoutParams =
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+        binding.voiceScroll.layoutParams =
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+    }
+
+    /** #54: свернуть полноэкранную панель — вернуть все спрятанные view и
+     *  исходные layout-параметры панели/скролла. */
+    private fun exitVoiceFullscreen() {
+        if (!voiceFullscreen) return
+        voiceFullscreen = false
+        for ((v, vis) in voiceSavedViews) v.visibility = vis
+        voiceSavedViews.clear()
+        binding.voicePanel.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        binding.voiceScroll.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
     }
 
     private fun populateVoiceList(container: LinearLayout, rememberCb: CheckBox? = null) {

@@ -907,17 +907,59 @@ internal object ReaderEngine {
     // ---------------- #102: свой голос/скорость книги ----------------
 
     /** Применить запомненный для книги голос/скорость при открытии. Каскад:
-     *  своё у книги → глобальное → системное. */
+     *  своё у книги → глобальное → системное. Своё применяем, только когда у
+     *  записи оно есть; иначе движок/голос ЯВНО возвращаем на глобальные —
+     *  без этого после книги со своим голосом следующая книга осталась бы на
+     *  её синтезаторе (msg2647): переключённый движок «залипал» в плеере. */
     fun applyBookVoiceAtOpen() {
-        val rec = currentBookRecord() ?: return
-        perBookEngine = rec.voiceEngine
-        perBookVoice = rec.voice
-        perBookSpeed = rec.voiceSpeed
-        if (perBookSpeed != null && perBookSpeed!! > 0f) {
-            player?.speed = perBookSpeed!!
+        val rec = currentBookRecord()
+        perBookEngine = rec?.voiceEngine
+        perBookVoice = rec?.voice
+        perBookSpeed = rec?.voiceSpeed
+        // Скорость: своя у книги → глобальная. Раньше без своего профиля
+        // скорость не трогали, и после книги со своей скоростью следующая
+        // читалась бы на ней (msg2647).
+        val sp = perBookSpeed?.takeIf { it > 0f } ?: prefs.getFloat(MainActivity.KEY_SPEED, 1f)
+        player?.speed = sp
+        host?.onSpeedUiRefresh()
+        if (perBookEngine != null || perBookVoice != null) {
+            waitApplyBookVoice(0)
+        } else {
+            waitReturnGlobalVoice(0)
+        }
+    }
+
+    /** У книги нет своего голоса — вернуть движок/голос на глобальные настройки
+     *  (а если глобально движок не выбран — на системный). Аналог снятия
+     *  галочки «Запомнить для этой книги» (MainActivity.clearBookVoice), но без
+     *  стирания профиля — просто переключение плеера. */
+    private fun waitReturnGlobalVoice(attempt: Int) {
+        val p = player ?: return
+        if (book == null) return
+        if (!p.isReady) {
+            if (attempt > 40) return // ~8с — движок так и не поднялся
+            main.postDelayed({ waitReturnGlobalVoice(attempt + 1) }, 200)
+            return
+        }
+        val gEngine = prefs.getString(MainActivity.KEY_ENGINE, null)
+        val gVoice = prefs.getString(MainActivity.KEY_VOICE, null)
+        if (p.enginePackage != gEngine) {
+            p.setEngine(gEngine) { ok ->
+                main.post {
+                    if (ok && gVoice != null) {
+                        p.selectVoice(gVoice)
+                        voiceName = gVoice
+                    }
+                    host?.onSpeedUiRefresh()
+                }
+            }
+        } else {
+            if (gVoice != null && gVoice != voiceName) {
+                p.selectVoice(gVoice)
+                voiceName = gVoice
+            }
             host?.onSpeedUiRefresh()
         }
-        if (perBookEngine != null || perBookVoice != null) waitApplyBookVoice(0)
     }
 
     private fun currentBookRecord(): BookRecord? {
