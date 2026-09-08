@@ -268,7 +268,13 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
-    /** Открыть раздел: заголовок сверху, ниже — только его настройки. */
+    /** Открыть раздел: заголовок сверху, ниже — только его настройки. После
+     *  открытия Сергей должен СЛЫШАТЬ название раздела (msg2314): раньше здесь
+     *  стоял focusFirst — перенос на первый пункт (флажок), и TalkBack озвучивал
+     *  его, а заголовок «Чтение» молчал, хотя реальный фокус садился на него
+     *  (лог 0.4.7: «перенос на Озвучивать …» → «ИТОГ: tvTitle|Чтение»). Перенос
+     *  на первый пункт убран; заголовок объявляем голосом — как сводку ленты в
+     *  каталоге (announceFeed, msg1573). Фокус не тащим: он и так на заголовке. */
     private fun openGroup(g: Group) {
         group = g
         binding.tvTitle.text = getString(g.titleRes)
@@ -283,7 +289,7 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         refreshRows()
         scrollTop()
-        focusFirst()
+        binding.tvTitle.announceForAccessibility(getString(g.titleRes))
     }
 
     private fun buildVoiceGroup() {
