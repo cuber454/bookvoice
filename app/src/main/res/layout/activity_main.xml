@@ -223,43 +223,6 @@
         android:max="0"
         android:progress="0" />
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:orientation="horizontal"
-        android:paddingBottom="6dp">
-
-        <Button
-            android:id="@+id/btnPrevSentence"
-            android:layout_width="0dp"
-            android:layout_height="64dp"
-            android:layout_margin="4dp"
-            android:layout_weight="1"
-            android:contentDescription="@string/prev_sentence"
-            android:text="◀ Пред."
-            android:textSize="16sp" />
-
-        <Button
-            android:id="@+id/btnPlayPause"
-            android:layout_width="0dp"
-            android:layout_height="72dp"
-            android:layout_margin="4dp"
-            android:layout_weight="1"
-            android:text="Читать"
-            android:textSize="18sp" />
-
-        <Button
-            android:id="@+id/btnNextSentence"
-            android:layout_width="0dp"
-            android:layout_height="64dp"
-            android:layout_margin="4dp"
-            android:layout_weight="1"
-            android:contentDescription="@string/next_sentence"
-            android:text="След. ▶"
-            android:textSize="16sp" />
-    </LinearLayout>
-
     <!-- Ряд кнопок скорости (#58): прячется/возвращается конструктором экрана. -->
     <LinearLayout
         android:id="@+id/speedRow"
@@ -335,6 +298,45 @@
     <!-- msg2375/2383: кнопки «Отметить дочитанной» (btnStatus) и «Голос чтения»
          (btnVoice) убраны с экрана — оба действия переехали в ⋮-меню читалки
          (showMoreDialog: переключатель статуса + showVoiceDialog), их галочки в
-         Конструкторе экрана удалены. Нижнего ряда больше нет: последним на
-         экране стоит tvStats. -->
+         Конструкторе экрана удалены.
+         msg2399: чтобы низ экрана не пустовал, главный ряд управления чтением
+         (◀ Пред / Читать / След ▶) перенесён в самый низ — как нижняя панель в
+         других окнах. Выше остаются позиция, слайдер, скорость, главы,
+         «Прочитано, осталось». -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingBottom="6dp">
+
+        <Button
+            android:id="@+id/btnPrevSentence"
+            android:layout_width="0dp"
+            android:layout_height="64dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/prev_sentence"
+            android:text="◀ Пред."
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/btnPlayPause"
+            android:layout_width="0dp"
+            android:layout_height="72dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:text="Читать"
+            android:textSize="18sp" />
+
+        <Button
+            android:id="@+id/btnNextSentence"
+            android:layout_width="0dp"
+            android:layout_height="64dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/next_sentence"
+            android:text="След. ▶"
+            android:textSize="16sp" />
+    </LinearLayout>
 </LinearLayout>
