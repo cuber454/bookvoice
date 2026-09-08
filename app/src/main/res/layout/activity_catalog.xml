@@ -100,4 +100,48 @@
             app:backgroundTint="#8AB4F8"
             app:tint="#101418" />
     </FrameLayout>
+
+    <!-- Нижний ряд быстрых действий на ГЛУБИНЕ каталога (msg2359/2363): когда
+         открыта лента/жанр/страница книги, внизу всегда панель как на полке —
+         слева умная «Открыть книгу: <последняя>», правее «Библиотека» (одно
+         касание до полки, минуя многоуровневый «назад»). В корне «Мои каталоги»
+         панель скрыта (там домой уводит «←», а внизу — FAB «Добавить каталог»);
+         visibility ряда и кнопок ставит код (updateBottomBar). -->
+    <LinearLayout
+        android:id="@+id/bottomBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="3dp"
+        android:paddingEnd="3dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/btnCatContinue"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="58dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:text="@string/continue_last"
+            android:textSize="17sp"
+            android:visibility="gone"
+            app:autoSizeTextType="uniform"
+            app:autoSizeMinTextSize="10sp"
+            app:autoSizeMaxTextSize="17sp"
+            app:autoSizeStepGranularity="1sp" />
+
+        <Button
+            android:id="@+id/btnCatLibrary"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="58dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/go_library"
+            android:textSize="17sp" />
+    </LinearLayout>
 </LinearLayout>

@@ -230,6 +230,10 @@ class CatalogActivity(private val act: SectionActivity) {
         // msg2339/2343: «Добавить каталог» — плавающая кнопка в правом нижнем углу
         // корня (была кнопкой в потоке после заголовка «Управление»).
         binding.btnAddFab.setOnClickListener { showAddDialog() }
+        // msg2359/2363: нижняя панель на глубине каталога — «Открыть книгу:
+        // <последняя>» и «Библиотека» (одно касание до полки с любого уровня).
+        binding.btnCatContinue.setOnClickListener { openLastBook() }
+        binding.btnCatLibrary.setOnClickListener { act.rootBack() }
 
         setupAutoLoad()
         renderTop()
@@ -253,6 +257,9 @@ class CatalogActivity(private val act: SectionActivity) {
         if (byTab) {
             TabNav.focusHeader(binding.tvTitle)
         }
+        // Возврат из читалки/пикера: обновить подпись последней книги на нижней
+        // панели (место чтения/статус могли измениться).
+        updateBottomBar()
     }
 
     /** «Назад» на странице каталогов: внутри (список/жанр/книга открыты) выходит
@@ -416,6 +423,9 @@ class CatalogActivity(private val act: SectionActivity) {
         // msg2339/2343: FAB «Добавить каталог» живёт только в корне «Мои каталоги»
         // (нижний правый угол); в ленте источника и на странице книги скрыт.
         binding.btnAddFab.visibility = if (cur == null) View.VISIBLE else View.GONE
+        // msg2359/2363: нижняя панель «Открыть книгу/Библиотека» — наоборот, только
+        // на глубине (лента/жанр/книга); в корне её место занимает FAB + «←».
+        updateBottomBar()
         when (cur) {
             null -> {
                 // msg1700: корень каталога — одна строка сверху «Мои каталоги».
@@ -437,6 +447,55 @@ class CatalogActivity(private val act: SectionActivity) {
 
     private fun showSearch(visible: Boolean) {
         binding.btnSearch.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    // ---------------- Нижняя панель глубины (msg2359/2363) ----------------
+
+    /** Нижний ряд быстрых действий на глубине каталога, как на полке: слева —
+     *  умная кнопка последней книги «Открыть книгу: <название>» (текст как в
+     *  LibraryActivity.updateContinueButton, msg2108), правее — «Библиотека»:
+     *  одно касание до полки с любого уровня (rootBack окна, минуя «назад» по
+     *  шагам). Панель видна только когда в каталоге открыта лента/жанр/страница
+     *  книги (nav не пуст); в корне «Мои каталоги» её место занимают «←» и FAB
+     *  «Добавить каталог». Нет доступной последней книги — левая кнопка скрыта,
+     *  «Библиотека» остаётся. */
+    private fun updateBottomBar() {
+        val depth = nav.isNotEmpty()
+        binding.bottomBar.visibility = if (depth) View.VISIBLE else View.GONE
+        if (!depth) return
+        val u = prefs.getString(MainActivity.KEY_URI, null)
+        val title = u?.let {
+            BookStore.byUri(act, it)?.displayTitle ?: queryDisplayName(Uri.parse(it))
+        }
+        binding.btnCatContinue.visibility = if (title == null) View.GONE else View.VISIBLE
+        binding.btnCatContinue.isEnabled = title != null
+        binding.btnCatContinue.text = if (title == null) getString(R.string.continue_last)
+        else getString(R.string.continue_last_with, title)
+    }
+
+    /** «Открыть книгу: <последняя>» с нижней панели каталога. Путь тот же, что у
+     *  одноимённой кнопки полки (LibraryActivity.openLastBook): берём KEY_URI,
+     *  при живой записи — её место чтения, при удалённой — имя файла и позицию из
+     *  prefs. Читалка открывается как из страницы книги каталога (EXTRA_FROM_CATALOG):
+     *  «назад» из неё вернёт в каталог, а не на полку. */
+    private fun openLastBook() {
+        val u = prefs.getString(MainActivity.KEY_URI, null)
+        if (u == null) {
+            toast(getString(R.string.no_last_book))
+            return
+        }
+        val existing = BookStore.byUri(act, u)
+        if (existing != null) {
+            openInReader(existing)
+            return
+        }
+        openInReader(BookRecord(
+            uri = u,
+            name = queryDisplayName(Uri.parse(u)) ?: "book",
+            addedAt = 0L,
+            chapter = prefs.getInt(MainActivity.KEY_CHAPTER, 0),
+            sentence = prefs.getInt(MainActivity.KEY_SENTENCE, 0),
+        ))
     }
 
     // ---------------- Список каталогов (корень) ----------------
