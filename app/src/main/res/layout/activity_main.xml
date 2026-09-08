@@ -195,14 +195,25 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Шторка «Голос чтения» (msg2403/2415): настройки голоса в верхней части
-         экрана — НЕ поверх нижних кнопок. Нижний ряд «◀ Читать ▶» остаётся
-         доступным: запустил чтение и крутишь скорость/тон/громкость — слышно
-         сразу, на лету. Скрыта по умолчанию; открывает btnVoice в нижнем ряду и
-         пункт «Голос чтения» в ⋮-меню. Высоту шторки ограничивает код
-         (toggleVoicePanel), чтобы не вытеснить нижний ряд. -->
+    <!-- Средняя зона читалки: шторка голоса и список предложений живут в одном
+         контейнере с весом. Когда шторка открывается, она ужимает только список
+         ВНУТРИ своей зоны и никогда не выталкивает нижние ряды (позицию, слайдер,
+         главный ряд «Пред./Читать/След./Голос») за нижний край экрана (msg2627). -->
     <LinearLayout
-        android:id="@+id/voicePanel"
+        android:id="@+id/voiceArea"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <!-- Шторка «Голос чтения» (msg2403/2415): настройки голоса в верхней части
+             экрана — НЕ поверх нижних кнопок. Нижний ряд «◀ Читать ▶» остаётся
+             доступным: запустил чтение и крутишь скорость/тон/громкость — слышно
+             сразу, на лету. Скрыта по умолчанию; открывает btnVoice в нижнем ряду и
+             пункт «Голос чтения» в ⋮-меню. Высоту шторки ограничивает код
+             (toggleVoicePanel) высотой этой зоны, чтобы не вытеснить нижний ряд. -->
+        <LinearLayout
+            android:id="@+id/voicePanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="#1A232B"
@@ -256,15 +267,16 @@
         </ScrollView>
     </LinearLayout>
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/sentenceList"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:scrollbars="vertical" />
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/sentenceList"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:scrollbars="vertical" />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/tvPosition"

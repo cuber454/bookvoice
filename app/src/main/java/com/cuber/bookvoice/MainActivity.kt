@@ -2435,14 +2435,18 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         btnBack.setOnClickListener { showStep(1) }
         showStep(1)
 
-        // Показываем шторку. Высоту ограничиваем снизу, чтобы не вытеснить нижний
-        // ряд «◀ Читать ▶»: больше 60% окна — контент уходит в скролл.
+        // Показываем шторку. Она живёт в средней зоне (voiceArea) вместе со
+        // списком предложений, поэтому может ужать только список — нижний ряд
+        // «◀ Читать ▶» физически остаётся на месте (msg2627). Если шторка всё же
+        // выше зоны — ограничиваем её высотой зоны, лишнее уходит в скролл.
         binding.voicePanel.visibility = View.VISIBLE
         binding.voicePanel.post {
-            val maxH = (resources.displayMetrics.heightPixels * 0.6).toInt()
-            if (binding.voicePanel.height > maxH) {
-                binding.voicePanel.layoutParams =
-                    binding.voicePanel.layoutParams.apply { height = maxH }
+            binding.voicePanel.post {
+                val area = binding.voiceArea.height
+                if (area > 0 && binding.voicePanel.height > area) {
+                    binding.voicePanel.layoutParams =
+                        binding.voicePanel.layoutParams.apply { height = area }
+                }
             }
             binding.tvVoiceTitle.announceForAccessibility(getString(R.string.voice_settings))
         }
