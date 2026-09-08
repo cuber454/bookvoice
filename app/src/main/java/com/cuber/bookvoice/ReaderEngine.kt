@@ -136,6 +136,11 @@ internal object ReaderEngine {
     var startRewindPending = 0
     private var rewindFloor: Place? = null
 
+    // msg2679: движок синтеза грузится (особенно при смене на голос книги) — чтобы
+    // одно нажатие «Читать» не терялось, старт откладывается и повторяется сам.
+    // startQueued не даёт наслоить несколько параллельных цепочек ожидания.
+    private var startQueued = false
+
     // #106: конец куска при «Прочитать выделенное».
     var rangeEnd: Place? = null
 
@@ -482,18 +487,34 @@ internal object ReaderEngine {
         val p = player ?: return
         if (book == null || playing) return
         if (!p.isReady) {
-            retryStart(0)
+            if (!startQueued) {
+                startQueued = true
+                retryStart(0)
+            }
             return
         }
         startSpeakingCurrent()
     }
 
     private fun retryStart(attempt: Int) {
-        if (attempt > 10) return // ~2.5с — движок так и не поднялся, молчим
+        // msg2679: смена движка на голос книги может грузиться дольше прежних
+        // 2.5с — даём ~5с попыток, потом молча сдаёмся.
+        if (attempt > 20) {
+            startQueued = false
+            return
+        }
         main.postDelayed({
             val p = player ?: return@postDelayed
-            if (book == null || playing) return@postDelayed
-            if (!p.isReady) retryStart(attempt + 1) else startSpeakingCurrent()
+            if (book == null || playing) {
+                startQueued = false
+                return@postDelayed
+            }
+            if (!p.isReady) {
+                retryStart(attempt + 1)
+            } else {
+                startQueued = false
+                startSpeakingCurrent()
+            }
         }, 250)
     }
 
@@ -556,7 +577,14 @@ internal object ReaderEngine {
         guardResetToStart()
         if (bk.chapters.getOrNull(chapterIdx)?.sentences.isNullOrEmpty()) return
         if (!p.isReady) {
-            host?.onToast("Движок синтеза речи ещё не готов, попробуйте через секунду")
+            // msg2679: «Читать» нажали, а движок ещё грузится (смена на голос
+            // книги) — не глотаем нажатие молча и не просим жать снова: объявляем
+            // один раз и стартуем сами, как только движок готов (startQueued).
+            if (!startQueued) {
+                startQueued = true
+                host?.onToast("Движок ещё готовится, чтение начнётся само")
+                retryStart(0)
+            }
             return
         }
         // msg2093: откат применяем в момент реального начала речи — если движок
@@ -567,7 +595,10 @@ internal object ReaderEngine {
         pausedByFocusLoss = false
         playing = true
         ensureMediaService()
-        Diag.log(ctx, "activity", "старт чтения (глава $chapterIdx, предл. $sentenceIdx)")
+        Diag.log(
+            ctx, "activity",
+            "старт чтения (глава $chapterIdx, предл. $sentenceIdx); движок=${p.enginePackage}, голос=$voiceName"
+        )
         requestAudioFocus()
         host?.onShowCurrent()
         speakCurrent()

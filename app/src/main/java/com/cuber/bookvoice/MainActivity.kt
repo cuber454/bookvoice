@@ -569,6 +569,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         get() = intent.getBooleanExtra(EXTRA_FROM_CATALOG, false)
 
     private fun openBook(uri: Uri, chapter: Int, sentence: Int, rewindOnOpen: Boolean = false) {
+        // msg2679: новое открытие снимает неисполненное «Читать» прошлого раза.
+        playWantedWhileLoading = false
+        // msg2679: пока книга разбирается в фоне, кнопку «Читать» держим активной
+        // (refreshChrome с book==null её бы выключил) — нажатие в это окно обязано
+        // регистрироваться и вести к очереди старта, а не глотаться молча.
+        bookLoading = true
+        binding.btnPlayPause.isEnabled = true
         // msg1739: «Открываю…» убрано — скринридер читал тост при входе и перебивал
         // объявление названия книги (в FBReader при открытии нет «открытия», есть
         // название). Имя окна уже несёт название (restoreSession → setTitle).
@@ -582,6 +589,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             // в фоне — на больших книгах это не должно дёргать интерфейс.
             val prog = doc?.let { computeProgressIndexes(it) }
             handler.post {
+                // msg2679: разбор кончился — состояние загрузки снято, дальше
+                // refreshChrome сам решает по факту (есть книга или пусто).
+                bookLoading = false
                 if (doc == null) {
                     toast("Не удалось открыть: формат не поддерживается или файл повреждён")
                     Vibra.error(this)
@@ -662,6 +672,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 if (!MediaSessionService.isUp()) ensureMediaService(false)
                 // Если включено «автоматически читать» — начинаем без нажатия.
                 if (prefs.getBoolean(KEY_AUTO_START, true)) maybeAutoStart()
+                // msg2679: «Читать» ждали, пока книга открывалась (кнопка была
+                // disabled), а авто-старт не успел или выключен — стартуем сами.
+                if (playWantedWhileLoading) {
+                    playWantedWhileLoading = false
+                    if (!isFinishing && !playing && book != null) requestStart()
+                }
                 // msg1725: если название книги было известно до разбора (запись в
                 // библиотеке, restoreSession) — оно уже в шапке с первого кадра и
                 // уже озвучено при показе окна, дубль по готовности не нужен.
@@ -1115,9 +1131,28 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // ---------------- Воспроизведение ----------------
 
     private fun togglePlay() {
-        if (book == null) return
+        // msg2679: «Читать» нажали, пока книга ещё открывается (тяжёлый PDF
+        // разбирается в фоне) — нажатие не теряем: объявляем один раз и начнём
+        // сами по готовности книги (см. openBook). Повторные нажатия в это окно
+        // объявление не дублируют.
+        if (book == null) {
+            if (!bookLoading) return  // пустой экран (книги нет и не открывается)
+            if (!playWantedWhileLoading) {
+                playWantedWhileLoading = true
+                Diag.log(this, "activity", "play: книга ещё не готова — старт по готовности (msg2679)")
+                binding.btnPlayPause.announceForAccessibility(
+                    "Книга ещё открывается, чтение начнётся само"
+                )
+            }
+            return
+        }
         // Пользовательская пауза кнопкой — фокус держим (см. pausePlayback).
-        if (playing) pausePlayback(keepFocus = true) else startSpeakingCurrent()
+        if (playing) {
+            playWantedWhileLoading = false
+            pausePlayback(keepFocus = true)
+        } else {
+            startSpeakingCurrent()
+        }
     }
 
     /** Пауза чтения. Логика (фокус, запись места, кнопка) — в движке: паузу
@@ -1161,7 +1196,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // файлов вне записи оно известно только после разбора).
         if (bk != null) setTitle(headerText)
         val enabled = bk != null
-        binding.btnPlayPause.isEnabled = enabled
+        // msg2679: во время загрузки книги (bookLoading) кнопку «Читать» держим
+        // активной — togglePlay поставит старт в очередь, а не потеряет нажатие
+        // на disabled-кнопке. Остальные кнопки требуют готовой книги.
+        binding.btnPlayPause.isEnabled = enabled || bookLoading
         binding.btnPrevSentence.isEnabled = enabled
         binding.btnNextSentence.isEnabled = enabled
         binding.btnPrevChapter.isEnabled = enabled
@@ -2290,6 +2328,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // скорость)? Закрыли без галочки и без изменений — глобальные настройки не
     // перезаписываем, чтобы простое «открыл-закрыл» не прибивало системный движок.
     private var voicePanelDirty = false
+
+    // msg2679: «Читать» нажали, пока книга ещё открывалась (тяжёлый PDF
+    // разбирается в фоне секунды) — намерение не теряем: стартуем сами по
+    // готовности книги (см. openBook).
+    private var playWantedWhileLoading = false
+    // msg2679: книга в процессе открытия (фоновый разбор). В это время кнопку
+    // «Читать» НЕ отключаем (refreshChrome), чтобы нажатие регистрировалось и
+    // вело к очереди старта, а не глоталось молча disabled-кнопкой.
+    private var bookLoading = false
 
     // #54 (msg2643): полноэкранный режим панели голоса. На время панели прячем
     // остальную читалку (всех соседей voiceArea в корне + список предложений),

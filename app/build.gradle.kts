@@ -10,8 +10,8 @@ android {
         applicationId = "com.cuber.bookvoice"
         minSdk = 24
         targetSdk = 36
-        versionCode = 75
-        versionName = "0.4.15"
+        versionCode = 76
+        versionName = "0.4.16"
     }
 
     signingConfigs {
