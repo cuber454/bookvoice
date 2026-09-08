@@ -64,6 +64,9 @@ class QuotesActivity : AppCompatActivity() {
         setTitle(getString(R.string.quotes_title))
         binding = ActivityQuotesBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        // SDK 36: окно edge-to-edge — прижимаем корень к безопасной зоне, иначе
+        // шапка «Цитат» уедет под статус-бар, низ — под навигационную полосу.
+        edgeToEdge(binding.root)
 
         // msg1111/1114: если открыта полная цитата — «Назад» возвращает к списку.
         binding.btnBack.setOnClickListener { goBack() }

@@ -10,8 +10,8 @@ android {
         applicationId = "com.cuber.bookvoice"
         minSdk = 24
         targetSdk = 36
-        versionCode = 60
-        versionName = "0.4.0"
+        versionCode = 61
+        versionName = "0.4.1"
     }
 
     signingConfigs {
@@ -54,6 +54,9 @@ android {
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.core:core-ktx:1.13.1")
+    // enableEdgeToEdge для edge-to-edge (SDK 36): appcompat тянет activity 1.7.0,
+    // где этой функции ещё нет — поднимаем до версии с ней.
+    implementation("androidx.activity:activity:1.9.3")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.media:media:1.7.0")

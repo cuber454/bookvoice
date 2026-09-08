@@ -202,6 +202,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         active = this
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        // SDK 36: окно edge-to-edge — прижимаем корень к безопасной зоне, иначе
+        // шапка читалки уедет под статус-бар, нижние кнопки — под жестовую зону.
+        edgeToEdge(binding.root)
 
         layoutManager = LinearLayoutManager(this)
         binding.sentenceList.layoutManager = layoutManager

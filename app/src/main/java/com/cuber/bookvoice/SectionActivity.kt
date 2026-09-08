@@ -86,6 +86,9 @@ abstract class SectionActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         container = FrameLayout(this)
         setContentView(container)
+        // SDK 36: окно edge-to-edge — прижимаем корень к безопасной зоне, иначе
+        // шапка окна уедет под статус-бар, а низ — под навигационную полосу.
+        edgeToEdge(container)
         buildSection(intent)
     }
 
