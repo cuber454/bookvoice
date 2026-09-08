@@ -50,6 +50,12 @@ import java.net.URLEncoder
  */
 class CatalogActivity(private val act: SectionActivity) {
 
+    companion object {
+        /** Флаг в интенте окна (msg2723/2730): полка попросила открыть каталог сразу
+         *  в голосовом поиске (долгое нажатие «Каталоги»). */
+        const val EXTRA_VOICE_SEARCH = "extra_voice_search"
+    }
+
     // Страница живёт В СВОЁМ окне-секции SectionActivity (редизайн msg1676+:
     // Каталоги открываются окном ПОВЕРХ полки, как книга). У страницы нет своего
     // Activity — все службы (контекст, пикеры, запуск окон, диалоги) идут через
@@ -97,6 +103,11 @@ class CatalogActivity(private val act: SectionActivity) {
     private var pendingRow: View? = null
 
     private val currentButtons = ArrayList<Button>()
+
+    /** msg2723/2730: окно открыли долгим нажатием «Каталоги» — ждём, когда верхняя
+     *  лента станет поисковой (searchTemplate), и сами стартуем голосовой поиск.
+     *  Сбрасывается, как только флаг отработан или искать стало негде. */
+    private var pendingVoiceSearch = false
 
     private val prefs by lazy { act.getSharedPreferences("reader", Context.MODE_PRIVATE) }
 
@@ -231,6 +242,13 @@ class CatalogActivity(private val act: SectionActivity) {
         // и «Библиотека» (одно касание до полки с любого уровня). Панель на ВСЕХ
         // уровнях, включая корень «Мои каталоги».
         binding.btnCatContinue.setOnClickListener { openLastBook() }
+        // msg2723/2738: долгое нажатие «Открыть книгу» — список недавних книг
+        // (тот же жест, что у «Продолжить» на полке).
+        binding.btnCatContinue.setOnLongClickListener {
+            Vibra.confirm(act)
+            showRecentBooks()
+            true
+        }
         // msg2445: «Библиотека» запоминает место в каталоге, чтобы вернуться в него.
         binding.btnCatLibrary.setOnClickListener { leaveToLibrary() }
 
@@ -239,6 +257,11 @@ class CatalogActivity(private val act: SectionActivity) {
         // если уходили на полку из глубины каталога/со страницы книги.
         restorePosition()
         renderTop()
+        // msg2723/2730: долгое нажатие «Каталоги» на полке — старт голосового
+        // поиска, когда верхняя лента готова (или обычное открытие, если искать
+        // негде — в корне «Мои каталоги»).
+        pendingVoiceSearch = intent?.getBooleanExtra(EXTRA_VOICE_SEARCH, false) == true
+        if (pendingVoiceSearch) binding.root.post { maybeVoiceSearchAfterEntry() }
     }
 
     /** Хост закрывается (полный выход из приложения) — прячем диалог, если открыт.
@@ -274,6 +297,8 @@ class CatalogActivity(private val act: SectionActivity) {
 
     /** Выход на полку (кнопка «Библиотека» и равнозначные): сначала запомнить место. */
     private fun leaveToLibrary() {
+        // Покидаем окно — отложенный голосовой поиск (msg2723) больше не нужен.
+        pendingVoiceSearch = false
         capturePosition()
         act.rootBack()
     }
@@ -324,6 +349,9 @@ class CatalogActivity(private val act: SectionActivity) {
 
     /** True — обработано внутри (вышел на уровень выше), false — закрыть экран. */
     private fun goBack(): Boolean {
+        // Пользователь сам пошёл по каталогу — отложенный голосовой поиск (msg2723)
+        // гасим, чтобы не выскочил микрофон позже, когда его уже не ждут.
+        pendingVoiceSearch = false
         if (nav.isEmpty()) return false
         stashScroll()
         // msg1468: уходим из ленты источника в корень — после перерисовки вернуть
@@ -391,6 +419,33 @@ class CatalogActivity(private val act: SectionActivity) {
     private fun currentFeedSession(): FeedSession? {
         val cur = nav.lastOrNull() as? Nv.Feed ?: return null
         return sessions[cur.url]
+    }
+
+    /** msg2723/2730: окно открыли долгим нажатием «Каталоги» — пробуем стартовать
+     *  голосовой поиск. Верхняя лента ещё грузится — ждём её (сработает в
+     *  fetchFirst по готовности); корень «Мои каталоги» или страница книги —
+     *  искать негде, открываем как обычно и флаг гасим. */
+    private fun maybeVoiceSearchAfterEntry() {
+        if (!pendingVoiceSearch) return
+        val cur = nav.lastOrNull()
+        if (cur is Nv.Feed) {
+            val s = sessions[cur.url]
+            // Лента впервые грузится — searchTemplate узнаем только после ответа
+            // каталога; старт возьмёт на себя fetchFirst (лента всё ещё верхняя).
+            if (s == null || !s.loadedOnce) return
+            pendingVoiceSearch = false
+            if (s.searchTemplate != null) delayedVoiceSearch(s)
+            return
+        }
+        pendingVoiceSearch = false
+    }
+
+    /** Старт голосового поиска с короткой задержкой (после озвучки ленты), только
+     *  если лента [s] всё ещё верхняя — за задержку пользователь мог уйти «назад». */
+    private fun delayedVoiceSearch(s: FeedSession) {
+        binding.root.postDelayed({
+            if (currentFeedSession() === s) startVoiceSearch(s)
+        }, 500)
     }
 
     private fun isTopFeed(url: String): Boolean =
@@ -538,6 +593,27 @@ class CatalogActivity(private val act: SectionActivity) {
             chapter = prefs.getInt(MainActivity.KEY_CHAPTER, 0),
             sentence = prefs.getInt(MainActivity.KEY_SENTENCE, 0),
         ))
+    }
+
+    /** msg2723/2738: долгое нажатие «Открыть книгу» нижней панели — список недавних
+     *  книг (кроме текущей последней). Выбор ведёт в книгу тем же путём, что
+     *  открытие из каталога (EXTRA_FROM_CATALOG — «назад» вернёт сюда). */
+    private fun showRecentBooks() {
+        val exclude = prefs.getString(MainActivity.KEY_URI, null)
+        val recent = BookStore.recent(act, exclude, 5)
+        if (recent.isEmpty()) {
+            toast(getString(R.string.recent_books_empty))
+            return
+        }
+        val names = recent.map { r ->
+            val author = r.author?.takeIf { it.isNotBlank() }
+            if (author == null) r.displayTitle else r.displayTitle + " — " + author
+        }
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.recent_books_title)
+            .setItems(names.toTypedArray()) { _, which -> openInReader(recent[which]) }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
     }
 
     // ---------------- Список каталогов (корень) ----------------
@@ -756,9 +832,17 @@ class CatalogActivity(private val act: SectionActivity) {
                         renderFeedContent(s)
                         announceFeed(s)
                         focusFeedFirst()
+                        // msg2723/2730: окно открыли долгим нажатием «Каталоги» — ждали
+                        // именно эту ленту. Она всё ещё верхняя и поисковая — стартуем
+                        // голосовой поиск сами.
+                        if (pendingVoiceSearch) {
+                            pendingVoiceSearch = false
+                            if (s.searchTemplate != null) delayedVoiceSearch(s)
+                        }
                     }
                 }.onFailure { e ->
                     sessions.remove(s.url)
+                    pendingVoiceSearch = false
                     Diag.log(
                         act, "opds",
                         "лента не открылась: ${s.url} — ${e.message}",

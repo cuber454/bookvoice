@@ -309,6 +309,18 @@
         android:max="0"
         android:progress="0" />
 
+    <!-- Строка «Прочитано/осталось» (msg2754): стоит сразу под ползунком, чтобы
+         при перемотке тут же было слышно/видно, сколько прочитано и осталось. -->
+    <TextView
+        android:id="@+id/tvStats"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
+        android:textAppearance="?attr/textAppearanceLabelMedium"
+        android:textColor="#9AA0A6" />
+
     <!-- Ряд кнопок скорости (#58): прячется/возвращается конструктором экрана. -->
     <LinearLayout
         android:id="@+id/speedRow"
@@ -380,23 +392,14 @@
             android:textSize="15sp" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/tvStats"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:paddingTop="2dp"
-        android:paddingBottom="2dp"
-        android:textAppearance="?attr/textAppearanceLabelMedium"
-        android:textColor="#9AA0A6" />
-
     <!-- msg2375: кнопка «Отметить дочитанной» (btnStatus) убрана с экрана —
          действие переехало в ⋮-меню читалки (showMoreDialog), галочка в
          Конструкторе экрана удалена.
          msg2399: чтобы низ экрана не пустовал, главный ряд управления чтением
          (◀ Пред / Читать / След ▶) перенесён в самый низ — как нижняя панель в
-         других окнах. Выше остаются позиция, слайдер, скорость, главы,
-         «Прочитано, осталось». msg2415: кнопка «Голос чтения» (btnVoice)
+         других окнах. Выше остаются позиция, слайдер, «Прочитано/осталось»
+         (msg2754 — стоит сразу под ползунком), скорость, главы. msg2415:
+         кнопка «Голос чтения» (btnVoice)
          вернулась четвёртой справа в этот нижний ряд — открывает шторку
          voicePanel наверху, нижний ряд остаётся доступным. msg2431: подписи
          ряда короткие и всегда в одну строку, без стрелок: «Пред.» / «Читать» /

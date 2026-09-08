@@ -250,6 +250,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // #101: «⋮ Ещё» — действия читалки (вернуться на прежнее место).
         binding.btnMore.setOnClickListener { showMoreDialog() }
         binding.btnPlayPause.setOnClickListener { togglePlay() }
+        // msg2695/2699: долгое нажатие «▶» — действие из настройки play_long.
+        // Возвращаем true всегда (съедаем событие): даже в режиме «Выключено»
+        // долгое нажатие не должно случайно запустить чтение.
+        binding.btnPlayPause.setOnLongClickListener {
+            onPlayPauseLongClick()
+            true
+        }
         binding.btnPrevSentence.setOnClickListener { stepMove(-1) }
         binding.btnNextSentence.setOnClickListener { stepMove(+1) }
         binding.btnPrevChapter.setOnClickListener { chapterNavMove(-1) }
@@ -1265,6 +1272,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (!prefs.getBoolean(KEY_UI_SEARCH, true)) closeSearchPanel()
         show(KEY_UI_MORE, binding.btnMore)
         show(KEY_UI_SPEED, binding.speedRow)
+        show(KEY_UI_VOICE, binding.btnVoice)
     }
 
     /** Подпись текущей скорости над рядом кнопок «Медленнее/Быстрее». */
@@ -1898,7 +1906,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg2567: таймер сна — пункт-переключатель. Подпись показывает режим,
         // клик открывает выбор времён/«выключить» (см. showSleepTimerDialog).
         actions.add(sleepTimerMenuLabel() to { showSleepTimerDialog() })
-        actions.add(getString(R.string.voice_settings) to { toggleVoicePanel() })  // msg2403: та же шторка.
+        // msg2762: «Голос чтения» убран из меню — дубль кнопки «Голос» нижнего ряда.
         actions.add(getString(R.string.app_exit) to { exitApp() })  // msg1278: последним.
         MaterialAlertDialogBuilder(this)
             // msg1687: заголовок «Действия» убран — звучал пунктом, но не нажимался.
@@ -1918,6 +1926,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         )
         ReaderEngine.SLEEP_CHAPTER -> getString(R.string.sleep_menu_chapter_active)
         else -> getString(R.string.sleep_menu)
+    }
+
+    /** msg2695/2699: долгое нажатие «▶». Действие из настройки play_long
+     *  (раздел «Управление»): по умолчанию — таймер сна. */
+    private fun onPlayPauseLongClick() {
+        when (prefs.getString(KEY_PLAY_LONG, PLAY_LONG_SLEEP)) {
+            PLAY_LONG_SLEEP -> showSleepTimerDialog()
+            // PLAY_LONG_OFF — ничего не делаем; событие уже съедено слушателем.
+        }
     }
 
     /** msg2567/2575: выбор таймера сна. Таймер живёт в движке — работает и при
@@ -2741,6 +2758,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_UI_BOOKMARK = "ui_bookmark"
         internal const val KEY_UI_SPEED = "ui_speed_buttons"
         internal const val KEY_UI_SEARCH = "ui_search_button"
+        // msg2766: кнопка «Голос» нижнего ряда читалки — скрывается конструктором.
+        internal const val KEY_UI_VOICE = "ui_voice"
 
         // #101: кнопка «⋮ Ещё» в читалке — открывает меню «Действия». Входит
         // в конструктор ui_*: выключена — кнопки нет и история переходов не копится.
@@ -2791,6 +2810,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val HS_SENTENCE = "sentence"
         internal const val HS_PARAGRAPH = "paragraph"
         internal const val HS_CHAPTER = "chapter"
+
+        // msg2695/2699: долгое нажатие кнопки «▶» (играть/пауза). Значение pref — одна
+        // из PLAY_LONG_*. По умолчанию PLAY_LONG_SLEEP — долгое нажатие открывает
+        // диалог «Таймер сна» (сэкономленная кнопка). Настройка живёт в разделе
+        // «Управление» (там, где остальные назначаемые кнопки).
+        internal const val KEY_PLAY_LONG = "play_long"
+        internal const val PLAY_LONG_OFF = "off"
+        internal const val PLAY_LONG_SLEEP = "sleep"
 
         // Назначаемые свайпы влево/вправо (#77). Значение pref — id действия;
         // палитра [GESTURE_ACTIONS] общая для диспетчера в ридере и экрана

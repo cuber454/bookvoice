@@ -127,6 +127,16 @@ object BookStore {
     fun byUri(context: Context, uri: String): BookRecord? =
         all(context).firstOrNull { it.uri == uri }
 
+    /** Последние открывавшиеся книги (долгое нажатие «Продолжить»): с записью
+     *  времени чтения, кроме [excludeUri] (её открывает обычный тап кнопки), по
+     *  убыванию [BookRecord.lastOpenedAt], не больше [limit]. Служат быстрым
+     *  доступом к другим читаемым книгам, не прячась в списке полки. */
+    fun recent(context: Context, excludeUri: String?, limit: Int): List<BookRecord> =
+        all(context)
+            .filter { it.lastOpenedAt > 0L && it.uri != excludeUri }
+            .sortedByDescending { it.lastOpenedAt }
+            .take(limit)
+
     @Synchronized
     fun upsert(context: Context, rec: BookRecord) {
         val list = all(context).filterNot { it.uri == rec.uri }.toMutableList()

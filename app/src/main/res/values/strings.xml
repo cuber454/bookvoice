@@ -31,6 +31,8 @@
     <string name="add_book">Добавить</string>
     <string name="continue_last">Открыть книгу</string>
     <string name="continue_last_with">Открыть книгу: %1$s</string>
+    <string name="recent_books_title">Недавние книги</string>
+    <string name="recent_books_empty">Других недавних книг нет.</string>
     <string name="sort_books">Сортировать</string>
     <string name="go_library">Библиотека</string>
     <string name="books_empty">В библиотеке пока пусто. Нажми „Ещё“ и выбери „Открыть файл“, чтобы добавить первую книгу.</string>
@@ -46,6 +48,12 @@
     <string name="sort_date">По дате добавления</string>
     <string name="sort_author">По автору</string>
     <string name="sort_lastread">По последнему чтению</string>
+    <!-- msg2713/2717: гибкая сортировка по вкладкам — новые режимы и подписи. -->
+    <string name="sort_size">По размеру</string>
+    <string name="sort_unfinished">Сначала недочитанные</string>
+    <string name="sort_reset">Как у остальных вкладок (общая)</string>
+    <string name="tab_sort_dialog">Сортировка книг вкладки „%1$s“</string>
+    <string name="sort_applied">Сортировка: %1$s</string>
     <string name="status_new">новая</string>
     <string name="status_reading">читаю</string>
     <string name="status_finished">дочитана</string>
@@ -293,6 +301,7 @@
     <string name="reader_group_hint">Галочка показывает элемент на экране книги, без галочки элемент скрыт.</string>
     <string name="ui_sent_title">Кнопки «Предыдущее» и «Следующее» предложение</string>
     <string name="ui_play_title">Кнопка «Читать / Пауза»</string>
+    <string name="ui_voice_title">Кнопка «Голос чтения»</string>
     <string name="ui_chapters_title">Кнопки «Предыдущая глава» и «Следующая глава»</string>
     <string name="ui_slider_title">Слайдер перемотки по книге</string>
     <string name="ui_position_title">Строка позиции (глава, предложение)</string>
@@ -375,6 +384,14 @@
     <string name="ch_nav_major">По крупным разделам</string>
     <string name="ch_nav_chapters">По главам</string>
     <string name="ch_nav_all">По всем заголовкам</string>
+
+    <!-- msg2695/2699: долгое нажатие кнопки «▶» (играть/пауза) — что оно делает.
+         По умолчанию «Таймер сна» (экономит кнопку). Опция в разделе «Управление»,
+         рядом с остальными назначаемыми кнопками. -->
+    <string name="play_long_title">Долгое нажатие ▶</string>
+    <string name="play_long_dialog">Что делает долгое нажатие кнопки ▶?</string>
+    <string name="play_long_sleep">Таймер сна</string>
+    <string name="play_long_off">Выключено</string>
 
     <string name="folder_title">Папка с книгами</string>
     <string name="folder_none">Папка не выбрана</string>

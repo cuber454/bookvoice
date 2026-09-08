@@ -76,6 +76,7 @@ class SettingsActivity(private val act: SectionActivity) {
     private var exitRow: Button? = null
     private var stepRow: Button? = null
     private var chNavRow: Button? = null   // «Кнопки глав шагают» (0.3.37)
+    private var playLongRow: Button? = null  // msg2695/2699: долгое нажатие «▶»
     private var folderRow: Button? = null
     private var dlFolderRow: Button? = null
     private var dlFormatRow: Button? = null
@@ -118,6 +119,7 @@ class SettingsActivity(private val act: SectionActivity) {
     private val readerUi: List<Pair<Int, String>> = listOf(
         R.string.ui_sent_title to MainActivity.KEY_UI_SENT,
         R.string.ui_play_title to MainActivity.KEY_UI_PLAY,
+        R.string.ui_voice_title to MainActivity.KEY_UI_VOICE,
         R.string.ui_chapters_title to MainActivity.KEY_UI_CHAPTERS,
         R.string.ui_slider_title to MainActivity.KEY_UI_SLIDER,
         R.string.ui_position_title to MainActivity.KEY_UI_POSITION,
@@ -636,6 +638,26 @@ class SettingsActivity(private val act: SectionActivity) {
         // скачок — по крупным разделам / по главам / по всем заголовкам.
         // Для TXT/EPUB иерархии нет, скачковые режимы не влияют (полный список глав).
         chNavRow = addValueButton { pickChapterNav() }
+        // msg2695/2699: долгое нажатие кнопки «▶». Опция живёт здесь же, где остальные
+        // назначаемые кнопки. Значение — MainActivity.PLAY_LONG_*; по умолчанию таймер сна.
+        val playLongOptions = listOf(
+            getString(R.string.play_long_sleep) to MainActivity.PLAY_LONG_SLEEP,
+            getString(R.string.play_long_off) to MainActivity.PLAY_LONG_OFF,
+        )
+        playLongRow = addValueButton {
+            val cur = prefs.getString(MainActivity.KEY_PLAY_LONG, MainActivity.PLAY_LONG_SLEEP)
+                ?: MainActivity.PLAY_LONG_SLEEP
+            val checked = playLongOptions.indexOfFirst { it.second == cur }.coerceAtLeast(0)
+            MaterialAlertDialogBuilder(act)
+                .setTitle(R.string.play_long_dialog)
+                .setSingleChoiceItems(playLongOptions.map { it.first }.toTypedArray(), checked) { d, which ->
+                    prefs.edit().putString(MainActivity.KEY_PLAY_LONG, playLongOptions[which].second).apply()
+                    d.dismiss()
+                    refreshRows()
+                }
+                .setNegativeButton(R.string.toc_close, null)
+                .show()
+        }
         addGestureRows()
         // msg2527: настройки кнопок гарнитуры („назад/вперёд“) вынесены в подраздел —
         // в списке «Управления» остаётся строка-переход, открывающая подраздел
@@ -899,6 +921,11 @@ class SettingsActivity(private val act: SectionActivity) {
         stepRow?.text = getString(R.string.step_title) + " " + getString(stepValueRes)
 
         chNavRow?.text = getString(R.string.ch_nav_title) + ": " + chNavLabel()
+
+        playLongRow?.text = getString(R.string.play_long_title) + ": " + getString(
+            if (prefs.getString(MainActivity.KEY_PLAY_LONG, MainActivity.PLAY_LONG_SLEEP) == MainActivity.PLAY_LONG_OFF)
+                R.string.play_long_off else R.string.play_long_sleep
+        )
 
         val tree = treeUri()
         folderRow?.text = getString(R.string.folder_title) + ": " +

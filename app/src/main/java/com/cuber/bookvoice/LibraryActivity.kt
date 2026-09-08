@@ -62,6 +62,8 @@ class LibraryActivity(private val act: SectionActivity) {
 
     private val prefs by lazy { act.getSharedPreferences("reader", Context.MODE_PRIVATE) }
     private var sortMode = SORT_TITLE
+    // msg2713/2717: кэш размеров файлов для сортировки «по размеру» (см. fileSizeBytes).
+    private val fileSizeCache = HashMap<String, Long>()
 
     // msg748: запуск «Открыть с помощью» (файл прислан снаружи). В этом случае
     // авто-открытие последней книги при старте не срабатывает — открываем файл.
@@ -117,7 +119,11 @@ class LibraryActivity(private val act: SectionActivity) {
         // Обрабатываем до сборки экрана — файл сразу уходит в библиотеку/читалку.
         handleExternalOpen(intent)
 
-        sortMode = loadSort()
+        // msg2713/2717: фильтр читаем раньше сортировки — у каждой вкладки своя
+        // запомненная сортировка (ключ sort_tab_<mode>), и активный фильтр нужен,
+        // чтобы знать, какую именно.
+        filterMode = prefs.getInt(KEY_LIB_FILTER, FILTER_ALL)
+        sortMode = LibraryActivity.tabSort(prefs, filterMode)
 
         viewMode = if (prefs.getInt(KEY_LIB_VIEW, BookAdapter.VIEW_LIST) == BookAdapter.VIEW_GRID) {
             BookAdapter.VIEW_GRID
@@ -132,10 +138,25 @@ class LibraryActivity(private val act: SectionActivity) {
         // Все остальные действия (добавить/сканировать/сортировать/вид) живут
         // в меню «Ещё» — короткий ряд не теснится и не перегружен.
         binding.btnLast.setOnClickListener { openLastBook() }
+        // msg2723/2730/2738: долгое нажатие «Продолжить» — список недавних книг
+        // (быстрый доступ к другим читаемым, без проматывания полки).
+        binding.btnLast.setOnLongClickListener {
+            Vibra.confirm(act)
+            showRecentBooks()
+            true
+        }
         // msg2351/2355: кнопка «Каталоги» правее от «Открыть книгу» — быстрый
         // вход в окно каталогов поверх полки (тот же переход, что пункт «⋮»).
         binding.btnCatalogs.setOnClickListener {
             startActivity(Intent(act, CatalogWindowActivity::class.java))
+        }
+        // msg2723/2730: долгое нажатие «Каталоги» — открыть окно сразу в голосовом
+        // поиске (микрофон). Каталог сам решит, когда лента готова искать.
+        binding.btnCatalogs.setOnLongClickListener {
+            Vibra.confirm(act)
+            startActivity(Intent(act, CatalogWindowActivity::class.java)
+                .putExtra(CatalogActivity.EXTRA_VOICE_SEARCH, true))
+            true
         }
         binding.btnMore.contentDescription = getString(R.string.lib_more)
         binding.btnMore.setOnClickListener { showMoreMenu() }
@@ -145,8 +166,10 @@ class LibraryActivity(private val act: SectionActivity) {
         // без умного «Читаю»: авто-скан папки при каждом открытии добавляет книги
         // со статусом «новая», и если бы полка по умолчанию прятала их под «Читаю»,
         // свежие файлы пропадали бы из виду — будто скан не работает.
-        filterMode = prefs.getInt(KEY_LIB_FILTER, FILTER_ALL)
         buildFilterTabs()
+        // buildFilterTabs мог скорректировать filterMode (активную вкладку скрыли
+        // в настройках) — тогда и сортировку держим от актуального фильтра.
+        sortMode = LibraryActivity.tabSort(prefs, filterMode)
 
         // msg559: если доступ в интернет у BookVoice отключён (realme/Oppo —
         // отдельный переключатель «Интернет»), один раз за запуск подсказываем,
@@ -161,8 +184,9 @@ class LibraryActivity(private val act: SectionActivity) {
      *  входа «по вкладке» нет (msg1676+) — сюда всегда возвращаются «снизу». */
     fun resume() {
         // Сортировку можно поменять на экране настроек — перечитываем её при
-        // каждом возврате сюда (в т.ч. из настроек).
-        sortMode = loadSort()
+        // каждом возврате сюда (в т.ч. из настроек). У вкладки может быть своя
+        // (msg2713/2717): фильтр в поле, сортировка — под него.
+        sortMode = LibraryActivity.tabSort(prefs, filterMode)
         // msg1565/1567 (эксперимент L1b): возврат из ридера. Обычный путь ниже
         // делает refresh() — он пересортирует полку (SORT_LASTREAD поднимает
         // только что читанную книгу наверх) и переиспользует ряды: View, на
@@ -460,6 +484,13 @@ class LibraryActivity(private val act: SectionActivity) {
                 )
                 refresh()
             }
+            // msg2713/2717: долгое удержание вкладки — сортировка ИМЕННО этой
+            // вкладки (своя запомненная, не общая для всей полки).
+            label.setOnLongClickListener {
+                Vibra.confirm(act)
+                showSortDialog(mode)
+                true
+            }
             binding.filterBar.addView(col, LinearLayout.LayoutParams(
                 0, dp(48), 1f
             ))
@@ -512,6 +543,9 @@ class LibraryActivity(private val act: SectionActivity) {
     // ---------------- Список ----------------
 
     private fun refresh() {
+        // msg2713/2717: у каждой вкладки-фильтра своя сортировка — перечитываем
+        // её под актуальный фильтр при каждой пересборке полки.
+        sortMode = LibraryActivity.tabSort(prefs, filterMode)
         // msg1333/1336: при каждом показе полки склеиваем старые дубли одной
         // скачанной книги (две записи с одним sourceUrl — оригинал и копия
         // «… (1)»). BookStore уже убрал проигравшие записи, здесь чистим их
@@ -536,15 +570,9 @@ class LibraryActivity(private val act: SectionActivity) {
             FILTER_FAV -> all.filter { it.favorite }
             else -> all.filter { it.status == filterMode }
         }
-        // Сортировка «недочитанные сверху» убрана (msg646/649): статус теперь
-        // разводят вкладки-фильтры сверху, а не сортировка. Остались по названию,
-        // по дате добавления, по автору и по последнему чтению.
-        val sorted = when (sortMode) {
-            SORT_DATE -> shown.sortedByDescending { it.addedAt }
-            SORT_AUTHOR -> shown.sortedBy { (it.author ?: it.displayTitle).lowercase(Locale.ROOT) }
-            SORT_LASTREAD -> shown.sortedByDescending { it.lastOpenedAt }
-            else -> shown.sortedBy { it.displayTitle.lowercase(Locale.ROOT) }
-        }
+        // msg2713/2717: сортировка у каждой вкладки своя и гибкая — шесть режимов
+        // с умным вторичным порядком внутри (см. sortBooks).
+        val sorted = sortBooks(shown, sortMode)
         adapter.submit(sorted)
         // Полка построена на этом экземпляре — L1b может не трогать её при
         // возврате из ридера (msg1585: свежий экран без refresh остался бы пустым).
@@ -621,32 +649,137 @@ class LibraryActivity(private val act: SectionActivity) {
 
     private fun dp(v: Int): Int = (act.resources.displayMetrics.density * v).toInt()
 
-    /** Сортировка из prefs. Старое значение 2 («сначала недочитанные») в новом
-     *  наборе режимов не существует — откатываемся на «по названию»; остальные
-     *  id валидны и сохраняются как есть. */
-    private fun loadSort(): Int {
-        val v = prefs.getInt(KEY_SORT, SORT_TITLE)
-        return if (v in SORT_CHOICES) v else SORT_TITLE
+    // ——— msg2713/2717: гибкая сортировка по вкладкам ———
+    // У каждой вкладки-фильтра своя запомненная сортировка (tabSortKey). Долгое
+    // удержание вкладки открывает диалог для НЕЁ; «⋮ → Сортировка» (showGlobalSortDialog)
+    // по-прежнему задаёт ОБЩУЮ для полки — она действует на вкладки без персональной.
+    // Режимы с умным вторичным порядком: внутри каждой группы — по названию,
+    // чтобы полка читалась предсказуемо.
+
+    private fun titleKey(a: BookRecord) = a.displayTitle.lowercase(Locale.ROOT)
+
+    /** Отсортировать отфильтрованный список [list] по режиму [mode]. */
+    private fun sortBooks(list: List<BookRecord>, mode: Int): List<BookRecord> {
+        return when (mode) {
+            // Сначала новые (по дате добавления), внутри — по названию.
+            SORT_DATE -> list.sortedWith(
+                compareByDescending<BookRecord> { it.addedAt }.thenBy { titleKey(it) }
+            )
+            // По автору: без автора — в конец; внутри автора — по названию.
+            SORT_AUTHOR -> list.sortedWith(
+                compareBy<BookRecord>(
+                    { it.author.isNullOrBlank() },
+                    { (it.author ?: "").lowercase(Locale.ROOT) },
+                    { titleKey(it) },
+                )
+            )
+            // Недавно читанные сверху; никогда не читанные — в конец по названию.
+            SORT_LASTREAD -> list.sortedWith { a, b ->
+                val oa = a.lastOpenedAt > 0L
+                val ob = b.lastOpenedAt > 0L
+                when {
+                    oa != ob -> if (oa) -1 else 1
+                    oa -> {
+                        val c = b.lastOpenedAt.compareTo(a.lastOpenedAt)
+                        if (c != 0) c else titleKey(a).compareTo(titleKey(b))
+                    }
+                    else -> titleKey(a).compareTo(titleKey(b))
+                }
+            }
+            // Больше файл — выше (размер нужен не для каждой сортировки, кэш).
+            SORT_SIZE -> list.sortedWith(
+                compareByDescending<BookRecord> { fileSizeBytes(it) }.thenBy { titleKey(it) }
+            )
+            // «Сначала недочитанные»: дочитанные уходят вниз, обе группы — по названию.
+            SORT_UNFINISHED -> list.sortedWith(
+                compareBy<BookRecord>({ it.status == BookRecord.STATUS_FINISHED }, { titleKey(it) })
+            )
+            else -> list.sortedWith(compareBy<BookRecord> { titleKey(it) })
+        }
     }
 
-    private fun showSortDialog() {
-        // Варианты общие с экраном настроек (SORT_CHOICES). id режима не обязан
-        // совпадать с позицией в списке, поэтому пишем в prefs id, а выбранный
-        // пункт диалога ищем по indexOf.
+    /** Размер файла книги в байтах. Тяжело для больших полок — считаем один раз
+     *  за сессию (кэш) и только когда нужен (режим «по размеру»). */
+    private fun fileSizeBytes(rec: BookRecord): Long =
+        fileSizeCache.getOrPut(rec.uri) {
+            try {
+                val u = Uri.parse(rec.uri)
+                if (u.scheme == "file") {
+                    File(u.path ?: "").takeIf { it.isFile }?.length() ?: 0L
+                } else {
+                    contentResolver.query(
+                        u, arrayOf(OpenableColumns.SIZE), null, null, null
+                    )?.use { c ->
+                        if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else 0L
+                    } ?: 0L
+                }
+            } catch (_: Exception) {
+                0L
+            }
+        }
+
+    /** Диалог сортировки для вкладки [mode] (долгое удержание вкладки). Выбор —
+     *  персональный для вкладки; пункт «Как у остальных» снимает его и возвращает
+     *  вкладку к общей сортировке (KEY_SORT). */
+    private fun showSortDialog(mode: Int) {
+        val opts = SORT_CHOICES.map { getString(sortLabelRes(it)) }.toMutableList()
+        val resetIdx = opts.size
+        opts.add(getString(R.string.sort_reset))
+        val hasTabSet = prefs.getInt(LibraryActivity.tabSortKey(mode), -1) in SORT_CHOICES
+        val checked = if (hasTabSet) {
+            SORT_CHOICES.indexOf(LibraryActivity.tabSort(prefs, mode)).coerceAtLeast(0)
+        } else {
+            resetIdx
+        }
+        MaterialAlertDialogBuilder(act)
+            .setTitle(getString(R.string.tab_sort_dialog, getString(LibraryActivity.tabLabelRes(mode))))
+            .setSingleChoiceItems(opts.toTypedArray(), checked) { d, which ->
+                val ed = prefs.edit()
+                if (which == resetIdx) {
+                    ed.remove(LibraryActivity.tabSortKey(mode))
+                    if (mode == filterMode) sortMode = LibraryActivity.tabSort(prefs, mode)
+                } else {
+                    val s = SORT_CHOICES[which]
+                    ed.putInt(LibraryActivity.tabSortKey(mode), s)
+                    if (mode == filterMode) sortMode = s
+                }
+                ed.apply()
+                d.dismiss()
+                announceSortMode(mode)
+                if (mode == filterMode) refresh()
+            }
+            .setNegativeButton(getString(R.string.dialog_close), null)
+            .show()
+    }
+
+    /** Общая сортировка (меню «⋮ → Сортировка»): применяется ко ВСЕМ вкладкам,
+     *  у которых нет персональной (см. showSortDialog — долгое удержание вкладки). */
+    private fun showGlobalSortDialog() {
         val opts = SORT_CHOICES.map { getString(sortLabelRes(it)) }.toTypedArray()
+        val global = prefs.getInt(KEY_SORT, SORT_TITLE)
+        val checked = SORT_CHOICES.indexOf(if (global in SORT_CHOICES) global else SORT_TITLE)
+            .coerceAtLeast(0)
         MaterialAlertDialogBuilder(act)
             .setTitle(R.string.sort_dialog)
-            .setSingleChoiceItems(
-                opts,
-                SORT_CHOICES.indexOf(sortMode).coerceAtLeast(0),
-            ) { d, which ->
-                sortMode = SORT_CHOICES[which]
-                prefs.edit().putInt(KEY_SORT, sortMode).apply()
+            .setSingleChoiceItems(opts, checked) { d, which ->
+                prefs.edit().putInt(KEY_SORT, SORT_CHOICES[which]).apply()
+                sortMode = LibraryActivity.tabSort(prefs, filterMode)
                 d.dismiss()
                 refresh()
             }
             .setNegativeButton(getString(R.string.dialog_close), null)
             .show()
+    }
+
+    /** Озвучить применённую сортировку на метке самой вкладки — слышно, к какой
+     *  вкладке относится новый порядок (скринридер, не движок TTS). */
+    private fun announceSortMode(mode: Int) {
+        val i = currentTabModes.indexOf(mode)
+        if (i in filterLabels.indices) {
+            filterLabels[i].announceForAccessibility(
+                getString(R.string.sort_applied, getString(sortLabelRes(LibraryActivity.tabSort(prefs, mode))))
+            )
+        }
     }
 
     // ---------------- Меню «Ещё» (⋮) и вид полки (msg646/649) ----------------
@@ -675,7 +808,7 @@ class LibraryActivity(private val act: SectionActivity) {
                     1 -> startActivity(Intent(act, SettingsWindowActivity::class.java))
                     2 -> act.openDocPicker(arrayOf("*/*")) { uri -> if (uri != null) onBookPicked(uri) }
                     3 -> onFolderButton()
-                    4 -> showSortDialog()
+                    4 -> showGlobalSortDialog()
                     5 -> showViewDialog()
                     6 -> startActivity(Intent(act, QuotesActivity::class.java))
                     7 -> exitApp()
@@ -1013,6 +1146,28 @@ class LibraryActivity(private val act: SectionActivity) {
             chapter = prefs.getInt(MainActivity.KEY_CHAPTER, 0),
             sentence = prefs.getInt(MainActivity.KEY_SENTENCE, 0),
         ))
+    }
+
+    /** msg2723/2730: долгое нажатие «Продолжить» — список последних открывавшихся
+     *  книг (кроме текущей последней — её открывает обычный тап). Выбор книги
+     *  ведёт в неё тем же путём, что и строка полки. Нет других недавних —
+     *  короткая подсказка вместо пустого диалога. */
+    private fun showRecentBooks() {
+        val exclude = prefs.getString(MainActivity.KEY_URI, null)
+        val recent = BookStore.recent(act, exclude, 5)
+        if (recent.isEmpty()) {
+            toast(getString(R.string.recent_books_empty))
+            return
+        }
+        val names = recent.map { r ->
+            val author = r.author?.takeIf { it.isNotBlank() }
+            if (author == null) r.displayTitle else r.displayTitle + " — " + author
+        }
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.recent_books_title)
+            .setItems(names.toTypedArray()) { _, which -> openReader(recent[which]) }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
     }
 
     private fun queryDisplayName(uri: Uri): String? =
@@ -1463,13 +1618,24 @@ class LibraryActivity(private val act: SectionActivity) {
         internal const val SORT_DATE = 1
         // 2 был «сначала недочитанные» — убран (msg646/649): статусы разводят
         // вкладки-фильтры, режим больше не существует, старые сохранённые 2
-        // loadSort() откатывает на «по названию».
+        // tabSort() откатывает на «по названию». «Недочитанные» вернулись
+        // отдельным режимом SORT_UNFINISHED ниже — теперь как ОПЦИЯ сортировки.
         internal const val SORT_AUTHOR = 3
         internal const val SORT_LASTREAD = 4
+        // msg2713/2717: гибкая сортировка по вкладкам — добавили «по размеру» и
+        // «сначала недочитанные» (прочитанность). Внутри каждой — умный вторичный
+        // порядок по названию (автор→название, размер→название и т.п.).
+        internal const val SORT_SIZE = 5
+        internal const val SORT_UNFINISHED = 6
 
-        /** Варианты сортировки (порядок в диалогах полки и настроек). */
+        // Персональная сортировка вкладки (msg2713/2717): ключ prefs «sort_tab_<mode>».
+        // Ставится долгим удержанием вкладки (см. showSortDialog); пока её нет —
+        // действует общая [KEY_SORT] («⋮ → Сортировка», см. showGlobalSortDialog).
+        private const val KEY_SORT_TAB_PREFIX = "sort_tab_"
+
+        /** Варианты сортировки (порядок в диалоге). */
         internal val SORT_CHOICES = intArrayOf(
-            SORT_TITLE, SORT_DATE, SORT_AUTHOR, SORT_LASTREAD,
+            SORT_TITLE, SORT_DATE, SORT_AUTHOR, SORT_LASTREAD, SORT_SIZE, SORT_UNFINISHED,
         )
 
         /** Подпись варианта сортировки по его id (не по позиции в списке). */
@@ -1477,7 +1643,20 @@ class LibraryActivity(private val act: SectionActivity) {
             SORT_DATE -> R.string.sort_date
             SORT_AUTHOR -> R.string.sort_author
             SORT_LASTREAD -> R.string.sort_lastread
+            SORT_SIZE -> R.string.sort_size
+            SORT_UNFINISHED -> R.string.sort_unfinished
             else -> R.string.sort_title
+        }
+
+        /** Ключ prefs персональной сортировки вкладки-фильтра [mode]. */
+        internal fun tabSortKey(mode: Int): String = KEY_SORT_TAB_PREFIX + mode
+
+        /** Читать сортировку для вкладки [mode]: своя → глобальная KEY_SORT → по названию. */
+        internal fun tabSort(prefs: SharedPreferences, mode: Int): Int {
+            val v = prefs.getInt(tabSortKey(mode), -1)
+            if (v in SORT_CHOICES) return v
+            val g = prefs.getInt(KEY_SORT, SORT_TITLE)
+            return if (g in SORT_CHOICES) g else SORT_TITLE
         }
 
         // ——— Вкладки-фильтры Библиотеки (#97) ———
