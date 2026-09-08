@@ -35,5 +35,8 @@ data class BookDocument(
         PDF_NO_TEXT_LAYER,
         /** Файл защищён паролем. */
         PDF_ENCRYPTED,
+        /** Разбор съел всю память (обычно большой скан-учебник). Ловим на
+         *  OutOfMemoryError — это не повод ронять приложение (msg2587). */
+        PDF_OUT_OF_MEMORY,
     }
 }

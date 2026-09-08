@@ -590,6 +590,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     when (it) {
                         BookDocument.Unreadable.PDF_NO_TEXT_LAYER -> R.string.pdf_no_text_layer
                         BookDocument.Unreadable.PDF_ENCRYPTED -> R.string.pdf_encrypted
+                        BookDocument.Unreadable.PDF_OUT_OF_MEMORY -> R.string.pdf_out_of_memory
                     }
                 }
                 if (unreadableRes != null) {

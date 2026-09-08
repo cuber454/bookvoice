@@ -56,6 +56,11 @@ object PdfParser {
                 runCatching { doc.setAllSecurityToBeRemoved(true) }
             }
             build(doc, n)
+        } catch (_: OutOfMemoryError) {
+            // Большой скан-учебник: pdfbox не влез в кучу при разборе (msg2587).
+            // OutOfMemoryError — Error, обычный catch его не ловит, и падение
+            // роняло всё приложение. Не роняем: сообщаем причину.
+            BookDocument(null, null, emptyList(), BookDocument.Unreadable.PDF_OUT_OF_MEMORY)
         } catch (_: Exception) {
             // Не открылся. Если файл действительно под паролем — скажем про это;
             // иначе это битый/не-PDF файл — null (ридер покажет общую ошибку).
