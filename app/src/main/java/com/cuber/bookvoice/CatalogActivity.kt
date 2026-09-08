@@ -227,11 +227,9 @@ class CatalogActivity(private val act: SectionActivity) {
         // «Мои каталоги» — rootBack окна на полку (suppress авто-открытия ставит
         // onDestroy, фикс 0.3.75).
         binding.btnBack.setOnClickListener { onBackKey() }
-        // msg2339/2343: «Добавить каталог» — плавающая кнопка в правом нижнем углу
-        // корня (была кнопкой в потоке после заголовка «Управление»).
-        binding.btnAddFab.setOnClickListener { showAddDialog() }
-        // msg2359/2363: нижняя панель на глубине каталога — «Открыть книгу:
-        // <последняя>» и «Библиотека» (одно касание до полки с любого уровня).
+        // msg2359/2363/2371: нижняя панель каталога — «Открыть книгу: <последняя>»
+        // и «Библиотека» (одно касание до полки с любого уровня). Панель на ВСЕХ
+        // уровнях, включая корень «Мои каталоги».
         binding.btnCatContinue.setOnClickListener { openLastBook() }
         binding.btnCatLibrary.setOnClickListener { act.rootBack() }
 
@@ -293,24 +291,26 @@ class CatalogActivity(private val act: SectionActivity) {
 
     // ---------------- Меню «⋮» в шапке (msg1474) ----------------
 
-    /** «⋮ Ещё» окна Каталога: «Библиотека» (прыжок на полку-дом из глубины,
-     *  редизайн msg1676+), «Настройки скачивания», «Выход из приложения».
-     *  Бывшую шестерёнку ⚙ из шапки убрали (msg1474): у настроек скачивания один
-     *  вход — здесь, на странице книги — своя кнопка в потоке контента (#301).
-     *  Выход — всегда последним (msg1278). */
+    /** «⋮ Ещё» окна Каталога: в корне «Мои каталоги» первым идёт «Добавить
+     *  каталог» (msg2371: вход в добавление переехал сюда из убранного FAB), затем
+     *  «Библиотека» (прыжок на полку-дом из глубины, редизайн msg1676+),
+     *  «Настройки скачивания», «Выход из приложения». На глубине пункт добавления
+     *  не показываем (каталог уже открыт). Бывшую шестерёнку ⚙ из шапки убрали
+     *  (msg1474): у настроек скачивания один вход — здесь, на странице книги —
+     *  своя кнопка в потоке контента (#301). Выход — всегда последним (msg1278). */
     private fun showCatalogMoreMenu() {
-        val items = arrayOf(
-            getString(R.string.go_library),  // домой: закрыть окно до полки.
-            getString(R.string.catalog_dl_settings_title),
-            getString(R.string.app_exit),  // msg1278: Выход из приложения — последним.
-        )
+        val actions = ArrayList<Pair<String, () -> Unit>>()
+        if (nav.isEmpty()) {  // корень «Мои каталоги»: добавить новый каталог.
+            actions.add(getString(R.string.catalog_add) to { showAddDialog() })
+        }
+        actions.add(getString(R.string.go_library) to {  // домой: до полки.
+            act.rootBack()  // suppress авто-открытия ставит onDestroy окна.
+        })
+        actions.add(getString(R.string.catalog_dl_settings_title) to { openDlSettings() })
+        actions.add(getString(R.string.app_exit) to { TabNav.exitApp(act) })  // msg1278: последним.
         MaterialAlertDialogBuilder(act)
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> act.rootBack()  // полка под окном раскроется; suppress авто-открытия ставит onDestroy окна.
-                    1 -> openDlSettings()
-                    2 -> TabNav.exitApp(act)
-                }
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which ->
+                actions[which].second()
             }
             .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».
     }
@@ -420,11 +420,9 @@ class CatalogActivity(private val act: SectionActivity) {
         v.removeAllViews()
         currentButtons.clear()
         removePending()
-        // msg2339/2343: FAB «Добавить каталог» живёт только в корне «Мои каталоги»
-        // (нижний правый угол); в ленте источника и на странице книги скрыт.
-        binding.btnAddFab.visibility = if (cur == null) View.VISIBLE else View.GONE
-        // msg2359/2363: нижняя панель «Открыть книгу/Библиотека» — наоборот, только
-        // на глубине (лента/жанр/книга); в корне её место занимает FAB + «←».
+        // msg2371: нижняя панель «Открыть книгу/Библиотека» — на ВСЕХ уровнях,
+        // включая корень «Мои каталоги» (FAB «Добавить каталог» убран — вход в
+        // добавление живёт в ⋮-меню корня).
         updateBottomBar()
         when (cur) {
             null -> {
@@ -449,20 +447,17 @@ class CatalogActivity(private val act: SectionActivity) {
         binding.btnSearch.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
-    // ---------------- Нижняя панель глубины (msg2359/2363) ----------------
+    // ---------------- Нижняя панель каталога (msg2359/2363/2371) ----------------
 
-    /** Нижний ряд быстрых действий на глубине каталога, как на полке: слева —
-     *  умная кнопка последней книги «Открыть книгу: <название>» (текст как в
+    /** Нижний ряд быстрых действий каталога, как на полке: слева — умная кнопка
+     *  последней книги «Открыть книгу: <название>» (текст как в
      *  LibraryActivity.updateContinueButton, msg2108), правее — «Библиотека»:
      *  одно касание до полки с любого уровня (rootBack окна, минуя «назад» по
-     *  шагам). Панель видна только когда в каталоге открыта лента/жанр/страница
-     *  книги (nav не пуст); в корне «Мои каталоги» её место занимают «←» и FAB
-     *  «Добавить каталог». Нет доступной последней книги — левая кнопка скрыта,
-     *  «Библиотека» остаётся. */
+     *  шагам). Панель видна на ВСЕХ уровнях, включая корень «Мои каталоги»
+     *  (msg2371): везде один и тот же ряд, как и в остальном приложении. Нет
+     *  доступной последней книги — левая кнопка скрыта, «Библиотека» остаётся. */
     private fun updateBottomBar() {
-        val depth = nav.isNotEmpty()
-        binding.bottomBar.visibility = if (depth) View.VISIBLE else View.GONE
-        if (!depth) return
+        binding.bottomBar.visibility = View.VISIBLE
         val u = prefs.getString(MainActivity.KEY_URI, null)
         val title = u?.let {
             BookStore.byUri(act, it)?.displayTitle ?: queryDisplayName(Uri.parse(it))

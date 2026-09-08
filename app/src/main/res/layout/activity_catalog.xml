@@ -63,50 +63,32 @@
             android:textSize="26sp" />
     </LinearLayout>
 
-    <!-- msg2339/2343: содержимое (список/лента/книга) + плавающая кнопка
-         «Добавить каталог» в правом нижнем углу. FAB поверх скролла, только в
-         корне «Мои каталоги»; в ленте/на странице книги скрывается (renderTop). -->
-    <FrameLayout
+    <!-- Содержимое (список/лента/книга). «Добавить каталог» больше не плавает
+         в углу (msg2371): вход — пункт ⋮ меню в корне «Мои каталоги». -->
+    <ScrollView
+        android:id="@+id/scroll"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:fillViewport="true">
 
-        <ScrollView
-            android:id="@+id/scroll"
+        <LinearLayout
+            android:id="@+id/content"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:clipToPadding="false"
-            android:fillViewport="true">
-
-            <LinearLayout
-                android:id="@+id/content"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:paddingBottom="24dp" />
-        </ScrollView>
-
-        <com.google.android.material.floatingactionbutton.FloatingActionButton
-            android:id="@+id/btnAddFab"
-            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="bottom|end"
-            android:layout_margin="20dp"
-            android:contentDescription="@string/catalog_add"
-            android:src="@drawable/ic_add"
-            android:visibility="gone"
-            app:backgroundTint="#8AB4F8"
-            app:tint="#101418" />
-    </FrameLayout>
+            android:orientation="vertical"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="24dp" />
+    </ScrollView>
 
-    <!-- Нижний ряд быстрых действий на ГЛУБИНЕ каталога (msg2359/2363): когда
-         открыта лента/жанр/страница книги, внизу всегда панель как на полке —
-         слева умная «Открыть книгу: <последняя>», правее «Библиотека» (одно
-         касание до полки, минуя многоуровневый «назад»). В корне «Мои каталоги»
-         панель скрыта (там домой уводит «←», а внизу — FAB «Добавить каталог»);
-         visibility ряда и кнопок ставит код (updateBottomBar). -->
+    <!-- Нижний ряд быстрых действий каталога на ВСЕХ уровнях, включая корень
+         «Мои каталоги» (msg2371): панель как на полке — слева умная «Открыть
+         книгу: <последняя>», правее «Библиотека» (одно касание до полки с любого
+         уровня, минуя многоуровневый «назад»). В корне это тот же ряд — больше
+         нет ни FAB, ни особого состояния; видимость левой кнопки (нет последней
+         книги — скрыта) ставит код (updateBottomBar). -->
     <LinearLayout
         android:id="@+id/bottomBar"
         android:layout_width="match_parent"
@@ -115,8 +97,7 @@
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="3dp"
-        android:paddingEnd="3dp"
-        android:visibility="gone">
+        android:paddingEnd="3dp">
 
         <Button
             android:id="@+id/btnCatContinue"
