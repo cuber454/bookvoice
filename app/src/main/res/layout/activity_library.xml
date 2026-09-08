@@ -87,31 +87,52 @@
         android:paddingBottom="8dp"
         android:scrollbars="vertical" />
 
-    <!-- Быстрый вход в последнюю книгу (msg646/649), msg1974: перенесена вниз,
-         под список, — Сергей пользуется режимом «касание-обзор» и водит пальцем,
-         а при удержании телефона палец лежит внизу: кнопка всегда на одном месте
-         нижней части экрана, независимо от длины списка. msg1938: кнопка умная —
-         код ставит текст «Открыть книгу: <книга>» (msg2108, раньше «Продолжить»),
-         чтобы было слышно, куда ведёт; нет доступной последней книги — кнопка
-         скрыта совсем (visibility ставит код). По умолчанию gone: до первого
-         refresh пустая кнопка в a11y-дереве не висит. -->
-    <Button
-        android:id="@+id/btnLast"
-        style="?attr/materialButtonOutlinedStyle"
+    <!-- Нижний ряд быстрых действий (msg2351/2355): слева — вход в последнюю
+         книгу, правее — «Каталоги». msg1974: Сергей водит пальцем внизу
+         (касание-обзор), ряд всегда на одном месте нижней части экрана,
+         независимо от длины списка.
+         btnLast (msg646/649, msg1938): умная кнопка — код ставит текст
+         «Открыть книгу: <книга>» (msg2108, раньше «Продолжить»), чтобы было
+         слышно, куда ведёт; нет доступной последней книги — скрыта совсем
+         (visibility ставит код). По умолчанию gone: до первого refresh пустая
+         кнопка в a11y-дереве не висит.
+         btnCatalogs: быстрый вход в окно «Каталоги» поверх полки — ровно тот же
+         переход, что пункт «Каталоги» в «⋮» полки; видна ВСЕГДА (пустая полка —
+         логично сразу идти за книгой). -->
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="58dp"
+        android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
-        android:layout_marginStart="3dp"
-        android:layout_marginEnd="3dp"
-        android:ellipsize="end"
-        android:gravity="center"
-        android:maxLines="1"
-        android:text="@string/continue_last"
-        android:textSize="17sp"
-        android:visibility="gone"
-        app:autoSizeTextType="uniform"
-        app:autoSizeMinTextSize="10sp"
-        app:autoSizeMaxTextSize="17sp"
-        app:autoSizeStepGranularity="1sp" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="3dp"
+        android:paddingEnd="3dp">
+
+        <Button
+            android:id="@+id/btnLast"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="58dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:gravity="center"
+            android:maxLines="1"
+            android:text="@string/continue_last"
+            android:textSize="17sp"
+            android:visibility="gone"
+            app:autoSizeTextType="uniform"
+            app:autoSizeMinTextSize="10sp"
+            app:autoSizeMaxTextSize="17sp"
+            app:autoSizeStepGranularity="1sp" />
+
+        <Button
+            android:id="@+id/btnCatalogs"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="58dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/catalog_title"
+            android:textSize="17sp" />
+    </LinearLayout>
 
 </LinearLayout>

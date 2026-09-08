@@ -130,6 +130,11 @@ class LibraryActivity(private val act: SectionActivity) {
         // Все остальные действия (добавить/сканировать/сортировать/вид) живут
         // в меню «Ещё» — короткий ряд не теснится и не перегружен.
         binding.btnLast.setOnClickListener { openLastBook() }
+        // msg2351/2355: кнопка «Каталоги» правее от «Открыть книгу» — быстрый
+        // вход в окно каталогов поверх полки (тот же переход, что пункт «⋮»).
+        binding.btnCatalogs.setOnClickListener {
+            startActivity(Intent(act, CatalogWindowActivity::class.java))
+        }
         binding.btnMore.contentDescription = getString(R.string.lib_more)
         binding.btnMore.setOnClickListener { showMoreMenu() }
 
@@ -488,6 +493,7 @@ class LibraryActivity(private val act: SectionActivity) {
         else View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
         binding.filterBar.importantForAccessibility = mode
         binding.btnLast.importantForAccessibility = mode
+        binding.btnCatalogs.importantForAccessibility = mode
         binding.btnMore.importantForAccessibility = mode
         binding.bookList.importantForAccessibility = mode
         binding.tvEmpty.importantForAccessibility = mode
