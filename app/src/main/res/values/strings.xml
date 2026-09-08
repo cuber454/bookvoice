@@ -347,9 +347,13 @@
     <string name="step_paragraph_value">абзацам</string>
     <string name="step_chapter_value">главам</string>
 
-    <!-- 0.3.37: по каким уровням FB2 шагают кнопки «Предыдущая/Следующая глава». -->
+    <!-- 0.3.37: по чём шагают кнопки «Предыдущая/Следующая глава». Режимы
+         sent/paragraph (msg2531/2539) листают по предложениям/абзацам мелким шагом,
+         major/chapters/all — скачком по узлам разметки FB2. -->
     <string name="ch_nav_title">Кнопки глав шагают</string>
     <string name="ch_nav_dialog">По чём шагают «Предыдущая» и «Следующая глава»</string>
+    <string name="ch_nav_sent">По предложениям</string>
+    <string name="ch_nav_paragraph">По абзацам</string>
     <string name="ch_nav_major">По крупным разделам</string>
     <string name="ch_nav_chapters">По главам</string>
     <string name="ch_nav_all">По всем заголовкам</string>

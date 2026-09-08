@@ -248,8 +248,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.btnPlayPause.setOnClickListener { togglePlay() }
         binding.btnPrevSentence.setOnClickListener { stepMove(-1) }
         binding.btnNextSentence.setOnClickListener { stepMove(+1) }
-        binding.btnPrevChapter.setOnClickListener { moveByChapter(-1) }
-        binding.btnNextChapter.setOnClickListener { moveByChapter(+1) }
+        binding.btnPrevChapter.setOnClickListener { chapterNavMove(-1) }
+        binding.btnNextChapter.setOnClickListener { chapterNavMove(+1) }
         // Кнопки скорости (#58): шаг ±0.1, меняют темп на лету.
         binding.btnSpeedDown.setOnClickListener { nudgeSpeed(-0.1f) }
         binding.btnSpeedUp.setOnClickListener { nudgeSpeed(+0.1f) }
@@ -872,8 +872,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         when (act) {
             G_PREV_SENT -> jumpAndAnnounce { moveBySentence(-1) }
             G_NEXT_SENT -> jumpAndAnnounce { moveBySentence(+1) }
-            G_PREV_CH -> jumpAndAnnounce { moveByChapter(-1) }
-            G_NEXT_CH -> jumpAndAnnounce { moveByChapter(+1) }
+            G_PREV_CH -> jumpAndAnnounce { chapterNavMove(-1) }
+            G_NEXT_CH -> jumpAndAnnounce { chapterNavMove(+1) }
             G_PLAY -> togglePlay()
             G_PAUSE -> if (playing) pausePlayback(keepFocus = true)
             G_REPEAT -> startSpeakingCurrent()
@@ -965,13 +965,19 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  (настройка «Кнопки глав», 0.3.37). Фильтрует плоский список глав по
      *  разметке FB2: [CH_NAV_MAJOR] — только начала крупных разделов (parts),
      *  [CH_NAV_CHAPTERS] — главы без вложенных подразделов, [CH_NAV_ALL] —
-     *  по всем (по умолчанию, поведение прежнее). Для TXT/EPUB иерархии нет —
-     *  все три режима дают полный список. */
+     *  по всем (по умолчанию, поведение прежнее). Мелкие режимы [CH_NAV_SENT]/
+     *  [CH_NAV_PARAGRAPH] (msg2539) сюда не доходят — кнопки и свайп-глава
+     *  перехватывает chapterNavMove; если кто-то всё же зовёт moveByChapter при
+     *  мелком режиме (например шаг «Глава» у «Пред./След.»), ведём себя как
+     *  [CH_NAV_ALL] — полный список. Для TXT/EPUB иерархии нет — все режимы
+     *  дают полный список. */
     private fun chapterStopIndexes(): IntArray {
         val bk = book ?: return intArrayOf()
         val mode = prefs.getString(KEY_CH_NAV, CH_NAV_ALL)
         val size = bk.chapters.size
-        if (mode == CH_NAV_ALL) return IntArray(size) { it }
+        if (mode == CH_NAV_ALL || mode == CH_NAV_SENT || mode == CH_NAV_PARAGRAPH) {
+            return IntArray(size) { it }
+        }
         val out = ArrayList<Int>(size)
         for (i in 0 until size) {
             val ch = bk.chapters[i]
@@ -999,6 +1005,23 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
     }
 
+    /** Режим «Кнопки глав шагают» — что листают кнопки «◀ Глава/Глава ▶»
+     *  (настройка KEY_CH_NAV). Default CH_NAV_ALL — как раньше. */
+    private fun chNavMode(): String =
+        prefs.getString(KEY_CH_NAV, CH_NAV_ALL) ?: CH_NAV_ALL
+
+    /** Кнопки «◀ Глава/Глава ▶» идут по режиму «Кнопки глав шагают» (msg2531/2539):
+     *  выбрано «по предложениям»/«по абзацам» — листают мелким шагом, как
+     *  «Пред./След.» в том же режиме (moveBySentence/moveByParagraph); остальные
+     *  режимы — скачком по главам/разделам/заголовкам (moveByChapter). */
+    private fun chapterNavMove(delta: Int) {
+        when (chNavMode()) {
+            CH_NAV_SENT -> moveBySentence(delta)
+            CH_NAV_PARAGRAPH -> moveByParagraph(delta)
+            else -> moveByChapter(delta)
+        }
+    }
+
     /** Имена кнопок «Пред.»/«След.» для скринридера следуют выбранному шагу
      *  (msg2471): предложение → «Предыдущее/Следующее предложение», абзац →
      *  «Предыдущий/Следующий абзац», глава → «Предыдущая/Следующая глава».
@@ -1016,13 +1039,17 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     }
 
     /** Имена кнопок «◀ Глава/Глава ▶» для скринридера следуют режиму «Кнопки глав
-     *  шагают» (msg2531/2535): по главам → «Предыдущая/Следующая глава», по крупным
-     *  разделам → «…раздел», по всем заголовкам → «…заголовок». Раньше имя всегда
-     *  было «глава», хотя сами кнопки при режимах major/all прыгают по разделам и
-     *  заголовкам — скринридер говорил не то, куда реально ведёт переход.
+     *  шагают» (msg2531/2535/2539): по предложениям → «…предложение», по абзацам →
+     *  «…абзац», по главам → «Предыдущая/Следующая глава», по крупным разделам →
+     *  «…раздел», по всем заголовкам → «…заголовок». Раньше имя всегда было
+     *  «глава», хотя сами кнопки при режимах major/all прыгают по разделам и
+     *  заголовкам, а при sent/paragraph листают по предложениям/абзацам —
+     *  скринридер говорил не то, куда реально ведёт переход.
      *  Вызывается в onStart вместе с updateSentenceButtonNames. */
     private fun updateChapterButtonNames() {
-        val (prev, next) = when (prefs.getString(KEY_CH_NAV, CH_NAV_ALL)) {
+        val (prev, next) = when (chNavMode()) {
+            CH_NAV_SENT -> R.string.prev_sentence to R.string.next_sentence
+            CH_NAV_PARAGRAPH -> R.string.prev_paragraph to R.string.next_paragraph
             CH_NAV_MAJOR -> R.string.prev_section to R.string.next_section
             CH_NAV_CHAPTERS -> R.string.prev_chapter to R.string.next_chapter
             else -> R.string.prev_header to R.string.next_header
@@ -2415,9 +2442,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val STEP_SENTENCE = "sentence"
         internal const val STEP_PARAGRAPH = "paragraph"
         internal const val STEP_CHAPTER = "chapter"
-        // «Кнопки глав шагают» (0.3.37): по каким уровням разметки FB2 ходит
-        // «Предыдущая/Следующая глава». Default CH_NAV_ALL — как раньше.
+        // «Кнопки глав шагают» (0.3.37): по чём ходит «Предыдущая/Следующая глава».
+        // Default CH_NAV_ALL — как раньше. Режимы sent/paragraph (msg2531/2539) —
+        // мелкий шаг: кнопки листают по предложениям/абзацам, как «Пред./След.»;
+        // major/chapters/all — скачок по узлам разметки FB2 (см. chapterStopIndexes).
         internal const val KEY_CH_NAV = "ch_nav"
+        internal const val CH_NAV_SENT = "sentence"
+        internal const val CH_NAV_PARAGRAPH = "paragraph"
         internal const val CH_NAV_MAJOR = "major"
         internal const val CH_NAV_CHAPTERS = "chapters"
         internal const val CH_NAV_ALL = "all"

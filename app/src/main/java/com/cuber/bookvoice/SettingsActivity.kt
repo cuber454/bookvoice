@@ -628,9 +628,10 @@ class SettingsActivity(private val act: SectionActivity) {
                 .setNegativeButton(R.string.toc_close, null)
                 .show()
         }
-        // «Кнопки глав шагают» (0.3.37): по каким уровням FB2 переходят
-        // «Предыдущая/Следующая глава» — по крупным разделам / по главам /
-        // по всем заголовкам. Для TXT/EPUB иерархии нет, режим не влияет.
+        // «Кнопки глав шагают» (0.3.37; msg2531/2539): по чём переходят
+        // «Предыдущая/Следующая глава». Мелкий шаг — по предложениям/абзацам,
+        // скачок — по крупным разделам / по главам / по всем заголовкам.
+        // Для TXT/EPUB иерархии нет, скачковые режимы не влияют (полный список глав).
         chNavRow = addValueButton { pickChapterNav() }
         addGestureRows()
         // msg2527: настройки кнопок гарнитуры („назад/вперёд“) вынесены в подраздел —
@@ -834,10 +835,14 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
-    /** Диалог: по каким уровням разметки FB2 шагают «Предыдущая/Следующая глава»
-     *  (0.3.37). Три режима — см. MainActivity.chapterStopIndexes. */
+    /** Диалог: по чём шагают «Предыдущая/Следующая глава» (0.3.37; мелкие режимы
+     *  sent/paragraph добавлены msg2531/2539). Пять режимов: по предложениям и по
+     *  абзацам — мелкий шаг (MainActivity.chapterNavMove), major/chapters/all —
+     *  скачок по узлам разметки FB2 (MainActivity.chapterStopIndexes). */
     private fun pickChapterNav() {
         val values = arrayOf(
+            MainActivity.CH_NAV_SENT,
+            MainActivity.CH_NAV_PARAGRAPH,
             MainActivity.CH_NAV_MAJOR,
             MainActivity.CH_NAV_CHAPTERS,
             MainActivity.CH_NAV_ALL,
@@ -846,6 +851,8 @@ class SettingsActivity(private val act: SectionActivity) {
             .setTitle(R.string.ch_nav_dialog)
             .setSingleChoiceItems(
                 arrayOf(
+                    getString(R.string.ch_nav_sent),
+                    getString(R.string.ch_nav_paragraph),
                     getString(R.string.ch_nav_major),
                     getString(R.string.ch_nav_chapters),
                     getString(R.string.ch_nav_all),
@@ -863,6 +870,8 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Название выбранного шага глав — для строки-резюме. */
     private fun chNavLabel(): String = getString(
         when (prefs.getString(MainActivity.KEY_CH_NAV, MainActivity.CH_NAV_ALL)) {
+            MainActivity.CH_NAV_SENT -> R.string.ch_nav_sent
+            MainActivity.CH_NAV_PARAGRAPH -> R.string.ch_nav_paragraph
             MainActivity.CH_NAV_MAJOR -> R.string.ch_nav_major
             MainActivity.CH_NAV_CHAPTERS -> R.string.ch_nav_chapters
             else -> R.string.ch_nav_all
