@@ -50,9 +50,15 @@
     <string name="status_finished">дочитана</string>
     <string name="status_finished_toggle">Отметить дочитанной</string>
     <string name="status_reading_toggle">Вернуть в читаемые</string>
+    <!-- «Избранное» (msg2555): пометка книги, не статус. fav_label — метка в
+         строке списка, fav_added/fav_removed — озвучка после переключения. -->
+    <string name="fav_label">в избранном</string>
+    <string name="fav_added">Добавлена в избранное</string>
+    <string name="fav_removed">Убрана из избранного</string>
     <string name="lib_filter_reading">Читаю</string>
     <string name="lib_filter_new">Новые</string>
     <string name="lib_filter_finished">Прочитанные</string>
+    <string name="lib_filter_fav">Избранное</string>
     <string name="lib_filter_all">Все</string>
     <string name="lib_filter_empty">Книг в этой категории пока нет.</string>
 
@@ -383,6 +389,8 @@
     <string name="app_exit">Выход из приложения</string>
 
     <string name="library_menu_share">Поделиться файлом книги</string>
+    <string name="library_menu_fav">В избранное</string>
+    <string name="library_menu_unfav">Убрать из избранного</string>
     <string name="library_menu_finish">Отметить дочитанной</string>
     <string name="library_menu_unfinish">Вернуть в читаемые</string>
     <string name="library_menu_info">Информация о книге</string>

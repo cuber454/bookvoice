@@ -67,7 +67,8 @@ class LibraryActivity(private val act: SectionActivity) {
     private var launchWasExternal = false
 
     // Фильтр списка по статусу (msg643): 0..2 — конкретный статус из
-    // BookRecord, FILTER_ALL — показывать всё. Выбранный фильтр помним в prefs.
+    // BookRecord, FILTER_ALL — показывать всё, FILTER_FAV — избранное (msg2555).
+    // Выбранный фильтр помним в prefs.
     private var filterMode = FILTER_ALL
 
     /** Текущий список полки из последнего refresh() — по нему ищем строку книги
@@ -527,11 +528,12 @@ class LibraryActivity(private val act: SectionActivity) {
         val resolver = treeResolver()
         val all = if (resolver != null) mergeSameFileCopies(resolver) else all0
         // Фильтр по статусу (msg643): «Все» — без фильтра, конкретный статус —
-        // только книги с ним. Сортировка применяется уже к отфильтрованному списку.
-        val shown = if (filterMode == FILTER_ALL) {
-            all
-        } else {
-            all.filter { it.status == filterMode }
+        // только книги с ним; «Избранное» (msg2555) — по флагу favorite, книги
+        // любого статуса. Сортировка применяется уже к отфильтрованному списку.
+        val shown = when (filterMode) {
+            FILTER_ALL -> all
+            FILTER_FAV -> all.filter { it.favorite }
+            else -> all.filter { it.status == filterMode }
         }
         // Сортировка «недочитанные сверху» убрана (msg646/649): статус теперь
         // разводят вкладки-фильтры сверху, а не сортировка. Остались по названию,
@@ -581,8 +583,10 @@ class LibraryActivity(private val act: SectionActivity) {
         val meta = ArrayList<String>()
         rec.author?.takeIf { it.isNotBlank() }?.let { meta.add(it) }
         // Статус — только в «Все»: в отфильтрованном списке он одинаков у каждой
-        // строки и только засоряет озвучку. Прогресс оставляем везде.
+        // строки и только засоряет озвучку. Прогресс оставляем везде. Метку
+        // «в избранном» показываем вне вкладки «Избранное» — там она у всех.
         if (filterMode == FILTER_ALL) meta.add(statusLabel(rec.status))
+        if (rec.favorite && filterMode != FILTER_FAV) meta.add(getString(R.string.fav_label))
         if (rec.lastOpenedAt > 0L) progressText(rec)?.let { meta.add(it) }
         return if (meta.isEmpty()) {
             rec.displayTitle
@@ -723,11 +727,10 @@ class LibraryActivity(private val act: SectionActivity) {
      *  (msg656). Статус, как и раньше, остаётся в полном списке. */
     private fun cardText(rec: BookRecord): String {
         val author = rec.author?.takeIf { it.isNotBlank() }
-        val base = if (author == null) rec.displayTitle else rec.displayTitle + "\n" + author
-        if (rec.lastOpenedAt > 0L) {
-            progressText(rec)?.let { return base + "\n" + it }
-        }
-        return base
+        val base = StringBuilder(if (author == null) rec.displayTitle else rec.displayTitle + "\n" + author)
+        if (rec.lastOpenedAt > 0L) progressText(rec)?.let { base.append('\n').append(it) }
+        if (rec.favorite && filterMode != FILTER_FAV) base.append('\n').append(getString(R.string.fav_label))
+        return base.toString()
     }
 
     // ---------------- Автобэкап (#100) ----------------
@@ -1046,12 +1049,13 @@ class LibraryActivity(private val act: SectionActivity) {
 
     // ---------------- Долгое нажатие на книгу (меню) ----------------
 
-    /** Меню книги: поделиться, статус, информация, удалить. Короткий тап —
-     *  открывает книгу, длинный — это меню. */
+    /** Меню книги: поделиться, избранное, статус, информация, удалить.
+     *  Короткий тап — открывает книгу, длинный — это меню. */
     private fun showBookMenu(rec: BookRecord) {
         val finished = rec.status == BookRecord.STATUS_FINISHED
         val opts = arrayOf(
             getString(R.string.library_menu_share),
+            getString(if (rec.favorite) R.string.library_menu_unfav else R.string.library_menu_fav),
             getString(if (finished) R.string.library_menu_unfinish else R.string.library_menu_finish),
             getString(R.string.library_menu_info),
             getString(R.string.library_menu_delete),
@@ -1061,9 +1065,10 @@ class LibraryActivity(private val act: SectionActivity) {
             .setItems(opts) { _, which ->
                 when (which) {
                     0 -> shareBook(rec)
-                    1 -> toggleFinished(rec, finished)
-                    2 -> showBookInfo(rec)
-                    3 -> confirmDelete(rec)
+                    1 -> toggleFavorite(rec)
+                    2 -> toggleFinished(rec, finished)
+                    3 -> showBookInfo(rec)
+                    4 -> confirmDelete(rec)
                 }
             }
             // msg1977: «Закрыть» убрана — жест «назад»/тап мимо и так закрывает
@@ -1102,6 +1107,17 @@ class LibraryActivity(private val act: SectionActivity) {
         name.endsWith(".xml", true) -> "text/xml"
         name.endsWith(".zip", true) -> "application/zip"
         else -> "application/octet-stream"
+    }
+
+    /** Поставить/снять пометку «в избранном» (msg2555). Избранное — флаг,
+     *  не статус: книга остаётся в своей статусной вкладке и добавляется/уходит
+     *  из вкладки «Избранное». На полке «Избранное» снятие убирает строку из
+     *  списка сразу — refresh() перестроит (как снятие «дочитана» в её вкладке). */
+    private fun toggleFavorite(rec: BookRecord) {
+        val fav = !rec.favorite
+        BookStore.upsert(act, rec.copy(favorite = fav))
+        toast(getString(if (fav) R.string.fav_added else R.string.fav_removed))
+        refresh()
     }
 
     private fun toggleFinished(rec: BookRecord, finished: Boolean) {
@@ -1434,14 +1450,20 @@ class LibraryActivity(private val act: SectionActivity) {
         // internal: экран настроек сравнивает с ней (FILTER_ALL неснимаема) и
         // хранит активный фильтр живой Библиотеки.
         internal const val FILTER_ALL = 3
+        // msg2555: «Избранное» — не статус, а пользовательский флаг favorite
+        // в записи книги; фильтр по нему, поэтому у вкладки отдельный id (он не
+        // пересекается со STATUS_*). Скрывается/переставляется как остальные,
+        // кроме неснимаемой «Все».
+        internal const val FILTER_FAV = 4
 
         internal const val KEY_TABS_ORDER = "lib_tabs_order"
         internal const val KEY_TABS_HIDDEN = "lib_tabs_hidden"
 
-        /** Все вкладки в порядке по умолчанию. «Все» (FILTER_ALL) — неснимаема. */
+        /** Все вкладки в порядке по умолчанию. «Все» (FILTER_ALL) — неснимаема.
+         *  «Избранное» (FILTER_FAV) — перед «Все», по умолчанию видна. */
         internal val TAB_MODES = intArrayOf(
             BookRecord.STATUS_READING, BookRecord.STATUS_NEW,
-            BookRecord.STATUS_FINISHED, FILTER_ALL,
+            BookRecord.STATUS_FINISHED, FILTER_FAV, FILTER_ALL,
         )
 
         /** Подпись вкладки-фильтра по id режима (не по позиции в списке). */
@@ -1449,6 +1471,7 @@ class LibraryActivity(private val act: SectionActivity) {
             BookRecord.STATUS_READING -> R.string.lib_filter_reading
             BookRecord.STATUS_NEW -> R.string.lib_filter_new
             BookRecord.STATUS_FINISHED -> R.string.lib_filter_finished
+            FILTER_FAV -> R.string.lib_filter_fav
             else -> R.string.lib_filter_all
         }
 

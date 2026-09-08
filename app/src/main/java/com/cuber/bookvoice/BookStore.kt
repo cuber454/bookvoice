@@ -35,6 +35,10 @@ data class BookRecord(
     // при открытии/паузе — библиотека только читает готовое значение и озвучивает
     // его, не открывая файл.
     val readPct: Int = 0,
+    // «Избранное» (msg2555): пользовательская пометка, НЕ статус — книга может
+    // стоять в любой статусной вкладке и одновременно в «Избранном». Вкладка
+    // «Избранное» фильтрует по этому флагу; ставится/снимается из меню книги.
+    val favorite: Boolean = false,
 ) {
     val displayTitle: String get() = title?.takeIf { it.isNotBlank() } ?: name
 
@@ -60,6 +64,7 @@ data class BookRecord(
             chapter = o.optInt("chapter"),
             sentence = o.optInt("sentence"),
             readPct = o.optInt("readPct"),
+            favorite = o.optBoolean("favorite"),
         )
     }
 
@@ -79,6 +84,7 @@ data class BookRecord(
         put("chapter", chapter)
         put("sentence", sentence)
         put("readPct", readPct)
+        put("favorite", favorite)
     }
 }
 
@@ -153,13 +159,16 @@ object BookStore {
 
     /** Какая из двух записей-дублей одной книги ценнее для сохранения.
      *  Сначала прогресс чтения (статус, проценты, позиция — см. [dupRank]);
-     *  при равенстве — запись, связанная с каталогом ([sourceUrl] есть: каталог
-     *  узнаёт книгу как скачанную, #100); дальше — открывавшуюся позже; и лишь
-     *  потом — первую добавленную (исходный файл без « (n)»). */
+     *  затем избранное (msg2555): пометку «в избранном» пользователь ставил
+     *  руками, дубль её потерять не должен; при равенстве — запись, связанная
+     *  с каталогом ([sourceUrl] есть: каталог узнаёт книгу как скачанную, #100);
+     *  дальше — открывавшуюся позже; и лишь потом — первую добавленную
+     *  (исходный файл без « (n)»). */
     fun betterForKeep(a: BookRecord, b: BookRecord): BookRecord {
         val pa = dupRank(a)
         val pb = dupRank(b)
         if (pa != pb) return if (pa > pb) a else b
+        if (a.favorite != b.favorite) return if (a.favorite) a else b
         val sa = !a.sourceUrl.isNullOrBlank()
         val sb = !b.sourceUrl.isNullOrBlank()
         if (sa != sb) return if (sa) a else b
