@@ -85,6 +85,9 @@ class SettingsActivity(private val act: SectionActivity) {
     // Строки-резюме кнопок гарнитуры „назад/вперёд“ (msg2136).
     private var headsetPrevRow: Button? = null
     private var headsetNextRow: Button? = null
+    // msg2527: настройки кнопок гарнитуры собраны в подраздел «Управления» —
+    // в списке раздела строка-переход, открывающая отдельный экран.
+    private var headsetGroupRow: Button? = null
     // Строки-резюме блока «После звонка» (#98).
     private var afterCallRow: Button? = null
     private var afterCallRewindRow: Button? = null
@@ -101,6 +104,11 @@ class SettingsActivity(private val act: SectionActivity) {
 
     // Открытый раздел (null = экран списка групп).
     private var group: Group? = null
+
+    // msg2527: открыт подраздел «Настройки кнопок гарнитуры» внутри «Управления»
+    // (двухуровневая навигация: корень → раздел → подраздел). Пока true, «назад»
+    // ведёт в список «Управления», а не в корень.
+    private var headsetSubOpen = false
 
     // Фокус на контент уже поставлен после первого показа (вход по нижней полосе
     // или из читалки). Дальше возвраты из пикеров фокус не трогают (msg1652).
@@ -209,8 +217,26 @@ class SettingsActivity(private val act: SectionActivity) {
         // уводит только rootBack из КОРНЯ. Здесь пишем точную ветку + время, чтобы
         // по логу понять: был ли group==null (состояние сбито) или пришло ДВА
         // back-события (две строки подряд с интервалом <0.5с).
-        Diag.log(act, "nav", "Настройки: «назад», ${if (group == null) "В КОРНЕ (список разделов)" else "в разделе ${group!!.name}"}")
-        if (group != null) {
+        // msg2527: третий уровень — подраздел кнопок гарнитуры внутри «Управления»:
+        // «назад» из него возвращает в список «Управления» (group снова START), а не в корень.
+        Diag.log(act, "nav", "Настройки: «назад», " + when {
+            headsetSubOpen -> "в подразделе кнопок гарнитуры (Управление)"
+            group == null -> "В КОРНЕ (список разделов)"
+            else -> "в разделе ${group!!.name}"
+        })
+        if (headsetSubOpen) {
+            headsetSubOpen = false
+            // msg2527: вернуться из подраздела в список «Управления». Перестроить
+            // раздел и поставить фокус на строку «Настройки кнопок гарнитуры»
+            // (как focusGroupButton после «назад» из раздела — msg1468). openGroup
+            // здесь не зовём: он объявляет заголовок «Управление» ещё раз.
+            binding.tvTitle.text = getString(Group.START.titleRes)
+            content().removeAllViews()
+            buildStartGroup()
+            refreshRows()
+            scrollTop()
+            headsetGroupRow?.let { TabNav.refocusAfterRebuild(binding.content, it) }
+        } else if (group != null) {
             val from = group
             group = null
             showMenu(from)
@@ -274,6 +300,10 @@ class SettingsActivity(private val act: SectionActivity) {
      *  на первый пункт убран; заголовок объявляем голосом — как сводку ленты в
      *  каталоге (announceFeed, msg1573). Фокус не тащим: он и так на заголовке. */
     private fun openGroup(g: Group) {
+        // Свежий вход в раздел всегда показывает его список, а не подраздел
+        // кнопок гарнитуры (msg2527): состояние подраздела живёт только между
+        // openHeadsetSub() и возвратом «назад» внутри «Управления».
+        headsetSubOpen = false
         group = g
         binding.tvTitle.text = getString(g.titleRes)
         content().removeAllViews()
@@ -459,10 +489,11 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
-    /** Строки кнопок гарнитуры „назад/вперёд“ (msg2136). Сразу после свайпов —
-     *  тоже «кнопки» управления чтением. У каждой кнопки свой выбор шага:
-     *  „Выключено“ / предложение / абзац / глава. msg2455: серая подсказка над
-     *  строками убрана — в разделе остаются только сами строки выбора. */
+    /** Строки кнопок гарнитуры „назад/вперёд“ (msg2136). msg2527: открываются
+     *  в подразделе «Настройки кнопок гарнитуры» (openHeadsetSub), не в общем
+     *  списке «Управления». У каждой кнопки свой выбор шага: „Выключено“ /
+     *  предложение / абзац / глава. msg2455: серая подсказка над строками убрана —
+     *  на экране остаются только сами строки выбора. */
     private fun addHeadsetRows() {
         headsetPrevRow = addValueButton {
             pickHeadset(MainActivity.KEY_HS_PREV)
@@ -602,8 +633,23 @@ class SettingsActivity(private val act: SectionActivity) {
         // по всем заголовкам. Для TXT/EPUB иерархии нет, режим не влияет.
         chNavRow = addValueButton { pickChapterNav() }
         addGestureRows()
-        // msg2136: кнопки гарнитуры — сразу после свайпов.
+        // msg2527: настройки кнопок гарнитуры („назад/вперёд“) вынесены в подраздел —
+        // в списке «Управления» остаётся строка-переход, открывающая подраздел
+        // (двухуровневая навигация, как из корня в раздел).
+        headsetGroupRow = addButton(getString(R.string.headset_group_title)) { openHeadsetSub() }
+    }
+
+    /** msg2527: открыть подраздел «Настройки кнопок гарнитуры» внутри «Управления».
+     *  Заголовок окна — имя подраздела, контент — только две строки кнопок гарнитуры.
+     *  Возврат «назад» ведёт в список «Управления» (onBackKey), а не в корень. */
+    private fun openHeadsetSub() {
+        headsetSubOpen = true
+        binding.tvTitle.text = getString(R.string.headset_group_title)
+        content().removeAllViews()
         addHeadsetRows()
+        refreshRows()
+        scrollTop()
+        binding.tvTitle.announceForAccessibility(getString(R.string.headset_group_title))
     }
 
     private fun buildLibraryGroup() {
