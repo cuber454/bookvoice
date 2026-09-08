@@ -214,6 +214,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
         installSwipe()
 
+        // msg2403/2415: «Голос чтения» в нижнем ряду и «Свернуть» в шторке.
+        // Открытая шторка держит нижние кнопки видимыми — скорость слышна на лету.
+        binding.btnVoice.setOnClickListener { toggleVoicePanel() }
+        binding.btnVoiceClose.setOnClickListener { hideVoicePanel() }
         binding.btnToc.setOnClickListener { showTocDialog() }
         // Поиск по книге: короткое нажатие — панель (поле, микрофон,
         // Найти/Назад/Далее/Закрыть); долгое — сразу голосовой ввод слова.
@@ -315,6 +319,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // что окнам-секциям (SectionActivity): явный OnBackPressedCallback.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // Открыта шторка голоса — «назад» сначала закрывает её.
+                if (voicePanelOpen()) {
+                    hideVoicePanel()
+                    return
+                }
                 // Открыта панель поиска — «назад» сначала закрывает её, а не
                 // выходит из книги (системная кнопка и жест работают одинаково).
                 if (book != null && searchPanelOpen()) {
@@ -1251,6 +1260,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  с фокусом в поле ввода. */
     private fun onSearchButtonTap() {
         if (book == null) return
+        // Поиск и шторка голоса одновременно не нужны.
+        if (voicePanelOpen()) hideVoicePanel()
         if (searchPanelOpen()) closeSearchPanel()
         else openSearchPanel(focusField = true)
     }
@@ -1262,6 +1273,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun searchPanelOpen(): Boolean =
         binding.searchPanel.visibility == View.VISIBLE
+
+    private fun voicePanelOpen(): Boolean =
+        binding.voicePanel.visibility == View.VISIBLE
 
     private fun openSearchPanel(focusField: Boolean) {
         if (book == null) return
@@ -1661,7 +1675,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         actions.add(getString(R.string.quotes_title) to {  // 0.3.44 (msg1092): Цитаты из читалки
             startActivity(Intent(this, QuotesActivity::class.java))
         })
-        actions.add(getString(R.string.voice_settings) to { showVoiceDialog() })  // 0.3.44 (msg1104): дубль.
+        actions.add(getString(R.string.voice_settings) to { toggleVoicePanel() })  // msg2403: та же шторка.
         actions.add(getString(R.string.app_exit) to { exitApp() })  // msg1278: последним.
         MaterialAlertDialogBuilder(this)
             // msg1687: заголовок «Действия» убран — звучал пунктом, но не нажимался.
@@ -2039,22 +2053,31 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { bottomMargin = dp2px(6f) }
 
-    /** «Голос чтения» в читалке (кнопка внизу и пункт меню «⋮», #1104): сначала
-     *  ползунки скорости/тона/громкости — как Настройки → «Голос» (#1141: после
-     *  #1102 их оставили только в настройках, вернул в окно читалки), затем галочка
-     *  «Запомнить для этой книги» (#102), когда книга открыта, и внизу двухшаговый
-     *  выбор движок → голоса, как кнопка «Голос и движок» в Настройках. */
-    private fun showVoiceDialog() {
+    // Включена ли в открытой шторке галочка «Запомнить для этой книги» — нужна
+    // при закрытии шторки, чтобы зафиксировать профиль книги.
+    private var voiceRememberChecked = false
+
+    /** «Голос чтения» (кнопка в нижнем ряду и пункт меню «⋮», #1104): открывает
+     *  ШТОРКУ voicePanel в верхней части читалки, а не всплывающее окно
+     *  (msg2403/2415). Содержимое прежнее — ползунки скорости/тона/громкости,
+     *  галочка «Запомнить для этой книги» (#102), двухшаговый выбор движок →
+     *  голоса. Нижний ряд «◀ Читать ▶» остаётся видимым: параметры меняются на
+     *  лету, новую скорость/голос слышно сразу, не закрывая настройки. */
+    private fun toggleVoicePanel() {
+        if (binding.voicePanel.visibility == View.VISIBLE) {
+            hideVoicePanel()
+            return
+        }
         if (!player.isReady) {
             toast("Движок синтеза речи ещё не готов, попробуйте через секунду")
             return
         }
-        val scroll = ScrollView(this)
-        val body = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp2px(4f), dp2px(8f), dp2px(4f), dp2px(8f))
-        }
-        scroll.addView(body)
+        // Шторка и поиск одновременно не нужны — закрываем панель поиска.
+        if (searchPanelOpen()) closeSearchPanel()
+        // Перестраиваем шторку из текущих значений при каждом открытии.
+        val body = binding.voiceBody
+        body.removeAllViews()
+        body.setPadding(dp2px(4f), dp2px(8f), dp2px(4f), dp2px(8f))
 
         // #102: «Запомнить для этой книги». Видна, когда открыта книга; включена —
         // если у книги уже есть запомненный голос/скорость.
@@ -2068,6 +2091,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 it.voiceEngine != null || it.voice != null || it.voiceSpeed != null
             } == true
         }
+        voiceRememberChecked = rememberCb.isChecked
 
         // Шаг 2 → к шагу 1: «← К выбору движка».
         val btnBack = Button(this).apply {
@@ -2112,7 +2136,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 return
             }
             // #102: с включённой галочкой глобальный движок не трогаем — выбранный
-            // уйдёт в запись книги при закрытии окна (persistPerBookProfile).
+            // уйдёт в запись книги при закрытии шторки (persistPerBookProfile).
             if (!rememberCb.isChecked) prefs.edit().putString(KEY_ENGINE, pkg).apply()
             voiceContainer.removeAllViews()
             voiceContainer.addView(TextView(this@MainActivity).apply {
@@ -2135,8 +2159,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
         // Ползунки — как Настройки → «Голос»: скорость, тон, громкость.
         // Скорость: при галочке «Запомнить для этой книги» глобальную не трогаем —
-        // книге зафиксируем текущую при закрытии окна (persistPerBookProfile), чтобы
-        // не писать library.json на каждый тик слайдера. Без галочки — как в настройках.
+        // книге зафиксируем текущую при закрытии шторки (persistPerBookProfile),
+        // чтобы не писать library.json на каждый тик слайдера. Без галочки — как
+        // в настройках.
         addRateSliderTo(body, R.string.speed_value, "Скорость", currentSpeed()) { v ->
             if (hasBook && rememberCb.isChecked) {
                 if (player.isReady) player.speed = v
@@ -2164,6 +2189,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         rememberRow.addView(rememberCb)
         body.addView(rememberRow)
         rememberCb.setOnCheckedChangeListener { _, checked ->
+            voiceRememberChecked = checked
             if (checked) {
                 persistPerBookProfile()
                 toast(getString(R.string.voice_book_saved))
@@ -2203,22 +2229,35 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         btnBack.setOnClickListener { showStep(1) }
         showStep(1)
 
-        val voiceDialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.voice_engine_value)
-            .setView(scroll)
-            .setNegativeButton(R.string.dialog_close, null)
-            .create()
-        // #102: закрыли окно с включённой галочкой — фиксируем профиль книги
-        // (движок/голос/текущую скорость). Скорость мог изменить слайдер в этом
-        // окне, поэтому обновляем подпись и статистику под новой скоростью книги.
-        voiceDialog.setOnDismissListener {
-            if (hasBook && rememberCb.isChecked) {
-                persistPerBookProfile()
-                refreshSpeedValue()
-                updateStats()
+        // Показываем шторку. Высоту ограничиваем снизу, чтобы не вытеснить нижний
+        // ряд «◀ Читать ▶»: больше 60% окна — контент уходит в скролл.
+        binding.voicePanel.visibility = View.VISIBLE
+        binding.voicePanel.post {
+            val maxH = (resources.displayMetrics.heightPixels * 0.6).toInt()
+            if (binding.voicePanel.height > maxH) {
+                binding.voicePanel.layoutParams =
+                    binding.voicePanel.layoutParams.apply { height = maxH }
             }
+            binding.tvVoiceTitle.announceForAccessibility(getString(R.string.voice_settings))
         }
-        voiceDialog.show()
+    }
+
+    /** Закрыть шторку голоса (кнопка «Свернуть», повторное нажатие «Голос»).
+     *  При включённой галочке «Запомнить для этой книги» фиксируем профиль книги
+     *  (движок/голос/скорость) — как раньше при закрытии диалога: скорость мог
+     *  изменить слайдер в шторке, поэтому обновляем подпись и статистику. */
+    private fun hideVoicePanel() {
+        if (binding.voicePanel.visibility != View.VISIBLE) return
+        binding.voicePanel.visibility = View.GONE
+        binding.voicePanel.layoutParams = binding.voicePanel.layoutParams.apply {
+            height = LinearLayout.LayoutParams.WRAP_CONTENT
+        }
+        if (book != null && voiceRememberChecked) {
+            persistPerBookProfile()
+            refreshSpeedValue()
+            updateStats()
+        }
+        voiceRememberChecked = false
     }
 
     private fun populateVoiceList(container: LinearLayout, rememberCb: CheckBox? = null) {

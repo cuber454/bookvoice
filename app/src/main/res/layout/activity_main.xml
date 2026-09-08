@@ -195,6 +195,67 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Шторка «Голос чтения» (msg2403/2415): настройки голоса в верхней части
+         экрана — НЕ поверх нижних кнопок. Нижний ряд «◀ Читать ▶» остаётся
+         доступным: запустил чтение и крутишь скорость/тон/громкость — слышно
+         сразу, на лету. Скрыта по умолчанию; открывает btnVoice в нижнем ряду и
+         пункт «Голос чтения» в ⋮-меню. Высоту шторки ограничивает код
+         (toggleVoicePanel), чтобы не вытеснить нижний ряд. -->
+    <LinearLayout
+        android:id="@+id/voicePanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#1A232B"
+        android:orientation="vertical"
+        android:paddingStart="4dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="4dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvVoiceTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:accessibilityHeading="true"
+                android:ellipsize="end"
+                android:focusable="true"
+                android:screenReaderFocusable="true"
+                android:maxLines="1"
+                android:text="@string/voice_settings"
+                android:textAppearance="?attr/textAppearanceTitleMedium"
+                android:textColor="#E8EAED" />
+
+            <Button
+                android:id="@+id/btnVoiceClose"
+                android:layout_width="wrap_content"
+                android:layout_height="44dp"
+                android:layout_marginStart="4dp"
+                android:minWidth="44dp"
+                android:text="@string/dialog_close"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/voiceScroll"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="vertical">
+
+            <LinearLayout
+                android:id="@+id/voiceBody"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+    </LinearLayout>
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/sentenceList"
         android:layout_width="match_parent"
@@ -295,14 +356,15 @@
         android:textAppearance="?attr/textAppearanceLabelMedium"
         android:textColor="#9AA0A6" />
 
-    <!-- msg2375/2383: кнопки «Отметить дочитанной» (btnStatus) и «Голос чтения»
-         (btnVoice) убраны с экрана — оба действия переехали в ⋮-меню читалки
-         (showMoreDialog: переключатель статуса + showVoiceDialog), их галочки в
-         Конструкторе экрана удалены.
+    <!-- msg2375: кнопка «Отметить дочитанной» (btnStatus) убрана с экрана —
+         действие переехало в ⋮-меню читалки (showMoreDialog), галочка в
+         Конструкторе экрана удалена.
          msg2399: чтобы низ экрана не пустовал, главный ряд управления чтением
          (◀ Пред / Читать / След ▶) перенесён в самый низ — как нижняя панель в
          других окнах. Выше остаются позиция, слайдер, скорость, главы,
-         «Прочитано, осталось». -->
+         «Прочитано, осталось». msg2415: кнопка «Голос чтения» (btnVoice)
+         вернулась четвёртой справа в этот нижний ряд — открывает шторку
+         voicePanel наверху, нижний ряд остаётся доступным. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -338,5 +400,21 @@
             android:contentDescription="@string/next_sentence"
             android:text="След. ▶"
             android:textSize="16sp" />
+
+        <!-- msg2415: кнопка «Голос чтения» — четвёртая в нижнем ряду, справа от
+             «След. ▶». Открывает шторку voicePanel наверху (скорость/тон/громкость,
+             выбор голоса), нижний ряд остаётся доступным — можно слушать новую
+             скорость чтения на лету. Подпись короткая «Голос», скринридеру —
+             полное имя через contentDescription. -->
+        <Button
+            android:id="@+id/btnVoice"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="64dp"
+            android:layout_margin="4dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/voice_settings"
+            android:text="Голос"
+            android:textSize="15sp" />
     </LinearLayout>
 </LinearLayout>
