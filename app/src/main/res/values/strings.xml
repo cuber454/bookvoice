@@ -38,7 +38,7 @@
     <string name="unsupported_format">Формат не поддерживается. BookVoice читает TXT, FB2, ZIP, EPUB и PDF.</string>
     <string name="pdf_no_text_layer">В этом PDF нет извлекаемого текста — похоже, это скан или картинки. Распознавание текста с картинок (OCR) пока не поддерживается.</string>
     <string name="pdf_encrypted">PDF защищён паролем — открыть его не получается.</string>
-    <string name="pdf_out_of_memory">PDF слишком тяжёлый — при разборе не хватило памяти. Обычно это большой скан-учебник без текста.</string>
+    <string name="pdf_out_of_memory">Не хватило памяти, чтобы разобрать этот PDF. Если в нём нет текста (скан) — читать его голосом нельзя. Если текст есть, сообщи разработчику — попробуем открыть иначе.</string>
     <string name="no_last_book">Последней книги ещё нет — сначала добавь книгу.</string>
     <string name="book_added">Книга добавлена.</string>
     <string name="sort_dialog">Сортировка книг</string>
