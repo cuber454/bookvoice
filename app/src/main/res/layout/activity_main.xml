@@ -276,11 +276,15 @@
         android:textAppearance="?attr/textAppearanceLabelMedium"
         android:textColor="#9AA0A6" />
 
+    <!-- msg2431: зону перемотки сделали выше (мин. 48dp), чтобы палец при
+         перемотке не соскальзывал на кнопки «Медленнее/Быстрее» под слайдером.
+         Полоса рисуется по центру выросшей зоны, касание ловит вся зона. -->
     <SeekBar
         android:id="@+id/seekProgress"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:contentDescription="@string/seek_progress"
+        android:minHeight="48dp"
         android:max="0"
         android:progress="0" />
 
@@ -321,6 +325,9 @@
             android:textSize="15sp" />
     </LinearLayout>
 
+    <!-- msg2431: кнопки глав короткие, со стрелками. Полные имена («Предыдущая
+         глава»/«Следующая глава») скринридеру даёт contentDescription — раньше их
+         читал длинный текст самой кнопки. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -333,7 +340,10 @@
             android:layout_height="48dp"
             android:layout_margin="4dp"
             android:layout_weight="1"
-            android:text="Предыдущая глава"
+            android:contentDescription="@string/prev_chapter"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="◀ Глава"
             android:textSize="15sp" />
 
         <Button
@@ -342,7 +352,10 @@
             android:layout_height="48dp"
             android:layout_margin="4dp"
             android:layout_weight="1"
-            android:text="Следующая глава"
+            android:contentDescription="@string/next_chapter"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Глава ▶"
             android:textSize="15sp" />
     </LinearLayout>
 
@@ -364,7 +377,11 @@
          других окнах. Выше остаются позиция, слайдер, скорость, главы,
          «Прочитано, осталось». msg2415: кнопка «Голос чтения» (btnVoice)
          вернулась четвёртой справа в этот нижний ряд — открывает шторку
-         voicePanel наверху, нижний ряд остаётся доступным. -->
+         voicePanel наверху, нижний ряд остаётся доступным. msg2431: подписи
+         ряда короткие и всегда в одну строку, без стрелок: «Пред.» / «Читать» /
+         «След.» / «Голос» — чтобы текст не переносился. Полные имена для
+         скринридера живут в contentDescription («Предыдущее предложение»,
+         «Следующее предложение», «Голос чтения»). -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -379,7 +396,9 @@
             android:layout_margin="4dp"
             android:layout_weight="1"
             android:contentDescription="@string/prev_sentence"
-            android:text="◀ Пред."
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Пред."
             android:textSize="16sp" />
 
         <Button
@@ -388,6 +407,8 @@
             android:layout_height="72dp"
             android:layout_margin="4dp"
             android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
             android:text="Читать"
             android:textSize="18sp" />
 
@@ -398,7 +419,9 @@
             android:layout_margin="4dp"
             android:layout_weight="1"
             android:contentDescription="@string/next_sentence"
-            android:text="След. ▶"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="След."
             android:textSize="16sp" />
 
         <!-- msg2415: кнопка «Голос чтения» — четвёртая в нижнем ряду, справа от
@@ -414,6 +437,8 @@
             android:layout_margin="4dp"
             android:layout_weight="1"
             android:contentDescription="@string/voice_settings"
+            android:ellipsize="end"
+            android:maxLines="1"
             android:text="Голос"
             android:textSize="15sp" />
     </LinearLayout>
