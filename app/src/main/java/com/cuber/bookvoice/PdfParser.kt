@@ -1,10 +1,12 @@
 package com.cuber.bookvoice
 
+import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
+import java.io.File
 
 /**
  * PDF-инструкции (msg727-752): читаем только текстовый слой, без OCR.
@@ -44,10 +46,29 @@ object PdfParser {
         "tip", "tips", "warning", "warnings", "caution", "danger", "note", "notes",
     )
 
-    fun parse(data: ByteArray): BookDocument? {
+    /** Разбор PDF из байтов (файл уже целиком в памяти). Для больших файлов не
+     *  годится — используй [parse] с File, чтобы не держать файл и распаковку
+     *  в куче (msg2619). */
+    fun parse(data: ByteArray): BookDocument? = tryParseDoc { PDDocument.load(data) }
+
+    /** Разбор PDF с диска (msg2619): файл не грузим в память целиком, а распакованные
+     *  потоки pdfbox пишет во временные файлы в [scratchDir], а не в кучу. Большой
+     *  текстовый учебник (39 МБ «Чалавек i свет») разворачивался в памяти и валил
+     *  приложение OOM — теперь ложится на диск. [scratchDir] — папка приложения
+     *  (cacheDir), гарантированно писучая. */
+    fun parse(file: File, scratchDir: File): BookDocument? = tryParseDoc {
+        val mem = MemoryUsageSetting.setupTempFileOnly().setTempDir(scratchDir)
+        PDDocument.load(file, mem)
+    }
+
+    /** Общий каркас: грузим документ, снимаем пустую защиту, строим главы. Любой
+     *  сбой — включая нехватку памяти (OutOfMemoryError — это Error, обычный catch
+     *  его не ловит, и падение роняло всё приложение) — отдаём причиной, а не
+     *  крашем. */
+    private inline fun tryParseDoc(load: () -> PDDocument): BookDocument? {
         var doc: PDDocument? = null
         return try {
-            doc = PDDocument.load(data)
+            doc = load()
             val pages = doc!!.documentCatalog.pages
             val n = pages.count
             if (n <= 0) return null
@@ -57,9 +78,7 @@ object PdfParser {
             }
             build(doc, n)
         } catch (_: OutOfMemoryError) {
-            // Большой скан-учебник: pdfbox не влез в кучу при разборе (msg2587).
-            // OutOfMemoryError — Error, обычный catch его не ловит, и падение
-            // роняло всё приложение. Не роняем: сообщаем причину.
+            // Большой PDF не влез в кучу при разборе (msg2587/2619). Не роняем.
             BookDocument(null, null, emptyList(), BookDocument.Unreadable.PDF_OUT_OF_MEMORY)
         } catch (_: Exception) {
             // Не открылся. Если файл действительно под паролем — скажем про это;

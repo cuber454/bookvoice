@@ -42,6 +42,7 @@ import com.cuber.bookvoice.databinding.ActivityMainBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
@@ -697,10 +698,39 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         } else {
             queryDisplayName(uri) ?: uri.lastPathSegment ?: "book"
         }
+        // PDF разбираем с диска (msg2619): читать большой файл в память целиком
+        // нельзя — он разворачивался и валил приложение OOM ещё до разбора.
+        if (name.lowercase(Locale.ROOT).endsWith(".pdf")) return readPdfDisk(uri)
         val bytes = openBytes(uri) ?: return null
         // «Показывать титульный лист» (#553): короткий блок в начале FB2 (титул,
         // копирайт) по умолчанию пропускается — книга начинается с первой главы.
         return BookParser.parse(name, bytes, prefs.getBoolean(KEY_SHOW_TITLE_PAGE, false))
+    }
+
+    /** PDF с диска (msg2619): файл не читаем в память целиком. Для content:// —
+     *  копируем поток во временный файл приложения; pdfbox грузит документ так,
+     *  что распакованные потоки пишутся во временные файлы (scratch в cacheDir),
+     *  а не в кучу. Исходный файл на полке не трогаем; временные файлы чистим
+     *  после разбора — текст к этому моменту уже в главах. */
+    private fun readPdfDisk(uri: Uri): BookDocument? {
+        val scratch = File(cacheDir, "pdf_scratch").apply { mkdirs() }
+        val src: File? = when {
+            uri.scheme == "file" -> uri.path?.let { File(it) }
+            else -> {
+                val tmp = File(scratch, "book.pdf")
+                val copied = contentResolver.openInputStream(uri)?.use { input ->
+                    tmp.outputStream().use { input.copyTo(it) }
+                } != null
+                if (copied) tmp else null
+            }
+        }
+        if (src == null) return null
+        return try {
+            PdfParser.parse(src, scratch)
+        } finally {
+            // Оригинал (file://) не здесь — чистим только свои временные файлы.
+            runCatching { scratch.listFiles()?.forEach { it.delete() } }
+        }
     }
 
     private fun openBytes(uri: Uri): ByteArray? {
