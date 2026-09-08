@@ -576,6 +576,19 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // регистрироваться и вести к очереди старта, а не глотаться молча.
         bookLoading = true
         binding.btnPlayPause.isEnabled = true
+        // msg2685: книга открывается дольше ~2с — один раз сообщаем голосом и
+        // лёгкой вибрацией, чтобы не казалось, что приложение зависло. Таймер
+        // одноразовый: книга готова раньше — объявление не звучит (bookLoading
+        // уже false); опцию можно выключить в Настройках → Чтение.
+        if (prefs.getBoolean(KEY_LONG_LOAD_ANNOUNCE, true)) {
+            handler.postDelayed({
+                if (!isFinishing && bookLoading) {
+                    Diag.log(this, "activity", "долгая загрузка (>2с) — объявляю (msg2685)")
+                    binding.tvHeader.announceForAccessibility(getString(R.string.long_load_speech))
+                    Vibra.confirm(this)
+                }
+            }, 2000)
+        }
         // msg1739: «Открываю…» убрано — скринридер читал тост при входе и перебивал
         // объявление названия книги (в FBReader при открытии нет «открытия», есть
         // название). Имя окна уже несёт название (restoreSession → setTitle).
@@ -2687,6 +2700,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_ENGINE = "engine"
         internal const val KEY_AUTO = "auto"
         internal const val KEY_AUTO_START = "auto_start"
+        // msg2685: сообщать голосом, если книга открывается дольше ~2 секунд.
+        internal const val KEY_LONG_LOAD_ANNOUNCE = "long_load_announce"
         internal const val KEY_AUTO_RESUME = "auto_resume"
         internal const val KEY_SAY_CHAPTER_START = "say_chapter_start"
         internal const val KEY_STEP = "step"

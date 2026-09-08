@@ -340,6 +340,8 @@ class SettingsActivity(private val act: SectionActivity) {
     private fun buildReadingGroup() {
         addCheck(R.string.chapter_start_title, MainActivity.KEY_SAY_CHAPTER_START, true)
         addCheck(R.string.auto_start_title, MainActivity.KEY_AUTO_START, true)
+        // msg2685: книга открывается дольше ~2с — сообщить об этом голосом.
+        addCheck(R.string.long_load_announce_title, MainActivity.KEY_LONG_LOAD_ANNOUNCE, true)
         addCheck(R.string.auto_resume_title, MainActivity.KEY_AUTO_RESUME, true)
         // msg2093: «Отступать назад при старте» — начать на N предложений раньше
         // места остановки, чтобы вспомнить, что было. Выключено по умолчанию.

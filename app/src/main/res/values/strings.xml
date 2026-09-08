@@ -166,6 +166,10 @@
     <string name="auto_start_title">Автоматически читать при открытии книги</string>
     <string name="auto_start_on">Авто-чтение включено</string>
     <string name="auto_start_off">Авто-чтение выключено</string>
+    <!-- msg2685: если книга открывается дольше ~2 секунд — сообщить голосом,
+         чтобы не казалось, что приложение зависло. -->
+    <string name="long_load_announce_title">Сообщать, если книга открывается долго</string>
+    <string name="long_load_speech">Книга большая, открывается. Подожди немного</string>
     <string name="auto_resume_title">Продолжать чтение после прерывания другим плеером</string>
     <string name="auto_resume_on">Автопродолжение после прерывания включено</string>
     <string name="auto_resume_off">Автопродолжение после прерывания выключено</string>
