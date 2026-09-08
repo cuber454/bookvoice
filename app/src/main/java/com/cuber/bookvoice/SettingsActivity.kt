@@ -116,7 +116,6 @@ class SettingsActivity(private val act: SectionActivity) {
         R.string.ui_stats_title to MainActivity.KEY_UI_STATS,
         R.string.ui_toc_title to MainActivity.KEY_UI_TOC,
         R.string.ui_bookmark_title to MainActivity.KEY_UI_BOOKMARK,
-        R.string.ui_voice_title to MainActivity.KEY_UI_VOICE,
         R.string.ui_speed_title to MainActivity.KEY_UI_SPEED,
         R.string.ui_search_title to MainActivity.KEY_UI_SEARCH,
         // #101: «⋮ Ещё» в читалке — меню «Действия» (вернуться на предыдущее место).

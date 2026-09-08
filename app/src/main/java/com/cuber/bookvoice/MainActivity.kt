@@ -214,7 +214,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
         installSwipe()
 
-        binding.btnVoice.setOnClickListener { showVoiceDialog() }
         binding.btnToc.setOnClickListener { showTocDialog() }
         // Поиск по книге: короткое нажатие — панель (поле, микрофон,
         // Найти/Назад/Далее/Закрыть); долгое — сразу голосовой ввод слова.
@@ -1036,7 +1035,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Кнопку поиска убрали в конструкторе экрана — прячем и открытую панель.
         if (!prefs.getBoolean(KEY_UI_SEARCH, true)) closeSearchPanel()
         show(KEY_UI_MORE, binding.btnMore)
-        show(KEY_UI_VOICE, binding.btnVoice)
         show(KEY_UI_SPEED, binding.speedRow)
     }
 
@@ -2324,7 +2322,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_UI_STATS = "ui_stats"
         internal const val KEY_UI_TOC = "ui_toc"
         internal const val KEY_UI_BOOKMARK = "ui_bookmark"
-        internal const val KEY_UI_VOICE = "ui_voice"
         internal const val KEY_UI_SPEED = "ui_speed_buttons"
         internal const val KEY_UI_SEARCH = "ui_search_button"
 
