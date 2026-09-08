@@ -1097,14 +1097,30 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     // ---------------- UI ----------------
 
+    /** displayTitle (msg2559) для окна ридера: ручное название из
+     *  «Переименовать» > метаданные > имя файла. Всё это хранит запись
+     *  библиотеки (BookRecord.displayTitle), а у открытого BookDocument только
+     *  title/author — поэтому запись ищем по currentUri; без записи (книга ещё
+     *  не в библиотеке) — title документа, затем имя файла. null — ни книги,
+     *  ни имени. */
+    private fun docDisplayTitle(): String? {
+        val u = currentUri
+        u?.let { BookStore.byUri(this, it)?.let { rec -> return rec.displayTitle } }
+        return book?.title?.takeIf { it.isNotBlank() }
+            ?: currentName?.takeIf { it.isNotBlank() }
+    }
+
     private fun refreshChrome() {
         val bk = book
         // displayTitle (msg2559): ручное название из «Переименовать» > метаданные
-        // > имя файла; для записи непусто, app_name остаётся только без книги.
+        // > имя файла; для открытой книги непусто, no_book остаётся только без
+        // книги и без имени.
+        val t = docDisplayTitle()
+        val author = bk?.author?.takeIf { it.isNotBlank() }
         val headerText = when {
-            bk == null -> getString(R.string.no_book)
-            bk.author.isNullOrBlank() -> bk.displayTitle
-            else -> "${bk.displayTitle} — ${bk.author}"
+            t == null -> getString(R.string.no_book)
+            author == null -> t
+            else -> "$t — $author"
         }
         binding.tvHeader.text = headerText
         // msg1736/1739: window title окна — по фактическому названию книги (для
@@ -1724,7 +1740,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             val bk = book
             val t = sentenceTextAt(bm.chapter, bm.sentence)
             val bookName = listOfNotNull(
-                bk?.displayTitle,
+                docDisplayTitle(),
                 bk?.author?.takeIf { it.isNotBlank() },
             ).joinToString(" — ")
             val sb = StringBuilder("“").append(if (t.isNotBlank()) t else bm.label).append("”")
@@ -2065,7 +2081,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private fun shareSelection(text: String) {
         val bk = book
         val bookName = listOfNotNull(
-            bk?.displayTitle,
+            docDisplayTitle(),
             bk?.author?.takeIf { it.isNotBlank() },
         ).joinToString(" — ")
         val sb = StringBuilder("“").append(text).append("”")
@@ -2079,7 +2095,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         QuoteStore.upsert(this, Quote(
             id = UUID.randomUUID().toString(),
             uri = u,
-            bookTitle = bk.displayTitle,
+            bookTitle = docDisplayTitle() ?: getString(R.string.app_name),
             author = bk.author?.takeIf { it.isNotBlank() },
             chapter = start.chapter,
             sentence = start.sentence,
