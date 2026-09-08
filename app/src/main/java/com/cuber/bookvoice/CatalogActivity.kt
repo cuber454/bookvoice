@@ -257,7 +257,11 @@ class CatalogActivity(private val act: SectionActivity) {
      *  (редизайн msg1676+: Каталоги — окно поверх, не вкладка). True — обработано
      *  (окно дальше не пускает). */
     fun onBackKey(): Boolean {
+        // msg2233: «назад» из каталога якобы выкидывает на полку/в книгу. Пишем
+        // глубину: 0 = корень окна (rootBack на полку), >0 = выход на уровень выше.
+        Diag.log(act, "nav", "Каталог: «назад», глубина = ${nav.size}")
         if (!goBack()) {
+            Diag.log(act, "nav", "Каталог: «назад» в корне — закрываю окно на полку")
             act.rootBack()
         }
         return true

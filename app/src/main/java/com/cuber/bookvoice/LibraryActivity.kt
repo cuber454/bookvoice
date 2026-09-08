@@ -206,6 +206,8 @@ class LibraryActivity(private val act: SectionActivity) {
         // перед finish(). Хост не finish'ится — вкладки живут под читалкой (L1b).
         val suppress = suppressNextAutoOpen
         suppressNextAutoOpen = false
+        Diag.log(act, "focus", "полка показана: авто-открытие ${if (suppress) "подавлено (окно-поверх/ридер закрылись)" else "не подавлено — возможен уход в книгу"}")
+
         // Запуск «Открыть с помощью» (msg748): внешний файл уже открыт в build(),
         // авто-возврат к последней книге сейчас не нужен — остальное (скан, полка)
         // выполняется как обычно.
