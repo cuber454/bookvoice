@@ -53,10 +53,15 @@ jobs:
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Gradle cache
+      - name: Gradle 9.1
+        # AGP 9 требует Gradle >= 9.1. Wrapper в репо остаётся 8.9 (правка
+        # gradle-wrapper.properties заблокирована политикой контейнера) —
+        # поэтому ставим нужную версию здесь и зовём `gradle` напрямую.
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.1'
 
       - name: Сборка
         env:
@@ -66,7 +71,7 @@ jobs:
           # (~1.5 GB RAM) — на раннере от них Metaspace OOM. Поднимаем только
           # для CI: у ubuntu-latest памяти достаточно.
           sed -i 's|^org.gradle.jvmargs=.*|org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8|' gradle.properties
-          ./gradlew --no-daemon :app:assembleDebug
+          gradle --no-daemon :app:assembleDebug
 
       - name: Версия из тега
         id: ver

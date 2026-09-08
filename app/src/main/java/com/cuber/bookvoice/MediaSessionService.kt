@@ -158,6 +158,20 @@ class MediaSessionService : Service() {
                 mediaButtonPendingIntent(1),
             )
         }
+        // msg2182: «назад»/«вперёд» в карточке шторки — те же media-button команды,
+        // что на гарнитуре (KEYCODE_MEDIA_PREVIOUS/NEXT): идут в MediaButtonReceiver →
+        // session callback onSkipToPrevious/Next → движок, листают по настройкам
+        // «Кнопка назад/вперёд». Один путь для всех устройств ввода — не разойдутся.
+        val prevAction = NotificationCompat.Action(
+            android.R.drawable.ic_media_previous,
+            "Назад",
+            mediaButtonPendingIntent(2, KeyEvent.KEYCODE_MEDIA_PREVIOUS),
+        )
+        val nextAction = NotificationCompat.Action(
+            android.R.drawable.ic_media_next,
+            "Вперёд",
+            mediaButtonPendingIntent(3, KeyEvent.KEYCODE_MEDIA_NEXT),
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(bookTitle ?: "BookVoice")
@@ -166,11 +180,13 @@ class MediaSessionService : Service() {
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .addAction(prevAction)
             .addAction(playAction)
+            .addAction(nextAction)
             .setStyle(
                 MediaStyle()
                     .setMediaSession(session?.sessionToken)
-                    .setShowActionsInCompactView(0)
+                    .setShowActionsInCompactView(0, 1, 2)
             )
             .build()
     }

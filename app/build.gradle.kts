@@ -1,16 +1,15 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "com.cuber.bookvoice"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.cuber.bookvoice"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 60
         versionName = "0.4.0"
     }
@@ -46,9 +45,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // AGP 9 built-in Kotlin: jvmTarget берётся из compileOptions.targetCompatibility.
     buildFeatures {
         viewBinding = true
     }
