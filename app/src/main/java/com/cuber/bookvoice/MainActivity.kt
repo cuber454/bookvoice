@@ -872,8 +872,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         when (act) {
             G_PREV_SENT -> jumpAndAnnounce { moveBySentence(-1) }
             G_NEXT_SENT -> jumpAndAnnounce { moveBySentence(+1) }
+            G_PREV_PARA -> jumpAndAnnounce { moveByParagraph(-1) }
+            G_NEXT_PARA -> jumpAndAnnounce { moveByParagraph(+1) }
             G_PREV_CH -> jumpAndAnnounce { chapterNavMove(-1) }
             G_NEXT_CH -> jumpAndAnnounce { chapterNavMove(+1) }
+            // msg2547: свайп можно назначить на «Ничего не делать» — просто игнорируем.
+            G_NONE -> {}
             G_PLAY -> togglePlay()
             G_PAUSE -> if (playing) pausePlayback(keepFocus = true)
             G_REPEAT -> startSpeakingCurrent()
@@ -2529,8 +2533,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_GESTURE_RIGHT = "gesture_right"
         internal const val G_PREV_SENT = "prev_sent"
         internal const val G_NEXT_SENT = "next_sent"
+        internal const val G_PREV_PARA = "prev_para"
+        internal const val G_NEXT_PARA = "next_para"
         internal const val G_PREV_CH = "prev_ch"
         internal const val G_NEXT_CH = "next_ch"
+        internal const val G_NONE = "none"
         internal const val G_PLAY = "play"
         internal const val G_PAUSE = "pause"
         internal const val G_REPEAT = "repeat"
@@ -2547,6 +2554,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_PREV_CH to R.string.g_action_prev_ch,
             G_NEXT_SENT to R.string.g_action_next_sent,
             G_PREV_SENT to R.string.g_action_prev_sent,
+            G_NEXT_PARA to R.string.g_action_next_para,
+            G_PREV_PARA to R.string.g_action_prev_para,
             G_PLAY to R.string.g_action_play,
             G_PAUSE to R.string.g_action_pause,
             G_REPEAT to R.string.g_action_repeat,
@@ -2556,6 +2565,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_TOC to R.string.g_action_toc,
             G_BOOKMARKS to R.string.g_action_bookmarks,
             G_ADD_BM to R.string.g_action_add_bm,
+            G_NONE to R.string.g_action_none,
         )
     }
 }

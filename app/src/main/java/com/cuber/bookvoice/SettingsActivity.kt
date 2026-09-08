@@ -482,10 +482,10 @@ class SettingsActivity(private val act: SectionActivity) {
      *  в разделе остаются только сами строки выбора. */
     private fun addGestureRows() {
         gestureRightRow = addValueButton {
-            pickGesture(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_CH)
+            pickGesture(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_CH, R.string.gesture_choose_right)
         }
         gestureLeftRow = addValueButton {
-            pickGesture(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_CH)
+            pickGesture(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_CH, R.string.gesture_choose_left)
         }
     }
 
@@ -539,13 +539,14 @@ class SettingsActivity(private val act: SectionActivity) {
         else -> R.string.headset_off
     })
 
-    /** Диалог выбора действия для одного свайпа (общая палитра жестов). */
-    private fun pickGesture(key: String, def: String) {
+    /** Диалог выбора действия для одного свайпа (общая палитра жестов). Заголовок
+     *  называет направление свайпа (msg2547): «Действие свайпа вправо»/«…влево». */
+    private fun pickGesture(key: String, def: String, titleRes: Int) {
         val labels = MainActivity.GESTURE_ACTIONS.map { getString(it.second) }.toTypedArray()
         val cur = prefs.getString(key, def) ?: def
         val idx = MainActivity.GESTURE_ACTIONS.indexOfFirst { it.first == cur }.coerceAtLeast(0)
         MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.gesture_choose_title)
+            .setTitle(titleRes)
             .setSingleChoiceItems(labels, idx) { d, which ->
                 prefs.edit().putString(key, MainActivity.GESTURE_ACTIONS[which].first).apply()
                 d.dismiss()

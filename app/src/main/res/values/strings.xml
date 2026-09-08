@@ -245,10 +245,15 @@
     <string name="gesture_right_title">Свайп вправо</string>
     <string name="gesture_left_title">Свайп влево</string>
     <string name="gesture_choose_title">Выберите действие</string>
+    <!-- msg2547: заголовок диалога называет направление настраиваемого свайпа. -->
+    <string name="gesture_choose_right">Действие свайпа вправо</string>
+    <string name="gesture_choose_left">Действие свайпа влево</string>
     <string name="g_action_next_ch">Следующая глава</string>
     <string name="g_action_prev_ch">Предыдущая глава</string>
     <string name="g_action_next_sent">Следующее предложение</string>
     <string name="g_action_prev_sent">Предыдущее предложение</string>
+    <string name="g_action_next_para">Следующий абзац</string>
+    <string name="g_action_prev_para">Предыдущий абзац</string>
     <string name="g_action_play">Начать чтение</string>
     <string name="g_action_pause">Пауза</string>
     <string name="g_action_repeat">Повторить текущее</string>
@@ -258,6 +263,8 @@
     <string name="g_action_toc">Оглавление</string>
     <string name="g_action_bookmarks">Список закладок</string>
     <string name="g_action_add_bm">Добавить закладку</string>
+    <!-- msg2547: свайп можно отключить («Ничего не делать»). -->
+    <string name="g_action_none">Ничего не делать</string>
     <!-- Кнопки гарнитуры „назад/вперёд“ (msg2136/2152): у каждой своя настройка шага.
          msg2527: живут в подразделе «Настройки кнопок гарнитуры» внутри «Управления» —
          отдельный экран со строкой-переходом в списке раздела. По умолчанию —
