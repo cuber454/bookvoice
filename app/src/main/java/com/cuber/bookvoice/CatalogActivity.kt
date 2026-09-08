@@ -1809,7 +1809,7 @@ class CatalogActivity(private val act: SectionActivity) {
  *  на странице книги, саму книгу с подписью источника. Живёт в памяти процесса:
  *  перезапуск приложения начинает каталог с корня, что и ожидаемо. */
 object CatalogMemory {
-    val feeds = ArrayList<Pair<String, String>>()
+    var feeds = ArrayList<Pair<String, String>>()
     var topBook: OpdsItem.Book? = null
     var topBookSource = ""
 }
