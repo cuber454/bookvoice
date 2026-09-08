@@ -811,8 +811,9 @@ internal object ReaderEngine {
             sentence = sentenceIdx,
             readPct = readPercent(),
             // msg2555: запись пересоздаётся (не .copy) — без этого «избранное»
-            // слетало бы при каждом сохранении прогресса.
+            // и ручное название слетали бы при каждом сохранении прогресса.
             favorite = existing?.favorite ?: false,
+            customTitle = existing?.customTitle,
         ))
     }
 

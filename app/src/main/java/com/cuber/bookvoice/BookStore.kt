@@ -39,8 +39,18 @@ data class BookRecord(
     // стоять в любой статусной вкладке и одновременно в «Избранном». Вкладка
     // «Избранное» фильтрует по этому флагу; ставится/снимается из меню книги.
     val favorite: Boolean = false,
+    // Ручное «название для полки» (msg2559): задаёт владелец в «Переименовать».
+    // Показывается вместо [title]/[name] (см. [displayTitle]); файл и его имя
+    // на диске не трогаются. null = своё название не задано.
+    val customTitle: String? = null,
 ) {
-    val displayTitle: String get() = title?.takeIf { it.isNotBlank() } ?: name
+    // Своё название важнее метаданных из файла (title), те — важнее имени
+    // файла. У ручного названия приоритет и оно не перезаписывается при чтении
+    // файла: пишется в отдельное поле, title живёт своей жизнью.
+    val displayTitle: String
+        get() = customTitle?.takeIf { it.isNotBlank() }
+            ?: title?.takeIf { it.isNotBlank() }
+            ?: name
 
     companion object {
         const val STATUS_NEW = 0
@@ -65,6 +75,7 @@ data class BookRecord(
             sentence = o.optInt("sentence"),
             readPct = o.optInt("readPct"),
             favorite = o.optBoolean("favorite"),
+            customTitle = o.optString("customTitle").ifBlank { null },
         )
     }
 
@@ -85,6 +96,7 @@ data class BookRecord(
         put("sentence", sentence)
         put("readPct", readPct)
         put("favorite", favorite)
+        customTitle?.let { put("customTitle", it) }
     }
 }
 
@@ -169,6 +181,10 @@ object BookStore {
         val pb = dupRank(b)
         if (pa != pb) return if (pa > pb) a else b
         if (a.favorite != b.favorite) return if (a.favorite) a else b
+        // Ручное название задано руками (msg2559) — дубль его не должен терять.
+        val ta = !a.customTitle.isNullOrBlank()
+        val tb = !b.customTitle.isNullOrBlank()
+        if (ta != tb) return if (ta) a else b
         val sa = !a.sourceUrl.isNullOrBlank()
         val sb = !b.sourceUrl.isNullOrBlank()
         if (sa != sb) return if (sa) a else b

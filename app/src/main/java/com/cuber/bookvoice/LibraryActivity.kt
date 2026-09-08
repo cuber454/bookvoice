@@ -13,6 +13,7 @@ import android.graphics.drawable.Drawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -1049,13 +1050,14 @@ class LibraryActivity(private val act: SectionActivity) {
 
     // ---------------- Долгое нажатие на книгу (меню) ----------------
 
-    /** Меню книги: поделиться, избранное, статус, информация, удалить.
-     *  Короткий тап — открывает книгу, длинный — это меню. */
+    /** Меню книги: поделиться, избранное, переименовать, статус, информация,
+     *  удалить. Короткий тап — открывает книгу, длинный — это меню. */
     private fun showBookMenu(rec: BookRecord) {
         val finished = rec.status == BookRecord.STATUS_FINISHED
         val opts = arrayOf(
             getString(R.string.library_menu_share),
             getString(if (rec.favorite) R.string.library_menu_unfav else R.string.library_menu_fav),
+            getString(R.string.library_menu_rename),
             getString(if (finished) R.string.library_menu_unfinish else R.string.library_menu_finish),
             getString(R.string.library_menu_info),
             getString(R.string.library_menu_delete),
@@ -1066,9 +1068,10 @@ class LibraryActivity(private val act: SectionActivity) {
                 when (which) {
                     0 -> shareBook(rec)
                     1 -> toggleFavorite(rec)
-                    2 -> toggleFinished(rec, finished)
-                    3 -> showBookInfo(rec)
-                    4 -> confirmDelete(rec)
+                    2 -> renameBook(rec)
+                    3 -> toggleFinished(rec, finished)
+                    4 -> showBookInfo(rec)
+                    5 -> confirmDelete(rec)
                 }
             }
             // msg1977: «Закрыть» убрана — жест «назад»/тап мимо и так закрывает
@@ -1118,6 +1121,39 @@ class LibraryActivity(private val act: SectionActivity) {
         BookStore.upsert(act, rec.copy(favorite = fav))
         toast(getString(if (fav) R.string.fav_added else R.string.fav_removed))
         refresh()
+    }
+
+    /** Ручное название книги (msg2559): поле ввода, сохраняем в customTitle.
+     *  Своё название показывается вместо файлового имени и метаданных — на
+     *  полке, в шапке читалки и при шаринге цитат (displayTitle). Сам файл и
+     *  его имя на диске не трогаем. Кнопка «Убрать название» (только когда
+     *  своё название есть) возвращает исходное. */
+    private fun renameBook(rec: BookRecord) {
+        // Поле с текущим названием (своим или из файла) — чтобы было что
+        // поправить, а не писать с нуля.
+        val cur = rec.customTitle?.takeIf { it.isNotBlank() } ?: rec.displayTitle
+        val field = EditText(act).apply {
+            setText(cur)
+            setSelection(cur.length)
+        }
+        val b = MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.rename_dialog_title)
+            .setView(field)
+            .setPositiveButton(R.string.rename_save) { _, _ ->
+                val name = field.text?.toString()?.trim().orEmpty()
+                BookStore.upsert(act, rec.copy(customTitle = name.ifBlank { null }))
+                toast(getString(if (name.isBlank()) R.string.rename_removed else R.string.rename_done))
+                refresh()
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+        if (!rec.customTitle.isNullOrBlank()) {
+            b.setNeutralButton(R.string.rename_remove) { _, _ ->
+                BookStore.upsert(act, rec.copy(customTitle = null))
+                toast(getString(R.string.rename_removed))
+                refresh()
+            }
+        }
+        b.show()
     }
 
     private fun toggleFinished(rec: BookRecord, finished: Boolean) {

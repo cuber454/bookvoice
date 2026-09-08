@@ -480,10 +480,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // TYPE_WINDOW_STATE_CHANGED). Когда название узнаётся только после разбора
         // файла (внешний файл без записи), озвучим его по готовности в openBook
         // (headerAnnouncedAtOpen=false).
-        val recTitle = rec?.title
+        // displayTitle (msg2559): своё название из «Переименовать» важнее
+        // метаданных, метаданные — важнее имени файла. Для записи оно есть
+        // всегда, так что окно не остаётся с label приложения даже у книг без
+        // встроенного названия (например PDF).
         val recAuthor = rec?.author
-        if (rec != null && !recTitle.isNullOrBlank()) {
-            val line = if (recAuthor.isNullOrBlank()) recTitle else "$recTitle — $recAuthor"
+        if (rec != null) {
+            val line = if (recAuthor.isNullOrBlank()) rec.displayTitle
+            else "${rec.displayTitle} — $recAuthor"
             binding.tvHeader.text = line
             // msg1736/1739: название книги = window title окна читалки. Ставим ДО
             // показа окна — при появлении объявится книга, а не label приложения.
@@ -1095,10 +1099,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun refreshChrome() {
         val bk = book
+        // displayTitle (msg2559): ручное название из «Переименовать» > метаданные
+        // > имя файла; для записи непусто, app_name остаётся только без книги.
         val headerText = when {
             bk == null -> getString(R.string.no_book)
-            bk.author.isNullOrBlank() -> bk.title ?: getString(R.string.app_name)
-            else -> "${bk.title ?: getString(R.string.app_name)} — ${bk.author}"
+            bk.author.isNullOrBlank() -> bk.displayTitle
+            else -> "${bk.displayTitle} — ${bk.author}"
         }
         binding.tvHeader.text = headerText
         // msg1736/1739: window title окна — по фактическому названию книги (для
@@ -1718,7 +1724,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             val bk = book
             val t = sentenceTextAt(bm.chapter, bm.sentence)
             val bookName = listOfNotNull(
-                bk?.title?.takeIf { it.isNotBlank() },
+                bk?.displayTitle,
                 bk?.author?.takeIf { it.isNotBlank() },
             ).joinToString(" — ")
             val sb = StringBuilder("“").append(if (t.isNotBlank()) t else bm.label).append("”")
@@ -2013,7 +2019,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private fun shareSelection(text: String) {
         val bk = book
         val bookName = listOfNotNull(
-            bk?.title?.takeIf { it.isNotBlank() },
+            bk?.displayTitle,
             bk?.author?.takeIf { it.isNotBlank() },
         ).joinToString(" — ")
         val sb = StringBuilder("“").append(text).append("”")
@@ -2027,7 +2033,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         QuoteStore.upsert(this, Quote(
             id = UUID.randomUUID().toString(),
             uri = u,
-            bookTitle = bk.title?.takeIf { it.isNotBlank() } ?: currentName ?: "?",
+            bookTitle = bk.displayTitle,
             author = bk.author?.takeIf { it.isNotBlank() },
             chapter = start.chapter,
             sentence = start.sentence,

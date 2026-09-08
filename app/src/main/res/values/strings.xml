@@ -391,10 +391,18 @@
     <string name="library_menu_share">Поделиться файлом книги</string>
     <string name="library_menu_fav">В избранное</string>
     <string name="library_menu_unfav">Убрать из избранного</string>
+    <string name="library_menu_rename">Переименовать</string>
     <string name="library_menu_finish">Отметить дочитанной</string>
     <string name="library_menu_unfinish">Вернуть в читаемые</string>
     <string name="library_menu_info">Информация о книге</string>
     <string name="library_menu_delete">Удалить из библиотеки</string>
+    <!-- msg2559: ручное «название для полки» — показывается вместо имени файла,
+         файл на диске не переименовывается. -->
+    <string name="rename_dialog_title">Название книги</string>
+    <string name="rename_save">Сохранить</string>
+    <string name="rename_remove">Убрать название</string>
+    <string name="rename_done">Название изменено</string>
+    <string name="rename_removed">Название убрано</string>
     <string name="book_info_author">Автор: %1$s</string>
     <string name="book_info_file">Файл: %1$s</string>
     <string name="book_info_status">Статус: %1$s</string>
