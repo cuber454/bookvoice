@@ -231,16 +231,63 @@ class CatalogActivity(private val act: SectionActivity) {
         // и «Библиотека» (одно касание до полки с любого уровня). Панель на ВСЕХ
         // уровнях, включая корень «Мои каталоги».
         binding.btnCatContinue.setOnClickListener { openLastBook() }
-        binding.btnCatLibrary.setOnClickListener { act.rootBack() }
+        // msg2445: «Библиотека» запоминает место в каталоге, чтобы вернуться в него.
+        binding.btnCatLibrary.setOnClickListener { leaveToLibrary() }
 
         setupAutoLoad()
+        // msg2445: вернулись в Каталог — показываем запомненное место (не корень),
+        // если уходили на полку из глубины каталога/со страницы книги.
+        restorePosition()
         renderTop()
     }
 
-    /** Хост закрывается (полный выход из приложения) — прячем диалог, если открыт. */
+    /** Хост закрывается (полный выход из приложения) — прячем диалог, если открыт.
+     *  Запоминание места в каталоге (msg2445) чистим: полный выход — начинаем с
+     *  корня, а не возвращаемся в до-выходную глубину. */
     fun dispose() {
         dlDialog?.dismiss()
         dlDialog = null
+        CatalogMemory.feeds.clear()
+        CatalogMemory.topBook = null
+        CatalogMemory.topBookSource = ""
+    }
+
+    // ---------------- Память места в каталоге (msg2445) ----------------
+
+    /** Уход на полку («Библиотека» нижней панели, «назад» из корня, пункт ⋮):
+     *  запоминаем, где стояли, чтобы вернуться сюда при следующем входе в Каталог. */
+    private fun capturePosition() {
+        val feeds = ArrayList<Pair<String, String>>()
+        var book: OpdsItem.Book? = null
+        var src = ""
+        for (n in nav) when (n) {
+            is Nv.Feed -> feeds.add(n.url to n.title)
+            is Nv.Book -> {
+                book = n.item
+                src = n.sourceTitle
+            }
+        }
+        CatalogMemory.feeds = feeds
+        CatalogMemory.topBook = book
+        CatalogMemory.topBookSource = src
+    }
+
+    /** Выход на полку (кнопка «Библиотека» и равнозначные): сначала запомнить место. */
+    private fun leaveToLibrary() {
+        capturePosition()
+        act.rootBack()
+    }
+
+    /** Свежее открытие окна Каталога: если запомнили место (msg2445) — выкладываем
+     *  в nav ленту-стек, а поверх, если стояли на странице книги, — книгу. Нижние
+     *  ленты сами не грузим: поднимутся при «назад» (openFeed дотянет). Верхнюю
+     *  ленту или страницу книги показывает renderTop. Память не чистим — место
+     *  хранится, пока его не перезапишет следующий выход с другого уровня. */
+    private fun restorePosition() {
+        if (CatalogMemory.feeds.isEmpty() && CatalogMemory.topBook == null) return
+        nav.clear()
+        for ((url, title) in CatalogMemory.feeds) nav.add(Nv.Feed(url, title))
+        CatalogMemory.topBook?.let { nav.add(Nv.Book(it, CatalogMemory.topBookSource)) }
     }
 
     /** Страница показана. [byTab]=true — первый показ окна (свежий вход из меню
@@ -270,7 +317,7 @@ class CatalogActivity(private val act: SectionActivity) {
         Diag.log(act, "nav", "Каталог: «назад», глубина = ${nav.size}")
         if (!goBack()) {
             Diag.log(act, "nav", "Каталог: «назад» в корне — закрываю окно на полку")
-            act.rootBack()
+            leaveToLibrary()
         }
         return true
     }
@@ -304,7 +351,7 @@ class CatalogActivity(private val act: SectionActivity) {
             actions.add(getString(R.string.catalog_add) to { showAddDialog() })
         }
         actions.add(getString(R.string.go_library) to {  // домой: до полки.
-            act.rootBack()  // suppress авто-открытия ставит onDestroy окна.
+            leaveToLibrary()  // msg2445: место каталога запоминаем перед уходом.
         })
         actions.add(getString(R.string.catalog_dl_settings_title) to { openDlSettings() })
         actions.add(getString(R.string.app_exit) to { TabNav.exitApp(act) })  // msg1278: последним.
@@ -1754,4 +1801,15 @@ class CatalogActivity(private val act: SectionActivity) {
         } catch (_: Exception) {
         }
     }
+}
+
+/** msg2445: запомнить последнее место в каталоге — чтобы повторный вход с полки
+ *  (кнопка «Каталоги», ⋮ полки) открывал то же место, где ты был, а не корень
+ *  «Мои каталоги». Храним ленту-стек (url + заголовок по порядку) и, если стояли
+ *  на странице книги, саму книгу с подписью источника. Живёт в памяти процесса:
+ *  перезапуск приложения начинает каталог с корня, что и ожидаемо. */
+object CatalogMemory {
+    val feeds = ArrayList<Pair<String, String>>()
+    var topBook: OpdsItem.Book? = null
+    var topBookSource = ""
 }
