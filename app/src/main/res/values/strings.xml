@@ -271,7 +271,6 @@
     <string name="ui_toc_title">Кнопка «Оглавление»</string>
     <string name="ui_bookmark_title">Кнопка «Закладка»</string>
     <string name="ui_voice_title">Кнопка «Голос чтения»</string>
-    <string name="ui_status_title">Кнопка «Отметить дочитанной»</string>
     <string name="ui_speed_title">Кнопки скорости («Медленнее», «Быстрее»)</string>
     <string name="ui_search_title">Кнопка «Поиск»</string>
 

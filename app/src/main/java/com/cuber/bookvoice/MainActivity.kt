@@ -250,7 +250,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Кнопки скорости (#58): шаг ±0.1, меняют темп на лету.
         binding.btnSpeedDown.setOnClickListener { nudgeSpeed(-0.1f) }
         binding.btnSpeedUp.setOnClickListener { nudgeSpeed(+0.1f) }
-        binding.btnStatus.setOnClickListener { toggleStatus() }
+        // msg2375: кнопка «Отметить дочитанной» с экрана убрана — действие живёт в
+        // ⋮-меню читалки (showMoreDialog).
 
         // Слайдер перемотки по всей книге: тянем — едем по предложениям,
         // отпустили — перепрыгиваем к выбранному месту.
@@ -710,7 +711,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     /** Быстрая запись позиции в prefs (каждое предложение/переход). В движке. */
     private fun persistPosition() = ReaderEngine.persistPosition()
 
-    /** Переключатель «читаю / дочитана». */
+    /** Переключатель «читаю / дочитана». Действие живёт в ⋮-меню читалки
+     *  (msg2375): экранной кнопки btnStatus больше нет. */
     private fun toggleStatus() {
         val u = currentUri ?: return
         val ex = BookStore.byUri(this, u) ?: return
@@ -720,17 +722,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             BookRecord.STATUS_FINISHED
         }
         BookStore.upsert(this, ex.copy(status = next))
-        updateStatusButton()
         toast(getString(if (next == BookRecord.STATUS_FINISHED) R.string.status_finished else R.string.status_reading))
-    }
-
-    private fun updateStatusButton() {
-        val u = currentUri
-        val finished = u != null &&
-            BookStore.byUri(this, u)?.status == BookRecord.STATUS_FINISHED
-        binding.btnStatus.text = getString(
-            if (finished) R.string.status_reading_toggle else R.string.status_finished_toggle
-        )
     }
 
     override fun onPause() {
@@ -1005,12 +997,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.btnNextChapter.isEnabled = enabled
         binding.btnSpeedDown.isEnabled = enabled
         binding.btnSpeedUp.isEnabled = enabled
-        binding.btnStatus.isEnabled = enabled
         binding.btnToc.isEnabled = enabled
         binding.btnSearch.isEnabled = enabled
         binding.seekProgress.isEnabled = enabled
         updatePlayButton()
-        updateStatusButton()
         updatePosition()
     }
 
@@ -1047,7 +1037,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (!prefs.getBoolean(KEY_UI_SEARCH, true)) closeSearchPanel()
         show(KEY_UI_MORE, binding.btnMore)
         show(KEY_UI_VOICE, binding.btnVoice)
-        show(KEY_UI_STATUS, binding.btnStatus)
         show(KEY_UI_SPEED, binding.speedRow)
     }
 
@@ -1658,25 +1647,28 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun showMoreDialog() {
         if (book == null) return
+        // msg2375: «Отметить дочитанной» ушло с экрана в это меню — пункт
+        // переключается по текущему статусу книги (читаю/дочитана). Выход —
+        // всегда последним (msg1278).
+        val u = currentUri
+        val finished = u != null &&
+            BookStore.byUri(this, u)?.status == BookRecord.STATUS_FINISHED
+        val actions = ArrayList<Pair<String, () -> Unit>>()
+        actions.add(getString(R.string.go_library) to { startLibrary() })   // msg1176/1179: из шапки → «⋮»
+        actions.add(getString(R.string.settings_btn) to { startSettingsTab() })  // msg1176: Настройки → «⋮»
+        actions.add(getString(R.string.reader_action_back) to { goBackPlace() })
+        actions.add(getString(
+            if (finished) R.string.status_reading_toggle else R.string.status_finished_toggle
+        ) to { toggleStatus() })
+        actions.add(getString(R.string.quotes_title) to {  // 0.3.44 (msg1092): Цитаты из читалки
+            startActivity(Intent(this, QuotesActivity::class.java))
+        })
+        actions.add(getString(R.string.voice_settings) to { showVoiceDialog() })  // 0.3.44 (msg1104): дубль.
+        actions.add(getString(R.string.app_exit) to { exitApp() })  // msg1278: последним.
         MaterialAlertDialogBuilder(this)
             // msg1687: заголовок «Действия» убран — звучал пунктом, но не нажимался.
-            .setItems(arrayOf(
-                getString(R.string.go_library),      // msg1176/1179: Библиотека из шапки → «⋮»
-                getString(R.string.settings_btn),    // msg1176: Настройки из шапки → «⋮»
-                getString(R.string.reader_action_back),
-                getString(R.string.quotes_title),   // 0.3.44 (msg1092): Цитаты из читалки
-                getString(R.string.voice_settings), // 0.3.44 (msg1104): дубль «Голос чтения» — доступен,
-                                                    // даже когда кнопку на экране скрыли конструктором.
-                getString(R.string.app_exit),       // msg1278: Выход из приложения — последним.
-            )) { _, which ->
-                when (which) {
-                    0 -> startLibrary()
-                    1 -> startSettingsTab()
-                    2 -> goBackPlace()
-                    3 -> startActivity(Intent(this, QuotesActivity::class.java))
-                    4 -> showVoiceDialog()
-                    5 -> exitApp()
-                }
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which ->
+                actions[which].second()
             }
             .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».
     }
@@ -2333,7 +2325,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_UI_TOC = "ui_toc"
         internal const val KEY_UI_BOOKMARK = "ui_bookmark"
         internal const val KEY_UI_VOICE = "ui_voice"
-        internal const val KEY_UI_STATUS = "ui_status"
         internal const val KEY_UI_SPEED = "ui_speed_buttons"
         internal const val KEY_UI_SEARCH = "ui_search_button"
 
