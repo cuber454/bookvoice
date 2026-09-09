@@ -1,6 +1,7 @@
 package com.cuber.bookvoice
 
 import android.content.Intent
+import com.cuber.bookvoice.databinding.ActivityAboutBinding
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -111,7 +112,7 @@ class AboutWindowActivity : SectionActivity() {
         tv.setPadding(4.dp(), 16.dp(), 4.dp(), 4.dp())
         // Не цель навигации свайпами, но озвучивается тапом (importantForAccessibility
         // по умолчанию = yes). Это подпись внизу, а не содержимое справки.
-        tv.focusable = false
+        tv.isFocusable = false
         root.addView(tv)
     }
 
