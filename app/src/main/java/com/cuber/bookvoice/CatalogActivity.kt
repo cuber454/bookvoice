@@ -423,7 +423,8 @@ class CatalogActivity(private val act: SectionActivity) {
 
     /** msg2723/2730: окно открыли долгим нажатием «Каталоги» — пробуем стартовать
      *  голосовой поиск. Верхняя лента ещё грузится — ждём её (сработает в
-     *  fetchFirst по готовности); корень «Мои каталоги» или страница книги —
+     *  fetchFirst по готовности); корень «Мои каталоги» — сами открываем верхний
+     *  каталог списка (msg2779); страница книги или пустой список каталогов —
      *  искать негде, открываем как обычно и флаг гасим. */
     private fun maybeVoiceSearchAfterEntry() {
         if (!pendingVoiceSearch) return
@@ -436,6 +437,18 @@ class CatalogActivity(private val act: SectionActivity) {
             pendingVoiceSearch = false
             if (s.searchTemplate != null) delayedVoiceSearch(s)
             return
+        }
+        if (cur == null) {
+            // msg2779/2783: окно открыли долгим нажатием «Каталоги», а место не
+            // запомнено — верх корень «Мои каталоги», искать негде. Сами открываем
+            // верхний каталог списка; голосовой поиск стартанёт, когда его лента
+            // загрузится и окажется поисковой (см. fetchFirst). Каталогов нет —
+            // остаёмся на пустом корне, флаг гасим.
+            val first = OpdsPrefs.sources(act).firstOrNull()
+            if (first != null) {
+                openSource(first)
+                return
+            }
         }
         pendingVoiceSearch = false
     }

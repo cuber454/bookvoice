@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- msg2819: адаптивная иконка BookVoice (API 26+), вариант 2 — тёмно-синий
+     фон + белый символ «книга с наушниками и звуковой волной». Маска лаунчера
+     режет по своей форме; foreground прижат к 108dp-канвасу полностью (синий
+     квадрат до краёв), символ в безопасной центральной зоне. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

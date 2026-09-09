@@ -186,7 +186,7 @@
     <string name="bm_play_title">Читать сразу при выборе закладки</string>
     <string name="search_play_title">Читать сразу при переходе к найденному слову</string>
     <!-- Диагностический лог -->
-    <string name="diag_send">📤 Отправить лог в Telegram</string>
+    <string name="diag_send">Отправить лог</string>
     <string name="diag_clear">🧹 Очистить лог</string>
     <string name="diag_sent_hint">Выбери Telegram и отправь файл в этот чат</string>
 

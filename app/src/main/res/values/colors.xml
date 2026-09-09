@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- msg2819: фон адаптивной иконки приложения — тёмно-синий, совпадает с
+         синим квадратом мастер-арта (вариант 2 «книга с наушниками»). -->
+    <color name="ic_launcher_background">#1A2A46</color>
+</resources>

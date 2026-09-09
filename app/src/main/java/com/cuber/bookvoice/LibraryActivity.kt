@@ -785,9 +785,9 @@ class LibraryActivity(private val act: SectionActivity) {
     // ---------------- Меню «Ещё» (⋮) и вид полки (msg646/649) ----------------
 
     /** Меню «⋮» в шапке вместо четырёх кнопок: открыть файл (бывш. «Добавить»),
-     *  сканировать/выбрать папку, сортировка, вид «список/сетка» и раздел
-     *  «Цитаты» (#104). Если папка ещё не выбрана, пункт про неё предлагает
-     *  её выбрать. */
+     *  сканировать/выбрать папку, сортировка, вид «список/сетка», разделы
+     *  «Цитаты» (#104) и «О программе» (msg2934). Если папка ещё не выбрана,
+     *  пункт про неё предлагает её выбрать. */
     private fun showMoreMenu() {
         val tree = treeUri()
         val qCount = QuoteStore.all(act).size
@@ -799,6 +799,7 @@ class LibraryActivity(private val act: SectionActivity) {
             getString(R.string.lib_menu_sort),
             getString(R.string.lib_menu_view),
             getString(R.string.quotes_section, qCount),
+            getString(R.string.about_title),     // msg2934: «О программе» окном поверх.
             getString(R.string.app_exit),  // msg1278: Выход из приложения — последним.
         )
         MaterialAlertDialogBuilder(act)
@@ -811,7 +812,8 @@ class LibraryActivity(private val act: SectionActivity) {
                     4 -> showGlobalSortDialog()
                     5 -> showViewDialog()
                     6 -> startActivity(Intent(act, QuotesActivity::class.java))
-                    7 -> exitApp()
+                    7 -> startActivity(Intent(act, AboutWindowActivity::class.java))
+                    8 -> exitApp()
                 }
             }
             .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».
@@ -1187,8 +1189,9 @@ class LibraryActivity(private val act: SectionActivity) {
      *  запустила нас с ACTION_VIEW (или ACTION_SEND из «Поделиться»). Принятый
      *  файл ведём тем же путём, что и выбор через «＋ Книга»: в библиотеку и в
      *  читалку. Неподдерживаемое расширение отсекает onBookPicked со своей
-     *  подсказкой. */
-    private fun handleExternalOpen(intent: Intent?) {
+     *  подсказкой. internal: зовётся и из окна-дома, когда оно уже на вершине
+     *  и внешний файл приходит в onNewIntent, а не в build (msg2799). */
+    internal fun handleExternalOpen(intent: Intent?) {
         val action = intent?.action ?: return
         val uri = when (action) {
             Intent.ACTION_VIEW -> intent.data

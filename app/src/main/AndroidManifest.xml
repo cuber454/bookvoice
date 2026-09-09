@@ -52,7 +52,7 @@
         android:name=".BookVoiceApp"
         android:allowBackup="true"
         android:enableOnBackInvokedCallback="true"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"
         android:supportsRtl="true"
@@ -101,6 +101,12 @@
             android:exported="false" />
         <activity
             android:name=".SettingsWindowActivity"
+            android:exported="false" />
+
+        <!-- «О программе» (msg2879-2934): справка из меню «⋮» полки. Своих
+             intent-filter нет — вызывается только явным интентом. -->
+        <activity
+            android:name=".AboutWindowActivity"
             android:exported="false" />
 
         <activity

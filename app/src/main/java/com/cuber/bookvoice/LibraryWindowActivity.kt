@@ -26,6 +26,18 @@ class LibraryWindowActivity : SectionActivity() {
         library.resume()
     }
 
+    /** msg2799: дом объявлен singleTop, и когда он уже на вершине стека (вернулись
+     *  из читалки/окна на полку), внешний файл из файлового менеджера приходит
+     *  сюда, а не в buildSection — иначе интент молча теряется, а полка по
+     *  авто-возврату открывает последнюю книгу вместо выбранного файла. Отдаём
+     *  файл странице тем же путём «Открыть с помощью»; launchWasExternal,
+     *  выставленный до onResume, гасит авто-открытие последней книги. */
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        library.handleExternalOpen(intent)
+    }
+
     override fun onSectionBackKey(): Boolean = library.onBackKey()
 
     override fun disposeSection() {

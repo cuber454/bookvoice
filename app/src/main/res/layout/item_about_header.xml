@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Заголовок секции в «О программе». Отдельный доступный элемент с ролью
+     «заголовок»: скринридер по нему ходит (навигация по заголовкам) и читает
+     его как имя раздела. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/aboutHeader"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:focusable="true"
+    android:screenReaderFocusable="true"
+    android:accessibilityHeading="true"
+    android:paddingStart="4dp"
+    android:paddingTop="16dp"
+    android:paddingEnd="4dp"
+    android:paddingBottom="4dp"
+    android:textColor="#E8EAED"
+    android:textStyle="bold"
+    android:textSize="22sp" />
