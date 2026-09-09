@@ -184,25 +184,25 @@ object BookCache {
     private fun writeDoc(f: File, doc: BookDocument): Boolean = runCatching {
         FileWriter(f).use { w ->
             w.write(MAGIC)
-            w.write('\n')
+            w.write("\n")
             w.write(doc.title ?: "")
-            w.write('\n')
+            w.write("\n")
             w.write(doc.author ?: "")
-            w.write('\n')
+            w.write("\n")
             w.write(doc.chapters.size.toString())
-            w.write('\n')
+            w.write("\n")
             for (ch in doc.chapters) {
                 w.write(clean(ch.title ?: ""))
-                w.write('\n')
+                w.write("\n")
                 w.write(if (ch.major) '1' else '0')
                 w.write(if (ch.nested) '1' else '0')
-                w.write('\n')
+                w.write("\n")
                 w.write(ch.sentences.size.toString())
-                w.write('\n')
+                w.write("\n")
                 for (s in ch.sentences) {
                     w.write(if (s.paragraphStart) '1' else '0')
                     w.write(clean(s.text))
-                    w.write('\n')
+                    w.write("\n")
                 }
             }
         }

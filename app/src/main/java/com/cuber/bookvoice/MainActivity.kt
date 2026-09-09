@@ -1951,8 +1951,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // и закрепление открытой книги. Показ/скрытие — переключатель; пункт пина
         // меняется по тому, закреплена ли текущая книга.
         actions.add(
-            if (quickPanelVisible()) getString(R.string.quick_hide) else getString(R.string.quick_show)
-        ) to { toggleQuickPanel() }
+            (if (quickPanelVisible()) getString(R.string.quick_hide) else getString(R.string.quick_show))
+                to { toggleQuickPanel() }
+        )
         if (u != null) {
             val pinnedIndex = quickPinnedIndex(u)
             if (pinnedIndex == null) {
