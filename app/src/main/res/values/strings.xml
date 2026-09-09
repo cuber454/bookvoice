@@ -178,6 +178,9 @@
          чтобы не казалось, что приложение зависло. -->
     <string name="long_load_announce_title">Сообщать, если книга открывается долго</string>
     <string name="long_load_speech">Книга большая, открывается. Подожди немного</string>
+    <!-- msg3142: для PDF слова честнее — пока идёт разбор, мы именно извлекаем
+         текст из файла. -->
+    <string name="long_load_pdf_speech">Извлекаю текст из PDF</string>
     <string name="auto_resume_title">Продолжать чтение после прерывания другим плеером</string>
     <string name="auto_resume_on">Автопродолжение после прерывания включено</string>
     <string name="auto_resume_off">Автопродолжение после прерывания выключено</string>

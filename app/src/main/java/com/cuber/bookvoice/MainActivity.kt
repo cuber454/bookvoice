@@ -599,7 +599,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             handler.postDelayed({
                 if (!isFinishing && bookLoading) {
                     Diag.log(this, "activity", "долгая загрузка (>2с) — объявляю (msg2685)")
-                    binding.tvHeader.announceForAccessibility(getString(R.string.long_load_speech))
+                    // msg3142: для PDF говорим правду о том, что происходит (извлечение
+                    // текста); для остальных форматов — общая фраза.
+                    val longLoadText =
+                        if (looksLikePdf(uri)) getString(R.string.long_load_pdf_speech)
+                        else getString(R.string.long_load_speech)
+                    binding.tvHeader.announceForAccessibility(longLoadText)
                     Vibra.confirm(this)
                     // msg2849: сработал блок «подождите» — загрузка точно была
                     // долгой; по готовности книги добавим звуковой «готово».
@@ -778,6 +783,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     /** После успешного открытия — обновить запись книги в библиотеке. */
     private fun registerOpen(doc: BookDocument) = ReaderEngine.registerOpen(doc)
+
+    /** PDF ли открываем (по имени файла/дисплея) — для честной фразы долгой загрузки. */
+    private fun looksLikePdf(uri: Uri): Boolean {
+        val name = if (uri.scheme == "file") {
+            uri.lastPathSegment ?: ""
+        } else {
+            queryDisplayName(uri) ?: uri.lastPathSegment ?: ""
+        }
+        return name.lowercase(Locale.ROOT).endsWith(".pdf")
+    }
 
     private fun readBook(uri: Uri): BookDocument? {
         val name = if (uri.scheme == "file") {
