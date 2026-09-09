@@ -647,4 +647,25 @@
     <string name="quotes_exported">Экспортировано цитат: %1$d</string>
     <string name="quotes_export_fail">Не получилось сохранить файл</string>
 
+    <!-- msg3081+: панель быстрого доступа в читалке — пять кнопок-ячеек.
+         Свободные ячейки заняты недавними книгами из библиотеки (та же выборка,
+         что в меню долгого нажатия «Открыть книгу»), закреплённые сидят на своём
+         месте. Показ/скрытие — пункт в ⋮-меню; закрепление — долгое нажатие на
+         ячейку либо пункт меню у открытой книги. -->
+    <string name="quick_show">Показать панель книг</string>
+    <string name="quick_hide">Скрыть панель книг</string>
+    <string name="quick_pin_this">Закрепить книгу в быстром доступе</string>
+    <string name="quick_unpin_this">Снять книгу из быстрого доступа</string>
+    <!-- cd кнопки-ячейки: номер слева направо + название книги. У закреплённой —
+         впереди слово «Закреплено», чтобы скринридер сразу сказал, что книга не
+         вытеснится. -->
+    <string name="quick_btn_cd">Быстрый доступ, кнопка %1$d: %2$s</string>
+    <string name="quick_pinned_cd">Закреплено. Быстрый доступ, кнопка %1$d: %2$s</string>
+    <string name="quick_pinned_to">Книга закреплена за кнопкой %1$d</string>
+    <string name="quick_unpinned">Книга снята с кнопки</string>
+    <string name="quick_already_open">Эта книга уже открыта</string>
+    <string name="quick_full">Все кнопки заняты — снимите одну долгим нажатием</string>
+    <string name="quick_empty">Нет недавних книг — откройте книгу из библиотеки</string>
+    <string name="quick_panel_cd">Панель недавних книг</string>
+
 </resources>

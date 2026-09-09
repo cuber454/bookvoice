@@ -392,6 +392,68 @@
             android:textSize="15sp" />
     </LinearLayout>
 
+    <!-- msg3081+: панель быстрого доступа — пять кнопок-ячеек слева направо,
+         над нижним рядом управления. Свободные ячейки заняты недавними книгами
+         из библиотеки (самая свежая — крайняя слева), закреплённые сидят на своём
+         месте. Пустые ячейки INVISIBLE (место держат, фокус не занимают); кнопка
+         с книгой объявляет номер и название через contentDescription. Показ и
+         скрытие — пункт в ⋮-меню читалки (MainActivity.quickPanel). -->
+    <LinearLayout
+        android:id="@+id/quickPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/btnQuick0"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_margin="2dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/quick_btn_cd"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnQuick1"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_margin="2dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/quick_btn_cd"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnQuick2"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_margin="2dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/quick_btn_cd"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnQuick3"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_margin="2dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/quick_btn_cd"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnQuick4"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_margin="2dp"
+            android:layout_weight="1"
+            android:contentDescription="@string/quick_btn_cd"
+            android:textSize="13sp" />
+    </LinearLayout>
+
     <!-- msg2375: кнопка «Отметить дочитанной» (btnStatus) убрана с экрана —
          действие переехало в ⋮-меню читалки (showMoreDialog), галочка в
          Конструкторе экрана удалена.

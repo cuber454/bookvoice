@@ -264,6 +264,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Кнопки скорости (#58): шаг ±0.1, меняют темп на лету.
         binding.btnSpeedDown.setOnClickListener { nudgeSpeed(-0.1f) }
         binding.btnSpeedUp.setOnClickListener { nudgeSpeed(+0.1f) }
+        // msg3081+: кнопки-ячейки панели быстрого доступа. Клик — переключиться
+        // на книгу ячейки; долгий клик — закрепить/снять закрепление книги.
+        installQuickPanelHandlers()
         // msg2375: кнопка «Отметить дочитанной» с экрана убрана — действие живёт в
         // ⋮-меню читалки (showMoreDialog).
 
@@ -528,6 +531,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         refreshChrome()
         loadChapter()
         openingWindow = false
+        // msg3081+: окно вернулось к живой книге — пересобираем ячейки панели,
+        // как при обычном открытии (состав недавних мог устареть).
+        rebuildQuickPanel()
         // Цитата (EXTRA_EXPLICIT_PLACE): намеренный переход на указанное место
         // живой книги — уже после guard, чтобы переход к (0,0) из цитаты прошёл.
         // goTo сам остановит/продолжит чтение по состоянию.
@@ -605,10 +611,20 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // объявление названия книги (в FBReader при открытии нет «открытия», есть
         // название). Имя окна уже несёт название (restoreSession → setTitle).
         Thread {
+            val t0 = System.currentTimeMillis()
             val doc = try {
-                readBook(uri)
+                // msg3081+: тяжёлый разбор (большой PDF) кэшируем на диск. Первое
+                // открытие — разбор, повторное — готовый текст из кэша (BookCache.get
+                // сам проверяет, что файл книги не менялся).
+                BookCache.get(this, uri) ?: readBook(uri)
             } catch (_: Exception) {
                 null
+            }
+            // msg3081+: разбор занял долго и книга настоящая (есть текст) — кладём
+            // разобранный текст в кэш, чтобы следующий раз открыть почти мгновенно.
+            val elapsed = System.currentTimeMillis() - t0
+            if (doc != null && BookCache.isSlow(elapsed) && doc.hasText) {
+                runCatching { BookCache.put(this, uri, doc) }
             }
             // Глобальная нумерация предложений и накопительные слова считаем
             // в фоне — на больших книгах это не должно дёргать интерфейс.
@@ -683,6 +699,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 playing = false
                 player.stop()
                 refreshChrome()
+                // msg3081+: книга открылась (или переключились на неё из панели) —
+                // пересобираем ячейки быстрого доступа: только что открытая книга
+                // становится самой свежей недавней.
+                rebuildQuickPanel()
                 // msg2691: книга открылась (разбор завершился) — лёгкая вибрация
                 // как тактильный маркер готовности: после долгой загрузки понятно,
                 // что открытие закончилось, даже если голос ещё молчит.
@@ -1927,6 +1947,24 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         actions.add(getString(R.string.quotes_title) to {  // 0.3.44 (msg1092): Цитаты из читалки
             startActivity(Intent(this, QuotesActivity::class.java))
         })
+        // msg3081+: панель быстрого доступа (пять ячеек недавних/закреплённых книг)
+        // и закрепление открытой книги. Показ/скрытие — переключатель; пункт пина
+        // меняется по тому, закреплена ли текущая книга.
+        actions.add(
+            if (quickPanelVisible()) getString(R.string.quick_hide) else getString(R.string.quick_show)
+        ) to { toggleQuickPanel() }
+        if (u != null) {
+            val pinnedIndex = quickPinnedIndex(u)
+            if (pinnedIndex == null) {
+                actions.add(getString(R.string.quick_pin_this) to { pinCurrentBook() })
+            } else {
+                actions.add(getString(R.string.quick_unpin_this) to {
+                    setQuickPin(pinnedIndex, null)
+                    rebuildQuickPanel()
+                    binding.sentenceList.announceForAccessibility(getString(R.string.quick_unpinned))
+                })
+            }
+        }
         // msg2567: таймер сна — пункт-переключатель. Подпись показывает режим,
         // клик открывает выбор времён/«выключить» (см. showSleepTimerDialog).
         actions.add(sleepTimerMenuLabel() to { showSleepTimerDialog() })
@@ -1938,6 +1976,189 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 actions[which].second()
             }
             .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».
+    }
+
+    // ---------------- msg3081+: панель быстрого доступа (пять кнопок-ячеек) ----------------
+
+    /** Одна ячейка панели: uri книги в ней (null — свободна) и закреплена ли она.
+     *  Свободные ячейки заняты недавними книгами из библиотеки — той же выборкой
+     *  (BookStore.recent по lastOpenedAt), что меню долгого нажатия «Открыть книгу»
+     *  в Библиотеке. */
+    private data class QuickCell(val uri: String?, val title: String?, val pinned: Boolean)
+
+    /** Последняя сборка панели — клики по кнопкам берут отсюда uri/закрепление. */
+    private var quickCells: List<QuickCell> = emptyList()
+
+    private val quickButtons: List<Button>
+        get() = listOf(
+            binding.btnQuick0, binding.btnQuick1, binding.btnQuick2,
+            binding.btnQuick3, binding.btnQuick4,
+        )
+
+    private fun installQuickPanelHandlers() {
+        val buttons = quickButtons
+        for (i in buttons.indices) {
+            buttons[i].setOnClickListener { onQuickClick(i) }
+            buttons[i].setOnLongClickListener {
+                onQuickLongClick(i)
+                true
+            }
+        }
+    }
+
+    private fun quickPanelVisible(): Boolean = prefs.getBoolean(KEY_QUICK_PANEL, false)
+
+    private fun setQuickPanelVisible(v: Boolean) {
+        prefs.edit().putBoolean(KEY_QUICK_PANEL, v).apply()
+    }
+
+    private fun quickPinUri(i: Int): String? = prefs.getString(KEY_QUICK_PIN + i, null)
+
+    private fun setQuickPin(i: Int, uri: String?) {
+        prefs.edit().putString(KEY_QUICK_PIN + i, uri).apply()
+    }
+
+    /** На какой кнопке закреплена книга (или null — не закреплена). */
+    private fun quickPinnedIndex(uri: String): Int? =
+        (0..4).firstOrNull { quickPinUri(it) == uri }
+
+    /** Пункт ⋮-меню «Показать панель книг» / «Скрыть панель книг». */
+    private fun toggleQuickPanel() {
+        val show = !quickPanelVisible()
+        setQuickPanelVisible(show)
+        if (show) {
+            if (!rebuildQuickPanel()) {
+                binding.sentenceList.announceForAccessibility(getString(R.string.quick_empty))
+            } else {
+                binding.sentenceList.announceForAccessibility(getString(R.string.quick_panel_cd))
+            }
+        } else {
+            binding.quickPanel.visibility = View.GONE
+            binding.sentenceList.announceForAccessibility(getString(R.string.quick_hide))
+        }
+    }
+
+    /** Пересобрать ячейки панели и применить её видимость. true — панель показана
+     *  (в ней есть хоть одна книга); false — панель пуста и скрыта. */
+    private fun rebuildQuickPanel(): Boolean {
+        if (!quickPanelVisible()) {
+            binding.quickPanel.visibility = View.GONE
+            return false
+        }
+        val cur = currentUri
+        // Пины: закреплённые книги намертво на своих местах. Книга пропала из
+        // библиотеки (удалена) — пин теряет смысл, снимаем сами.
+        val pins = arrayOfNulls<String>(5)
+        val pinnedUris = HashSet<String>()
+        for (i in 0 until 5) {
+            val pu = quickPinUri(i)
+            if (pu == null) continue
+            if (BookStore.byUri(this, pu) == null) {
+                setQuickPin(i, null)
+                continue
+            }
+            pins[i] = pu
+            pinnedUris.add(pu)
+        }
+        // Недавние заполняют свободные ячейки слева направо по свежести.
+        // Исключаем закреплённых (они на своих местах) и книгу, открытую сейчас.
+        val recents = BookStore.recent(this, null, 20)
+            .filter { it.uri != cur && it.uri !in pinnedUris }
+        val cells = ArrayList<QuickCell>(5)
+        val ri = recents.iterator()
+        for (i in 0 until 5) {
+            val pu = pins[i]
+            if (pu != null) {
+                val rec = BookStore.byUri(this, pu)
+                cells.add(QuickCell(pu, rec?.displayTitle, true))
+            } else {
+                val r = if (ri.hasNext()) ri.next() else null
+                cells.add(QuickCell(r?.uri, r?.displayTitle, false))
+            }
+        }
+        quickCells = cells
+        val buttons = quickButtons
+        var any = false
+        for (i in 0 until 5) {
+            val cell = cells[i]
+            val btn = buttons[i]
+            if (cell.uri == null) {
+                // Пустая ячейка: место держит, но фокус и клики не занимает.
+                btn.visibility = View.INVISIBLE
+                continue
+            }
+            any = true
+            val title = cell.title ?: "?"
+            btn.visibility = View.VISIBLE
+            btn.text = (i + 1).toString()
+            btn.contentDescription = if (cell.pinned) {
+                getString(R.string.quick_pinned_cd, i + 1, title)
+            } else {
+                getString(R.string.quick_btn_cd, i + 1, title)
+            }
+        }
+        binding.quickPanel.visibility = if (any) View.VISIBLE else View.GONE
+        return any
+    }
+
+    /** Клик по ячейке — переключиться на её книгу, продолжив с сохранённого места. */
+    private fun onQuickClick(index: Int) {
+        if (index >= quickCells.size) return
+        val cell = quickCells[index]
+        val uri = cell.uri ?: return
+        if (uri == currentUri) {
+            binding.sentenceList.announceForAccessibility(getString(R.string.quick_already_open))
+            return
+        }
+        if (book == null) return
+        switchToBook(uri)
+    }
+
+    private fun switchToBook(uri: String) {
+        // Фиксируем место уходящей книги в её записи — иначе движок без окна
+        // держит его только в prefs, и после переключения место потеряется.
+        if (book != null) ReaderEngine.savePosition()
+        val rec = BookStore.byUri(this, uri)
+        openBook(
+            Uri.parse(uri),
+            rec?.chapter ?: 0,
+            rec?.sentence ?: 0,
+            rewindOnOpen = (rec?.lastOpenedAt ?: 0L) > 0L,
+        )
+    }
+
+    /** Долгий клик по ячейке: книга не закреплена — закрепить за этой кнопкой,
+     *  закреплена — снять. Симметрично и предсказуемо (msg3114/3118). */
+    private fun onQuickLongClick(index: Int) {
+        if (index >= quickCells.size) return
+        val cell = quickCells[index]
+        val uri = cell.uri ?: return
+        if (cell.pinned) {
+            setQuickPin(index, null)
+            rebuildQuickPanel()
+            binding.sentenceList.announceForAccessibility(getString(R.string.quick_unpinned))
+        } else {
+            // Та же книга уже закреплена за другой кнопкой — снять старый пин,
+            // чтобы книги не было в двух ячейках разом.
+            quickPinnedIndex(uri)?.let { setQuickPin(it, null) }
+            setQuickPin(index, uri)
+            rebuildQuickPanel()
+            binding.sentenceList.announceForAccessibility(getString(R.string.quick_pinned_to, index + 1))
+        }
+    }
+
+    /** ⋮-меню: закрепить открытую книгу в первой свободной ячейке (слева). */
+    private fun pinCurrentBook() {
+        val u = currentUri ?: return
+        if (quickPinnedIndex(u) != null) return
+        val free = (0..4).firstOrNull { quickPinUri(it) == null }
+        if (free == null) {
+            toast(getString(R.string.quick_full))
+            return
+        }
+        setQuickPin(free, u)
+        rebuildQuickPanel()
+        binding.sentenceList.announceForAccessibility(getString(R.string.quick_pinned_to, free + 1))
     }
 
     /** msg2567: подпись пункта «Таймер сна» в ⋮-меню читалки. Показывает
@@ -2826,6 +3047,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_EXIT = "exit_reader"
         internal const val EXIT_DESKTOP = "desktop"
         internal const val EXIT_LIBRARY = "library"
+
+        // msg3081+: панель быстрого доступа (пять кнопок-ячеек) в читалке.
+        // KEY_QUICK_PANEL — видимость панели («показана/скрыта», живёт между
+        // входами в читалку); KEY_QUICK_PIN_<i> — закреплённая книга за ячейкой i
+        // (uri строкой; null/нет ключа — ячейка свободна, в ней недавняя).
+        internal const val KEY_QUICK_PANEL = "quick_panel"
+        internal const val KEY_QUICK_PIN = "quick_pin_"
 
         // msg2136: кнопки гарнитуры „назад/вперёд“ — у каждой своя настройка шага
         // („Выключено“ / предложение / абзац / глава). Значение pref — одна из

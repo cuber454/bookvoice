@@ -1458,6 +1458,8 @@ class LibraryActivity(private val act: SectionActivity) {
         // Убираем саму запись и её близнеца-дубль (другой адрес того же файла),
         // чтобы после удаления файла не осталось записи-сироты.
         BookStore.remove(act, rec.uri)
+        // msg3081+: разобранный кэш книги больше не нужен — файл удалён.
+        BookCache.remove(act, Uri.parse(rec.uri))
         if (path != null) {
             BookStore.all(act).forEach { r ->
                 if (r.uri != rec.uri && diskPathOf(r.uri, tp) == path) {
@@ -1491,6 +1493,7 @@ class LibraryActivity(private val act: SectionActivity) {
         } catch (_: Exception) {
             false
         }
+        BookCache.remove(act, uri)
         hideFromScan(uriStr)
         Diag.log(act, "lib", if (deleted) "файл дубля удалён: $uriStr"
             else "файл дубля не удалось убрать, скрыт от скана: $uriStr")
@@ -1586,6 +1589,8 @@ class LibraryActivity(private val act: SectionActivity) {
             for (r in g) best = BookStore.betterForKeep(best, r)
             for (r in g) if (r.uri != best.uri) {
                 BookStore.remove(act, r.uri)
+                // msg3081+: кэш, разобранный под удаляемым адресом, — сирота.
+                BookCache.remove(act, Uri.parse(r.uri))
                 hideFromScan(r.uri)
                 removed++
             }
