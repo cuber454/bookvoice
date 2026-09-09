@@ -18,6 +18,8 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -232,14 +234,27 @@ class CatalogActivity(private val act: SectionActivity) {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         OpdsPrefs.ensureDefaults(act)
         Diag.log(act, "opds", "экран каталогов, версия $versionName")
-        binding.btnSearch.setOnClickListener {
-            currentFeedSession()?.takeIf { it.searchTemplate != null }?.let(::showSearchDialog)
-        }
+        binding.btnSearch.setOnClickListener { toggleSearchPanel() }
         // msg1421: долгий тап (под TalkBack — двойной тап-удержание) — голосовой поиск.
         binding.btnSearch.setOnLongClickListener {
             val s = currentFeedSession()?.takeIf { it.searchTemplate != null }
             if (s == null) false else { startVoiceSearch(s); true }
         }
+        // msg3214: панель поиска под шапкой — поле в фокусе с клавиатурой, рядом
+        // кнопки голосового ввода и «Найти».
+        binding.etSearch.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                searchFromField()
+                true
+            } else {
+                false
+            }
+        }
+        binding.btnSearchMic.setOnClickListener {
+            val s = currentFeedSession()?.takeIf { it.searchTemplate != null }
+            if (s != null) startVoiceSearch(s)
+        }
+        binding.btnSearchGo.setOnClickListener { searchFromField() }
         binding.btnMore.setOnClickListener { showCatalogMoreMenu() }
         // msg1712: шапка как в FBReader — «Назад» слева от заголовка. Работает как
         // системный «назад»: внутри каталога — уровень выше (goBack), в корне
@@ -355,6 +370,12 @@ class CatalogActivity(private val act: SectionActivity) {
      *  capturePosition): поисковая сессия не должна перезаписывать обычную
      *  позицию, к которой человек вернётся следующим обычным входом в Каталог. */
     fun onBackKey(): Boolean {
+        // msg3214: открыта панель поиска — «назад» сначала закрывает её (как в
+        // читалке), на уровень выше выходим повторным «назад».
+        if (searchPanelOpen()) {
+            closeSearchPanel()
+            return true
+        }
         // msg2233: «назад» из каталога якобы выкидывает на полку/в книгу. Пишем
         // глубину: 0 = корень окна (rootBack на полку), >0 = выход на уровень выше.
         Diag.log(act, "nav", "Каталог: «назад», глубина = ${nav.size}")
@@ -591,6 +612,9 @@ class CatalogActivity(private val act: SectionActivity) {
 
     private fun showSearch(visible: Boolean) {
         binding.btnSearch.visibility = if (visible) View.VISIBLE else View.GONE
+        // Лента/книга не поисковые — панель поиска тоже прячем (msg3214): она
+        // жила под шапкой ради поисковой ленты, на другой странице не нужна.
+        if (!visible) closeSearchPanel()
     }
 
     // ---------------- Нижняя панель каталога (msg2359/2363/2371) ----------------
@@ -1359,34 +1383,65 @@ class CatalogActivity(private val act: SectionActivity) {
         }
     }
 
-    /** Поиск по каталогу: шаблон вида …search?q={searchTerms} берём из ленты. */
-    private fun showSearchDialog(s: FeedSession) {
-        if (s.searchTemplate == null) return
-        val input = EditText(act).apply {
-            hint = getString(R.string.catalog_search_hint)
-            inputType = InputType.TYPE_CLASS_TEXT
+    // ---------------- Панель поиска (msg3214) ----------------
+
+    /** msg3214: вместо диалога по центру — панель под шапкой, как в читалке.
+     *  Показывается кнопкой 🔍 шапки, когда верхняя лента поисковая. */
+    private fun searchPanelOpen(): Boolean =
+        binding.searchPanel.visibility == View.VISIBLE
+
+    /** Открыть панель поиска. focusField — сразу поставить фокус в поле и поднять
+     *  клавиатуру (обычный вход по 🔍); false — панель без клавиатуры. */
+    private fun openSearchPanel(focusField: Boolean) {
+        binding.searchPanel.visibility = View.VISIBLE
+        if (focusField) {
+            binding.etSearch.requestFocus()
+            showSoftKeyboard()
         }
-        val box = LinearLayout(act).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(8))
-            addView(input)
+    }
+
+    private fun closeSearchPanel() {
+        binding.searchPanel.visibility = View.GONE
+        hideKeyboard()
+    }
+
+    /** 🔍 в шапке: открыть панель (с полем в фокусе) или закрыть открытую. */
+    private fun toggleSearchPanel() {
+        val s = currentFeedSession()?.takeIf { it.searchTemplate != null } ?: return
+        if (searchPanelOpen()) closeSearchPanel()
+        else {
+            binding.etSearch.setText("")
+            openSearchPanel(focusField = true)
         }
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.catalog_search_dialog)
-            .setView(box)
-            .setPositiveButton(R.string.catalog_search_ok) { _, _ ->
-                val q = input.text?.toString()?.trim().orEmpty()
-                if (q.isEmpty()) return@setPositiveButton
-                runSearch(s, q)
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
+    }
+
+    private fun showSoftKeyboard() {
+        val imm = act.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showSoftInput(binding.etSearch, 0)
+    }
+
+    private fun hideKeyboard() {
+        val imm = act.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(binding.etSearch.windowToken, 0)
+    }
+
+    /** «Найти» по тексту из поля. Пусто — подсказка, поиск не начинаем. */
+    private fun searchFromField() {
+        val s = currentFeedSession()?.takeIf { it.searchTemplate != null } ?: return
+        val q = binding.etSearch.text?.toString()?.trim().orEmpty()
+        if (q.isEmpty()) {
+            binding.etSearch.announceForAccessibility(getString(R.string.catalog_search_empty))
+            binding.etSearch.requestFocus()
+            return
+        }
+        runSearch(s, q)
     }
 
     /** Прогнать запрос [q] по шаблону поиска ленты [s] — общий путь для
-     *  текстового окна (showSearchDialog) и голосового ввода. */
+     *  панели поиска и голосового ввода. Панель перед переходом прячем. */
     private fun runSearch(s: FeedSession, q: String) {
         val template = s.searchTemplate ?: return
+        closeSearchPanel()
         val url = template.replace("{searchTerms}", URLEncoder.encode(q, "UTF-8"))
         stashScroll()
         nav.add(Nv.Feed(url, getString(R.string.catalog_search) + ": " + q))

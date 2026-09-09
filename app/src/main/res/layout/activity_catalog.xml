@@ -63,6 +63,53 @@
             android:textSize="26sp" />
     </LinearLayout>
 
+    <!-- Панель поиска по каталогу (msg3214): вместо диалога по центру — строка
+         под шапкой, как панель поиска в читалке. Открывается кнопкой 🔍 шапки,
+         когда верхняя лента поисковая; поле сразу в фокусе, клавиатура поднимается
+         сама (requestFocus + showSoftInput). Поле + голосовой ввод + «Найти». -->
+    <LinearLayout
+        android:id="@+id/searchPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingTop="2dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/etSearch"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:autofillHints=""
+            android:hint="@string/catalog_search_hint"
+            android:imeOptions="actionSearch"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:maxLines="1"
+            android:textColor="#E8EAED"
+            android:textColorHint="#9AA0A6"
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/btnSearchMic"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:contentDescription="@string/catalog_search_mic"
+            android:minWidth="48dp"
+            android:text="🎤"
+            android:textSize="18sp" />
+
+        <Button
+            android:id="@+id/btnSearchGo"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:text="@string/catalog_search_ok"
+            android:textSize="15sp" />
+    </LinearLayout>
+
     <!-- Содержимое (список/лента/книга). «Добавить каталог» больше не плавает
          в углу (msg2371): вход — пункт ⋮ меню в корне «Мои каталоги». -->
     <ScrollView

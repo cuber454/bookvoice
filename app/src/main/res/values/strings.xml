@@ -134,9 +134,12 @@
     <string name="catalog_err_unknown">неизвестная ошибка</string>
     <string name="catalog_empty_feed">Здесь пусто — попробуй другой раздел.</string>
     <string name="catalog_search">Поиск в каталоге</string>
-    <string name="catalog_search_dialog">Что ищем?</string>
     <string name="catalog_search_hint">Название или автор</string>
     <string name="catalog_search_ok">Найти</string>
+    <!-- msg3214: панель поиска каталога — кнопка голосового ввода и подсказка при
+         пустом запросе. -->
+    <string name="catalog_search_mic">Продиктовать название книги или автора</string>
+    <string name="catalog_search_empty">Сначала введите название или автора — или нажмите микрофон</string>
     <string name="catalog_search_voice_prompt">Продиктуйте название книги или автора</string>
     <string name="catalog_search_voice_announce">Ищу: %1$s</string>
     <string name="catalog_announce">Каталог: %1$s. Разделов %2$d, книг %3$d.</string>
