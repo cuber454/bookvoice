@@ -31,8 +31,8 @@ import java.io.FileWriter
  */
 object BookCache {
 
-    /** Сколько разобранных книг держим (решение msg3101 — пять). */
-    private const val LIMIT = 5
+    /** Сколько разобранных книг держим (msg3101 — пять, msg3149 — пятьдесят). */
+    private const val LIMIT = 50
 
     /** Разбор дольше этого порога считаем «дорогим» и сохраняем в кэш. */
     private const val SLOW_MS = 2000L
