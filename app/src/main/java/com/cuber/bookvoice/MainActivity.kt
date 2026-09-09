@@ -2107,11 +2107,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             val title = cell.title ?: "?"
             btn.visibility = View.VISIBLE
             btn.text = (i + 1).toString()
-            btn.contentDescription = if (cell.pinned) {
-                getString(R.string.quick_pinned_cd, i + 1, title)
-            } else {
-                getString(R.string.quick_btn_cd, i + 1, title)
-            }
+            // msg3146: озвучиваем ячейку просто названием книги — без служебного
+            // префикса «Быстрый доступ, кнопка N» (скринридер и так сообщает, что
+            // это кнопка; лишние слова только затягивают объявление).
+            btn.contentDescription = title
         }
         binding.quickPanel.visibility = if (any) View.VISIBLE else View.GONE
         return any
