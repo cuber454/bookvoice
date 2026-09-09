@@ -78,6 +78,12 @@ class LibraryActivity(private val act: SectionActivity) {
      *  для возврата фокуса (msg1468). */
     private var shownRecords: List<BookRecord> = emptyList()
 
+    /** Есть ли книга, в которую реально ведёт кнопка «Открыть книгу…» (msg3206).
+     *  Кнопка теперь всегда видима и активна — отдельно помним, есть ли цель,
+     *  чтобы фокус-фолбэк (focusFirstBookArrival) не сажал на кнопку-пустышку,
+     *  когда открытых книг нет: там полезнее «⋮ Ещё» (добавить книгу). */
+    private var continueHasTarget = false
+
     /** Собрана ли полка хоть раз на ЭТОМ экземпляре страницы. L1b (msg1565)
      *  «не трогай полку под ридером» корректен только когда полка уже построена:
      *  после холодного старта с авто-открытием книги полка могла ещё не собраться
@@ -343,10 +349,11 @@ class LibraryActivity(private val act: SectionActivity) {
                     return@postDelayed
                 }
             }
-            val btn = when {
-                binding.btnLast.isEnabled -> binding.btnLast
-                else -> binding.btnMore
-            }
+            // btnLast теперь всегда активна (msg3206: не выключаем, иначе
+            // скринридер свайпом её не найдёт) — фолбэк выбираем по наличию
+            // реальной цели, а не по isEnabled: открытых книг нет — полезнее
+            // «⋮ Ещё» (там «Добавить книгу»), чем кнопка-пустышка.
+            val btn = if (continueHasTarget) binding.btnLast else binding.btnMore
             TabNav.a11yFocus(btn)
         }, 350)
     }
@@ -594,18 +601,21 @@ class LibraryActivity(private val act: SectionActivity) {
 
     /** msg1938/msg2108: умная кнопка быстрого входа в последнюю книгу — текст с
      *  её названием, чтобы было слышно, куда ведёт («Открыть книгу: Война и мир»).
-     *  Нет доступной последней книги — кнопки нет вовсе, на полке ничего не висит
-     *  впустую. Название берём из каталога (displayTitle); запись удалили — пробуем
-     *  имя файла напрямую (как openLastBook), файл тоже пропал — прячем. */
+     *  msg3202/msg3206: кнопка НЕ исчезает и НЕ становится неактивной. Цель
+     *  (BookStore.continueTarget) — последняя книга (KEY_URI), если её файл ещё
+     *  жив; удалили её (сдвоенная копия стёрла файл) — самая свежая из остальных
+     *  открывавшихся книг с живым файлом; открытых книг не осталось — кнопка
+     *  остаётся видимой и АКТИВНОЙ с текстом «Нет открытых книг». Важно не
+     *  выключать её (isEnabled=false): TalkBack/Jieshuo при свайп-навигации
+     *  пропускают неактивные контролы, и для незрячего кнопка снова «исчезнет» —
+     *  ровно жалоба msg3194. Пустой тап даёт тост (openLastBook), а не тишину. */
     private fun updateContinueButton() {
-        val u = prefs.getString(MainActivity.KEY_URI, null)
-        val title = u?.let {
-            BookStore.byUri(act, it)?.displayTitle ?: queryDisplayName(Uri.parse(it))
-        }
-        binding.btnLast.visibility = if (title == null) View.GONE else View.VISIBLE
-        binding.btnLast.isEnabled = title != null
-        binding.btnLast.text = if (title == null) getString(R.string.continue_last)
-        else getString(R.string.continue_last_with, title)
+        val target = BookStore.continueTarget(act, prefs.getString(MainActivity.KEY_URI, null))
+        continueHasTarget = target != null
+        binding.btnLast.visibility = View.VISIBLE
+        binding.btnLast.isEnabled = true
+        binding.btnLast.text = if (target == null) getString(R.string.continue_last_none)
+        else getString(R.string.continue_last_with, target.displayTitle)
     }
 
     private fun rowText(rec: BookRecord): String {
@@ -1128,24 +1138,15 @@ class LibraryActivity(private val act: SectionActivity) {
     }
 
     private fun openLastBook() {
-        val u = prefs.getString(MainActivity.KEY_URI, null)
-        if (u == null) {
-            toast(getString(R.string.no_last_book))
+        // Тот же выбор, что и у текста кнопки (updateContinueButton): кнопка
+        // ведёт в последнюю живую книгу, а не в ту, что показывала до удаления
+        // файла (msg3202/msg3206).
+        val target = BookStore.continueTarget(act, prefs.getString(MainActivity.KEY_URI, null))
+        if (target == null) {
+            toast(getString(R.string.continue_last_none))
             return
         }
-        val existing = BookStore.byUri(act, u)
-        if (existing != null) {
-            openReader(existing)
-            return
-        }
-        // Запись могли удалить — открываем как есть, с позицией из prefs.
-        openReader(BookRecord(
-            uri = u,
-            name = queryDisplayName(Uri.parse(u)) ?: "book",
-            addedAt = 0L,
-            chapter = prefs.getInt(MainActivity.KEY_CHAPTER, 0),
-            sentence = prefs.getInt(MainActivity.KEY_SENTENCE, 0),
-        ))
+        openReader(target)
     }
 
     /** msg2723/2730: долгое нажатие «Продолжить» — список последних открывавшихся

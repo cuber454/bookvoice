@@ -1,6 +1,8 @@
 package com.cuber.bookvoice
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -136,6 +138,71 @@ object BookStore {
             .filter { it.lastOpenedAt > 0L && it.uri != excludeUri }
             .sortedByDescending { it.lastOpenedAt }
             .take(limit)
+
+    /** Жив ли файл книги по uri. file:// — путь существует на диске; content:// —
+     *  документ доступен (query DISPLAY_NAME что-то вернул). Запись в реестре
+     *  может пережить свой файл: msg3202 — удалили одну из сдвоенных копий,
+     *  файл стёрся, вторая запись осталась, но книгу открыть нельзя. Кнопка
+     *  «Открыть книгу…» и авто-старт должны на такую запись не вести. */
+    fun openable(context: Context, uri: String): Boolean {
+        val u = Uri.parse(uri)
+        return try {
+            if (u.scheme == "file") {
+                val p = u.path
+                p != null && File(p).exists()
+            } else {
+                context.contentResolver.query(
+                    u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+                )?.use { it.moveToFirst() } ?: false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** msg3206: книга, в которую ведёт кнопка «Открыть книгу…» (полка и каталог).
+     *  Сначала [keyUri] — последняя открывавшаяся, пока её файл жив. Файл стёрли
+     *  (удалили сдвоенную копию, msg3202) — самая свежая из остальных
+     *  открывавшихся книг, чей файл ещё жив. Ни одной открывавшейся с живым
+     *  файлом не осталось — null: кнопка остаётся видимой, но неактивной, с
+     *  текстом «Нет открытых книг» (не исчезает). */
+    fun continueTarget(context: Context, keyUri: String?): BookRecord? {
+        keyUri?.let { u ->
+            if (openable(context, u)) {
+                return byUri(context, u) ?: BookRecord(
+                    uri = u,
+                    name = fileName(context, u),
+                    addedAt = 0L,
+                )
+            }
+        }
+        // Открывавшиеся по убыванию свежести; первая с живым файлом. Проверка
+        // файла у content:// — query к провайдеру, не дешёвая: firstOrNull
+        // останавливается, как только нашлась живая, не гоняя по всей полке.
+        return all(context)
+            .asSequence()
+            .filter { it.lastOpenedAt > 0L && it.uri != keyUri }
+            .sortedByDescending { it.lastOpenedAt }
+            .firstOrNull { openable(context, it.uri) }
+    }
+
+    /** Имя файла по uri для записи без реестра (keyUri жив, записи уже нет):
+     *  у content:// это DISPLAY_NAME, у file:// — последний сегмент пути. */
+    private fun fileName(context: Context, uri: String): String {
+        val u = Uri.parse(uri)
+        val fromResolver = if (u.scheme == "content") {
+            try {
+                context.contentResolver.query(
+                    u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+                )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        return fromResolver ?: u.lastPathSegment ?: uri
+    }
 
     @Synchronized
     fun upsert(context: Context, rec: BookRecord) {

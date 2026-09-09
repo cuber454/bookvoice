@@ -600,43 +600,33 @@ class CatalogActivity(private val act: SectionActivity) {
      *  LibraryActivity.updateContinueButton, msg2108), правее — «Библиотека»:
      *  одно касание до полки с любого уровня (rootBack окна, минуя «назад» по
      *  шагам). Панель видна на ВСЕХ уровнях, включая корень «Мои каталоги»
-     *  (msg2371): везде один и тот же ряд, как и в остальном приложении. Нет
-     *  доступной последней книги — левая кнопка скрыта, «Библиотека» остаётся. */
+     *  (msg2371): везде один и тот же ряд, как и в остальном приложении. Текст и
+     *  цель — общий с полкой BookStore.continueTarget (msg3202/msg3206): кнопка
+     *  не исчезает, при удалённой последней книге ведёт в самую свежую из живых
+     *  открывавшихся, а если открытых не осталось — остаётся видимой и активной,
+     *  «Нет открытых книг» (пустой тап — тост, openLastBook). Не выключаем:
+     *  неактивную кнопку скринридер свайпом пропускает (см. LibraryActivity). */
     private fun updateBottomBar() {
         binding.bottomBar.visibility = View.VISIBLE
-        val u = prefs.getString(MainActivity.KEY_URI, null)
-        val title = u?.let {
-            BookStore.byUri(act, it)?.displayTitle ?: queryDisplayName(Uri.parse(it))
-        }
-        binding.btnCatContinue.visibility = if (title == null) View.GONE else View.VISIBLE
-        binding.btnCatContinue.isEnabled = title != null
-        binding.btnCatContinue.text = if (title == null) getString(R.string.continue_last)
-        else getString(R.string.continue_last_with, title)
+        val target = BookStore.continueTarget(act, prefs.getString(MainActivity.KEY_URI, null))
+        binding.btnCatContinue.visibility = View.VISIBLE
+        binding.btnCatContinue.isEnabled = true
+        binding.btnCatContinue.text = if (target == null) getString(R.string.continue_last_none)
+        else getString(R.string.continue_last_with, target.displayTitle)
     }
 
-    /** «Открыть книгу: <последняя>» с нижней панели каталога. Путь тот же, что у
-     *  одноимённой кнопки полки (LibraryActivity.openLastBook): берём KEY_URI,
-     *  при живой записи — её место чтения, при удалённой — имя файла и позицию из
-     *  prefs. Читалка открывается как из страницы книги каталога (EXTRA_FROM_CATALOG):
+    /** «Открыть книгу: <последняя>» с нижней панели каталога. Тот же выбор цели,
+     *  что у текста кнопки (updateBottomBar / LibraryActivity.openLastBook):
+     *  последняя живая книга, не та, что показывалась до удаления файла.
+     *  Читалка открывается как из страницы книги каталога (EXTRA_FROM_CATALOG):
      *  «назад» из неё вернёт в каталог, а не на полку. */
     private fun openLastBook() {
-        val u = prefs.getString(MainActivity.KEY_URI, null)
-        if (u == null) {
-            toast(getString(R.string.no_last_book))
+        val target = BookStore.continueTarget(act, prefs.getString(MainActivity.KEY_URI, null))
+        if (target == null) {
+            toast(getString(R.string.continue_last_none))
             return
         }
-        val existing = BookStore.byUri(act, u)
-        if (existing != null) {
-            openInReader(existing)
-            return
-        }
-        openInReader(BookRecord(
-            uri = u,
-            name = queryDisplayName(Uri.parse(u)) ?: "book",
-            addedAt = 0L,
-            chapter = prefs.getInt(MainActivity.KEY_CHAPTER, 0),
-            sentence = prefs.getInt(MainActivity.KEY_SENTENCE, 0),
-        ))
+        openInReader(target)
     }
 
     /** msg2723/2738: долгое нажатие «Открыть книгу» нижней панели — список недавних

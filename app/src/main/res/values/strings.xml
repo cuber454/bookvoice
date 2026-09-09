@@ -31,6 +31,9 @@
     <string name="add_book">Добавить</string>
     <string name="continue_last">Открыть книгу</string>
     <string name="continue_last_with">Открыть книгу: %1$s</string>
+    <!-- msg3206: кнопка «Открыть книгу…» не пропадает — открытых книг не
+         осталось, текст сообщает об этом, кнопка неактивна. -->
+    <string name="continue_last_none">Нет открытых книг</string>
     <string name="recent_books_title">Недавние книги</string>
     <string name="recent_books_empty">Других недавних книг нет.</string>
     <string name="sort_books">Сортировать</string>
