@@ -785,9 +785,9 @@ class LibraryActivity(private val act: SectionActivity) {
     // ---------------- Меню «Ещё» (⋮) и вид полки (msg646/649) ----------------
 
     /** Меню «⋮» в шапке вместо четырёх кнопок: открыть файл (бывш. «Добавить»),
-     *  сканировать/выбрать папку, сортировка, вид «список/сетка», разделы
-     *  «Цитаты» (#104) и «О программе» (msg2934). Если папка ещё не выбрана,
-     *  пункт про неё предлагает её выбрать. */
+     *  сканировать/выбрать папку, сортировка, вид «список/сетка», «Цитаты» (#104).
+     *  «О программе» (msg2934) отсюда убран — живёт в Настройках → «Разное»
+     *  (msg3061). Если папка ещё не выбрана, пункт про неё предлагает её выбрать. */
     private fun showMoreMenu() {
         val tree = treeUri()
         val qCount = QuoteStore.all(act).size
@@ -799,7 +799,6 @@ class LibraryActivity(private val act: SectionActivity) {
             getString(R.string.lib_menu_sort),
             getString(R.string.lib_menu_view),
             getString(R.string.quotes_section, qCount),
-            getString(R.string.about_title),     // msg2934: «О программе» окном поверх.
             getString(R.string.app_exit),  // msg1278: Выход из приложения — последним.
         )
         MaterialAlertDialogBuilder(act)
@@ -812,8 +811,7 @@ class LibraryActivity(private val act: SectionActivity) {
                     4 -> showGlobalSortDialog()
                     5 -> showViewDialog()
                     6 -> startActivity(Intent(act, QuotesActivity::class.java))
-                    7 -> startActivity(Intent(act, AboutWindowActivity::class.java))
-                    8 -> exitApp()
+                    7 -> exitApp()
                 }
             }
             .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».

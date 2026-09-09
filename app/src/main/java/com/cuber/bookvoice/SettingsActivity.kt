@@ -744,6 +744,11 @@ class SettingsActivity(private val act: SectionActivity) {
             Diag.clear(act)
             toast(getString(R.string.log_cleared))
         }
+        // msg3061: «О программе» переехало из меню «⋮» полки сюда, в «Разное» —
+        // справке место в настройках, а не в быстром меню библиотеки.
+        addButton(getString(R.string.about_title)) {
+            startActivity(Intent(act, AboutWindowActivity::class.java))
+        }
     }
 
     private fun content(): LinearLayout = binding.content

@@ -109,6 +109,14 @@ class CatalogActivity(private val act: SectionActivity) {
      *  Сбрасывается, как только флаг отработан или искать стало негде. */
     private var pendingVoiceSearch = false
 
+    /** msg3052/3055/3057: это окно открыто долгим нажатием «Каталоги» С ПОЛКИ —
+     *  транзит ради голосового поиска. Живёт весь срок окна (в отличие от
+     *  pendingVoiceSearch): пока окно не закрылось, «назад» из ЛЮБОГО уровня
+     *  ведёт сразу на полку, а не на уровень выше внутри каталога. Обычный вход
+     *  в Каталог (кнопка/⋮, без EXTRA_VOICE_SEARCH) этого флага не получает —
+     *  там «назад» работает как раньше. */
+    private var transitFromShelf = false
+
     private val prefs by lazy { act.getSharedPreferences("reader", Context.MODE_PRIVATE) }
 
     /** Смена папки скачиваний (кнопка в «Настройках скачивания»). Пикер дерева
@@ -260,7 +268,8 @@ class CatalogActivity(private val act: SectionActivity) {
         // msg2723/2730: долгое нажатие «Каталоги» на полке — старт голосового
         // поиска, когда верхняя лента готова (или обычное открытие, если искать
         // негде — в корне «Мои каталоги»).
-        pendingVoiceSearch = intent?.getBooleanExtra(EXTRA_VOICE_SEARCH, false) == true
+        transitFromShelf = intent?.getBooleanExtra(EXTRA_VOICE_SEARCH, false) == true
+        pendingVoiceSearch = transitFromShelf
         if (pendingVoiceSearch) binding.root.post { maybeVoiceSearchAfterEntry() }
     }
 
@@ -335,11 +344,24 @@ class CatalogActivity(private val act: SectionActivity) {
     /** «Назад» на странице каталогов: внутри (список/жанр/книга открыты) выходит
      *  на уровень выше через goBack(); в корне закрывает окно — возврат на полку
      *  (редизайн msg1676+: Каталоги — окно поверх, не вкладка). True — обработано
-     *  (окно дальше не пускает). */
+     *  (окно дальше не пускает).
+     *
+     *  msg3052/3055/3057: если окно открыто долгим нажатием «Каталоги» с полки
+     *  (транзит ради голосового поиска), «назад» с любого уровня ведёт СРАЗУ на
+     *  полку — не на уровень выше каталога. Место каталога (msg2445) при этом не
+     *  трогаем (rootBack без capturePosition): поисковая сессия не должна
+     *  перезаписывать обычную позицию, к которой человек вернётся следующим
+     *  обычным входом в Каталог. */
     fun onBackKey(): Boolean {
         // msg2233: «назад» из каталога якобы выкидывает на полку/в книгу. Пишем
         // глубину: 0 = корень окна (rootBack на полку), >0 = выход на уровень выше.
         Diag.log(act, "nav", "Каталог: «назад», глубина = ${nav.size}")
+        if (transitFromShelf) {
+            Diag.log(act, "nav", "Каталог: транзит с полки (голосовой поиск) — «назад» сразу на полку")
+            pendingVoiceSearch = false
+            act.rootBack()
+            return true
+        }
         if (!goBack()) {
             Diag.log(act, "nav", "Каталог: «назад» в корне — закрываю окно на полку")
             leaveToLibrary()

@@ -1,10 +1,13 @@
 package com.cuber.bookvoice
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
-import com.cuber.bookvoice.databinding.ActivityAboutBinding
-import android.view.ViewGroup
+import android.net.Uri
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.cuber.bookvoice.databinding.ActivityAboutBinding
+import android.view.ViewGroup
 
 /** Окно «О программе» (msg2879-2934): короткая справка для всех — концепция,
  *  фишки, неочевидные нажатия, контакты автора, версия. Открывается ПОВЕРХ
@@ -79,8 +82,6 @@ class AboutWindowActivity : SectionActivity() {
                     R.string.about_feature_quotes,
                     R.string.about_feature_voice,
                     R.string.about_feature_buttons,
-                    R.string.about_feature_background,
-                    R.string.about_feature_sleep,
                 ),
             ),
             Section(
@@ -99,6 +100,12 @@ class AboutWindowActivity : SectionActivity() {
             Section(R.string.about_contact_title, listOf(R.string.about_contact_body)),
         )
         for (section in sections) addSection(root, section)
+
+        // Кликабельный контакт (msg3008): под секцией «Связаться с автором» —
+        // кнопка открывает чат автора в Telegram. Отдельная кнопка, а не ссылка
+        // в тексте: для скринридера это явная цель с двойным тапом, как любая
+        // кнопка окна.
+        addContactButton(root)
 
         // Версия — спокойной строкой в самом низу. Не клик и не элемент
         // навигации: это подпись, а не содержимое.
@@ -137,6 +144,38 @@ class AboutWindowActivity : SectionActivity() {
                 item.layoutParams = lp
                 root.addView(item)
             }
+        }
+    }
+
+    /** Кнопка «Написать автору в Telegram» — из собственного layout, чтобы текст
+     *  кнопки жил в ресурсах (about_contact_button), а не в коде. */
+    private fun addContactButton(root: LinearLayout) {
+        val btn = layoutInflater
+            .inflate(R.layout.item_about_contact_button, root, false) as Button
+        btn.setOnClickListener { openAuthorTelegram() }
+        root.addView(btn)
+    }
+
+    /** Открыть чат автора @Cuber456. Сначала ссылка tg:// — уходит сразу в
+     *  Telegram; если его нет (ActivityNotFound), страховка на https://t.me —
+     *  откроется в браузере. Обе попытки ловим: окно «О программе» не должно
+     *  упасть из-за отсутствия обработчика. */
+    private fun openAuthorTelegram() {
+        val direct = Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve?domain=Cuber456"))
+        if (!launchSafely(direct)) {
+            val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/Cuber456"))
+            launchSafely(web)
+        }
+    }
+
+    private fun launchSafely(intent: Intent): Boolean {
+        return try {
+            startActivity(intent)
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        } catch (_: Exception) {
+            false
         }
     }
 
