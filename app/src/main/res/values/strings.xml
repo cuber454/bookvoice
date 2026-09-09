@@ -663,7 +663,9 @@
          впереди слово «Закреплено», чтобы скринридер сразу сказал, что книга не
          вытеснится. -->
     <string name="quick_btn_cd">Быстрый доступ, кнопка %1$d: %2$s</string>
-    <string name="quick_pinned_cd">Закреплено. Быстрый доступ, кнопка %1$d: %2$s</string>
+    <!-- msg3170: у закреплённой кнопки признак «закреплено» — но без служебного
+         «Быстрый доступ, кнопка N», которое просили убрать (msg3146). -->
+    <string name="quick_pinned_cd">%1$s. Закреплено</string>
     <string name="quick_pinned_to">Книга закреплена за кнопкой %1$d</string>
     <string name="quick_unpinned">Книга снята с кнопки</string>
     <string name="quick_already_open">Эта книга уже открыта</string>
