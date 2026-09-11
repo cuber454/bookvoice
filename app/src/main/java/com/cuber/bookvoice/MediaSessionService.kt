@@ -48,6 +48,11 @@ class MediaSessionService : Service() {
         fun onMediaPlay()
         fun onMediaPause()
         fun onMediaSkip(delta: Int)
+
+        /** «Выход» из карточки в шторке (msg4073): владелец гасит чтение, не
+         *  открывая окно. Движок останавливает речь, отпускает аудиофокус и
+         *  сохраняет место; служба убирает карточку. */
+        fun onMediaExit()
     }
 
     override fun onCreate() {
@@ -91,6 +96,15 @@ class MediaSessionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // «Выход» из карточки (msg4073): сначала просим движок встать — он
+        // отпустит фокус и сохранит место, — потом убираем карточку и гасим
+        // службу. Порядок важен: гашение службы само по себе фокус не отдаёт.
+        if (intent?.action == ACTION_EXIT) {
+            Diag.log(this, "service", "«выход» из карточки: гашу чтение и карточку")
+            post { listener?.onMediaExit() }
+            dropCardAndStop()
+            return START_NOT_STICKY
+        }
         // Карточка рождается в момент реального старта чтения (startSpeakingCurrent
         // зовёт start(playing=true), msg1779): раньше она появлялась при ОТКРЫТИИ
         // книги, и TalkBack озвучивал рождение при каждом открытии молчащей книги.
@@ -143,6 +157,30 @@ class MediaSessionService : Service() {
         )
     }
 
+    /** Ссылка на «Выход» в карточке: идёт в саму службу тем же путём, что и
+     *  старт чтения (getService), — карточка живёт, пока служба работает. */
+    private fun exitPendingIntent(): PendingIntent =
+        PendingIntent.getService(
+            this,
+            4,
+            Intent(this, MediaSessionService::class.java).setAction(ACTION_EXIT),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+
+    /** Убрать карточку и погасить службу — без убийства процесса: место чтения
+     *  и настройки дописываются на диск асинхронно (prefs.apply). */
+    private fun dropCardAndStop() {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 24) {
+                stopForeground(Service.STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        }
+        stopSelf()
+    }
+
     private fun buildNotification(): Notification {
         val playAction: NotificationCompat.Action
         if (playing) {
@@ -172,6 +210,15 @@ class MediaSessionService : Service() {
             "Вперёд",
             mediaButtonPendingIntent(3, KeyEvent.KEYCODE_MEDIA_NEXT),
         )
+        // msg4073: «Выход» — как у чужой читалки (Сергей сравнил карточки):
+        // гасит чтение прямо из шторки, не открывая окно. В свёрнутом виде
+        // остаются три привычные кнопки, «Выход» — четвёртой, в развёрнутой
+        // карточке: случайным касанием чтение не оборвать.
+        val exitAction = NotificationCompat.Action(
+            android.R.drawable.ic_menu_close_clear_cancel,
+            "Выход",
+            exitPendingIntent(),
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(bookTitle ?: "BookVoice")
@@ -183,6 +230,7 @@ class MediaSessionService : Service() {
             .addAction(prevAction)
             .addAction(playAction)
             .addAction(nextAction)
+            .addAction(exitAction)
             .setStyle(
                 MediaStyle()
                     .setMediaSession(session?.sessionToken)
@@ -240,6 +288,9 @@ class MediaSessionService : Service() {
         private const val NOTIF_ID = 1
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_PLAYING = "playing"
+
+        /** Команда «Выход» из карточки в шторке (msg4073). */
+        private const val ACTION_EXIT = "com.cuber.bookvoice.EXIT_READING"
 
         private val main = Handler(Looper.getMainLooper())
 

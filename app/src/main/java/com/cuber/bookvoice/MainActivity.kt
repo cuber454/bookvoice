@@ -261,9 +261,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.btnNextSentence.setOnClickListener { stepMove(+1) }
         binding.btnPrevChapter.setOnClickListener { chapterNavMove(-1) }
         binding.btnNextChapter.setOnClickListener { chapterNavMove(+1) }
-        // Кнопки скорости (#58): шаг ±0.1, меняют темп на лету.
-        binding.btnSpeedDown.setOnClickListener { nudgeSpeed(-0.1f) }
-        binding.btnSpeedUp.setOnClickListener { nudgeSpeed(+0.1f) }
+        // Кнопки скорости (#58): шаг по списку скорости, меняют темп на лету.
+        binding.btnSpeedDown.setOnClickListener { nudgeSpeed(up = false) }
+        binding.btnSpeedUp.setOnClickListener { nudgeSpeed(up = true) }
         // msg3081+: кнопки-ячейки панели быстрого доступа. Клик — переключиться
         // на книгу ячейки; долгий клик — закрепить/снять закрепление книги.
         installQuickPanelHandlers()
@@ -1019,8 +1019,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_PAUSE -> if (playing) pausePlayback(keepFocus = true)
             G_REPEAT -> startSpeakingCurrent()
             G_POSITION -> announcePosition()
-            G_SPEED_UP -> nudgeSpeed(+0.1f)
-            G_SPEED_DOWN -> nudgeSpeed(-0.1f)
+            G_SPEED_UP -> nudgeSpeed(up = true)
+            G_SPEED_DOWN -> nudgeSpeed(up = false)
             G_TOC -> showTocDialog()
             G_BOOKMARKS -> onBookmarkClick()
             G_ADD_BM -> onBookmarkLongClick()
@@ -1303,7 +1303,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // значка ▶/⏸ в строке (msg1144: значок скринридер читал отдельным словом)
         // и без contentDescription: одно изменение = одно объявление.
         binding.btnPlayPause.text = if (playing) "Пауза" else "Читать"
-        // #54: та же кнопка в полноэкранной панели голоса — «Проверить голос»/«Пауза».
+        // #54: та же кнопка в полноэкранной панели голоса — «Прослушать»/«Пауза».
         binding.btnVoiceTest.text = if (playing) "Пауза" else getString(R.string.voice_test_play)
         MediaSessionService.setPlaying(playing)
     }
@@ -1336,7 +1336,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     /** Подпись текущей скорости над рядом кнопок «Медленнее/Быстрее». */
     private fun speedText(rate: Float): String =
-        "Скорость: " + String.format(java.util.Locale.ROOT, "%.1f", rate)
+        "Скорость: " + RateSteps.label(rate)
 
     /** #102: какая скорость сейчас уместна — своя у книги (если запомнена) или
      *  глобальная из настроек. */
@@ -1350,14 +1350,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.tvSpeed.text = speedText(currentSpeed())
     }
 
-    /** Кнопки «Медленнее/Быстрее» (#58): шаг 0.1, диапазон 0.5–2.0 — тот же,
-     *  что у слайдера скорости в диалоге голоса. Если у книги запомнена своя
+    /** Кнопки «Медленнее/Быстрее» (#58): шаг 0.1 по всему диапазону 0.5–4.0
+     *  (RateSteps.SPEED, msg3929/msg3933) — ровно как у слайдера в диалоге
+     *  голоса. Если у книги запомнена своя
      *  скорость (#102) — меняем именно её, глобальную не трогаем.
      *  Если книга на паузе, новую скорость озвучиваем (во время чтения её
      *  слышно и так). */
-    private fun nudgeSpeed(delta: Float) {
+    private fun nudgeSpeed(up: Boolean) {
         val cur = currentSpeed()
-        val rate = (cur + delta).coerceIn(0.5f, 2.0f)
+        val rate = RateSteps.neighbour(RateSteps.SPEED, cur, up)
         if (rate == cur) return
         if (currentBookRecord()?.voiceSpeed != null) {
             // Своя скорость книги: сохраняем в запись книги.
@@ -2284,8 +2285,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  текущие движок/голос/скорость как свои для этой книги. */
     private fun persistPerBookProfile() {
         if (book == null) return
-        if (currentBookRecord() == null) return
-        val vce = voiceName?.takeIf { player.isReady && player.voices.any { v -> v.name == it } }
+        val rec = currentBookRecord() ?: return
+        // msg3550: пустой список голосов — это «ещё не знаю», а не «голоса нет».
+        // Раньше галочка, закрытая в такой момент, записывала книге голос null —
+        // свой голос книги затирался насовсем.
+        val list = player.voices
+        val vce = voiceName?.takeIf { player.isReady && list.any { v -> v.name == it } }
+            ?: rec.voice.takeIf { list.isEmpty() }
         savePerBook(player.enginePackage, vce, player.speed)
     }
 
@@ -2301,8 +2307,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val e = prefs.edit()
         val eng = player.enginePackage
         if (eng != null) e.putString(KEY_ENGINE, eng) else e.remove(KEY_ENGINE)
-        val vc = voiceName?.takeIf { player.voices.any { v -> v.name == it } }
-        if (vc != null) e.putString(KEY_VOICE, vc) else e.remove(KEY_VOICE)
+        val list = player.voices
+        val vc = voiceName?.takeIf { list.any { v -> v.name == it } }
+        if (vc != null) e.putString(KEY_VOICE, vc)
+        // msg3550: по пустому списку настройку не стираем — «ещё не знаю» ≠
+        // «голоса нет»; иначе закрытие панели в неудачный момент сносило
+        // выбранный голос из настроек насовсем.
+        else if (list.isNotEmpty()) e.remove(KEY_VOICE)
         e.putFloat(KEY_SPEED, player.speed)
         e.apply()
     }
@@ -2520,24 +2531,26 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     // ---------- Диалог «Голос чтения»: ползунки + движок → голоса (#1099/#1102/#1141) ----------
 
-    /** Ползунок скорости/тона в диалогах ридера — тот же диапазон 0.5..2.0 с шагом
-     *  0.1 и та же озвучка (stateDescription с SDK 30), что у ползунков
-     *  Настройки → «Голос» (SettingsActivity.addRateSlider). Встраивается в переданный
-     *  контейнер; [apply] сам решает, куда писать значение (плеер/настройки/запись
-     *  книги) — для скорости вызывающий учитывает галочку «Запомнить для книги» (#102). */
+    /** Ползунок скорости/тона в диалогах ридера — те же значения (список [values]
+     *  из RateSteps: у скорости 0.5..4.0, у тона 0.5..2.0) и та же озвучка
+     *  (stateDescription с SDK 30), что у ползунков Настройки → «Голос»
+     *  (SettingsActivity.addRateSlider). Встраивается в переданный контейнер;
+     *  [apply] сам решает, куда писать значение (плеер/настройки/запись книги) —
+     *  для скорости вызывающий учитывает галочку «Запомнить для книги» (#102). */
     private fun addRateSliderTo(
         container: LinearLayout,
         labelRes: Int,
         cd: String,
         start: Float,
+        values: List<Float>,
         apply: (Float) -> Unit,
     ) {
-        val min = 0.5f
-        val step = 0.1f
-        val ticks = Math.round((2.0f - min) / step).toInt() // 0.5..2.0, шаг 0.1 → 15
-        fun valueOf(p: Int): Float = min + p * step
-        fun progressOf(v: Float): Int = Math.round((v - min) / step).coerceIn(0, ticks)
-        fun rateLabel(v: Float): String = String.format(java.util.Locale.ROOT, "%.1f", v)
+        // msg3929: значения приходят списком (RateSteps) — у скорости он длиннее
+        // (до 4.0), у тона прежний (до 2.0).
+        val ticks = values.lastIndex
+        fun valueOf(p: Int): Float = values[p.coerceIn(0, ticks)]
+        fun progressOf(v: Float): Int = RateSteps.indexOf(values, v)
+        fun rateLabel(v: Float): String = RateSteps.label(v)
 
         val startP = progressOf(start)
         val startV = valueOf(startP)
@@ -2652,7 +2665,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  открывает панель voicePanel НА ВЕСЬ ЭКРАН — читалка временно прячется
      *  (enterVoiceFullscreen). Содержимое прежнее — ползунки скорости/тона/
      *  громкости, галочка «Запомнить для этой книги» (#102), двухшаговый выбор
-     *  движок → голоса. Кнопка «Проверить голос» (▶/⏸) в шапке слушает выбранный
+     *  движок → голоса. Кнопка «Прослушать» (▶/⏸) в шапке слушает выбранный
      *  голос/скорость на тексте книги, не сворачивая панель. */
     private fun toggleVoicePanel() {
         if (binding.voicePanel.visibility == View.VISIBLE) {
@@ -2685,7 +2698,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
         voiceRememberChecked = rememberCb.isChecked
 
-        // #54: кнопка «Проверить голос» в шапке панели — только когда открыта книга
+        // #54: кнопка «Прослушать» в шапке панели — только когда открыта книга
         // (без книги читать нечего). Текст обновляет и updatePlayButton на лету.
         binding.btnVoiceTest.visibility = if (hasBook) View.VISIBLE else View.GONE
         binding.btnVoiceTest.text = if (playing) "Пауза" else getString(R.string.voice_test_play)
@@ -2762,13 +2775,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // не должен заражать общие настройки. Куда писать решает hideVoicePanel
         // (галочка → запись книги, без → глобальные). В отличие от тон/громкость,
         // которые всегда общие, скорость может быть своя у книги (#102).
-        addRateSliderTo(body, R.string.speed_value, "Скорость", currentSpeed()) { v ->
+        addRateSliderTo(body, R.string.speed_value, "Скорость", currentSpeed(), RateSteps.SPEED) { v ->
             voicePanelDirty = true
             if (player.isReady) player.speed = v
             refreshSpeedValue()
             updateStats()
         }
-        addRateSliderTo(body, R.string.tone_value, "Тон", prefs.getFloat(KEY_PITCH, 1f)) { v ->
+        addRateSliderTo(body, R.string.tone_value, "Тон", prefs.getFloat(KEY_PITCH, 1f), RateSteps.PITCH) { v ->
             prefs.edit().putFloat(KEY_PITCH, v).apply()
             if (player.isReady) player.pitch = v
         }
@@ -2835,7 +2848,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         showStep(1)
 
         // #54 (msg2643): панель голоса «на весь экран» — прячем остальную
-        // читалку, а не показываем шторку над списком. Кнопка «Проверить голос»
+        // читалку, а не показываем шторку над списком. Кнопка «Прослушать»
         // (▶/⏸) в шапке слушает выбранный голос/скорость на тексте книги прямо
         // из панели. Скролл внутри занимает весь экран, поэтому галочка
         // «Запомнить для этой книги» (msg2639) больше не обрезается невидимым

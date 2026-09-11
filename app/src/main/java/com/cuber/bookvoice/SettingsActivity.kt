@@ -286,6 +286,19 @@ class SettingsActivity(private val act: SectionActivity) {
         binding.tvTitle.text = getString(R.string.settings_title)
         content().removeAllViews()
         Group.values().forEach { g -> addGroupButton(g) }
+        // msg3921: группа обсуждения — отдельной строкой корня, в один шаг от
+        // входа в настройки. Раньше вход был кнопкой внутри «О программы»
+        // (msg3903); вынесен сюда по просьбе Сергея — до группы надо было
+        // долистать всю справку. Строка с подсказкой, как разделы, чтобы
+        // скринридер читал корень одним ритмом.
+        addMenuRow(getString(R.string.settings_chat), getString(R.string.settings_chat_hint)) {
+            AuthorContact.open(act)
+        }
+        // msg3907: «О программе» — тоже последней строкой корня, а не в «Разном»
+        // (msg3061): справке место рядом с разделами.
+        addMenuRow(getString(R.string.about_title), getString(R.string.settings_about_hint)) {
+            startActivity(Intent(act, AboutWindowActivity::class.java))
+        }
         scrollTop()
         if (focusGroup != null) {
             focusGroupButton(focusGroup)
@@ -326,10 +339,14 @@ class SettingsActivity(private val act: SectionActivity) {
         // «Голос» (msg721 + msg1102): только параметры звука. Тон — сюда же
         // (msg1096: «пропал ползунок тона»), движок и голос — кнопкой ниже,
         // тем же выбором, что и в читалке.
-        addRateSlider(MainActivity.KEY_SPEED, R.string.speed_value, "Скорость") {
+        // msg4091: «Прослушать» — ПЕРВОЙ строкой раздела, как «Прослушать»
+        // в панели голоса читалки (она там тоже выше ползунков). Порядок строк в
+        // обоих местах одинаковый — Сергей просил не путаться между ними.
+        addButton(getString(R.string.voice_preview)) { previewVoice() }
+        addRateSlider(MainActivity.KEY_SPEED, R.string.speed_value, "Скорость", RateSteps.SPEED) {
             MainActivity.active?.player?.speed = it
         }
-        addRateSlider(MainActivity.KEY_PITCH, R.string.tone_value, "Тон") {
+        addRateSlider(MainActivity.KEY_PITCH, R.string.tone_value, "Тон", RateSteps.PITCH) {
             MainActivity.active?.player?.pitch = it
         }
         // Громкость чтения (0..100%) — общий KEY_VOLUME (тот же, что был в окне «Голос и речь»).
@@ -369,16 +386,21 @@ class SettingsActivity(private val act: SectionActivity) {
         addCheck(R.string.headphones_pause_title, MainActivity.KEY_PAUSE_HEADSET, true)
     }
 
-    /** Ползунок скорости/тона: шаг 0.1 в диапазоне 0.5..2.0, чтобы свайп
-     *  TalkBack менял значение на одну десятую (0.6 → 0.7 → 0.8), а не на
-     *  сотые (1.06). Подпись-значение обновляется над ползунком, [apply]
-     *  применяет значение к плееру сразу. */
-    private fun addRateSlider(key: String, labelRes: Int, cd: String, apply: (Float) -> Unit) {
-        val min = 0.5f
-        val step = 0.1f
-        val ticks = Math.round((2.0f - min) / step).toInt() // 0.5..2.0, шаг 0.1 → 15
-        fun valueOf(p: Int): Float = min + p * step
-        fun progressOf(v: Float): Int = Math.round((v - min) / step).coerceIn(0, ticks)
+    /** Ползунок скорости/тона по списку значений [values] (RateSteps): свайп
+     *  TalkBack двигает ровно на одну десятую (0.6 → 0.7 → 0.8), а не на сотые
+     *  (1.06). У скорости список длиннее — до 4.0 (msg3933), у тона прежний, до
+     *  2.0. Подпись-значение обновляется над ползунком, [apply] применяет
+     *  значение к плееру сразу. */
+    private fun addRateSlider(
+        key: String,
+        labelRes: Int,
+        cd: String,
+        values: List<Float>,
+        apply: (Float) -> Unit,
+    ) {
+        val ticks = values.lastIndex
+        fun valueOf(p: Int): Float = values[p.coerceIn(0, ticks)]
+        fun progressOf(v: Float): Int = RateSteps.indexOf(values, v)
 
         val cur = prefs.getFloat(key, 1f)
         val startP = progressOf(cur)
@@ -744,11 +766,10 @@ class SettingsActivity(private val act: SectionActivity) {
             Diag.clear(act)
             toast(getString(R.string.log_cleared))
         }
-        // msg3061: «О программе» переехало из меню «⋮» полки сюда, в «Разное» —
-        // справке место в настройках, а не в быстром меню библиотеки.
-        addButton(getString(R.string.about_title)) {
-            startActivity(Intent(act, AboutWindowActivity::class.java))
-        }
+        // msg3907: «О программе» отсюда убрано — теперь это строка корня
+        // настроек (showMenu). msg3903: отдельный пункт «Связаться с
+        // разработчиком» тоже убран — вход в группу один, кнопкой внутри
+        // «О программе», ссылка живёт в AuthorContact.
     }
 
     private fun content(): LinearLayout = binding.content
@@ -826,8 +847,13 @@ class SettingsActivity(private val act: SectionActivity) {
      *  строкой, приглушённым серым. Подсказка — постоянный текст, не резюме состояния,
      *  поэтому msg528 (убрать резюме «что настроено») не нарушен. */
     private fun addGroupButton(g: Group) {
-        val title = getString(g.titleRes)
-        val hint = getString(g.hintRes)
+        addMenuRow(getString(g.titleRes), getString(g.hintRes)) { openGroup(g) }
+    }
+
+    /** Та же строка, но для пункта, у которого нет раздела-`Group` (msg3907):
+     *  «О программе» открывает отдельное окно, а не список настроек, но в корне
+     *  должно выглядеть как остальные строки — с подсказкой. */
+    private fun addMenuRow(title: String, hint: String, onClick: () -> Unit) {
         val b = Button(act).apply {
             text = SpannableStringBuilder().apply {
                 append(title)
@@ -840,7 +866,7 @@ class SettingsActivity(private val act: SectionActivity) {
             textSize = 17f
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(6), dp(12), dp(6))
-            setOnClickListener { openGroup(g) }
+            setOnClickListener { onClick() }
         }
         asPlainText(b)
         content().addView(b, lp().apply {
@@ -1465,8 +1491,7 @@ class SettingsActivity(private val act: SectionActivity) {
         if (prefs.getString(MainActivity.KEY_START, MainActivity.START_LAST) == MainActivity.START_LAST) 1 else 0
 
     /** Значение ползунка скорости/тона для подписи и озвучки («0.8», «1.2»). */
-    private fun rateLabel(rate: Float): String =
-        String.format(java.util.Locale.ROOT, "%.1f", rate)
+    private fun rateLabel(rate: Float): String = RateSteps.label(rate)
 
     // ---------------- Папка с книгами ----------------
 
@@ -1559,6 +1584,53 @@ class SettingsActivity(private val act: SectionActivity) {
         OPDS_READABLE_FORMATS.indexOfFirst { it.first == dlFormatKey() }.coerceAtLeast(0)
 
     // ---------------- Диалог «Голос и движок» ----------------
+
+    // ---------------- Проба голоса из настроек (msg4087) ----------------
+
+    /** Пробный движок для кнопки «Прослушать». Отдельный от читалки: у него нет
+     *  книги и связи с циклом предложений, поэтому проба не может «продвинуть»
+     *  настоящее чтение. Если книга читается — на время пробы ставим её на паузу,
+     *  иначе два голоса звучали бы одновременно. */
+    private var previewPlayer: SpeechPlayer? = null
+
+    /** Движок поднимается: повторные нажатия ждут его, а не запускают заново. */
+    private var previewWaiting = false
+
+    private fun previewVoice() {
+        if (previewWaiting) return
+        val p = previewPlayer ?: SpeechPlayer(act.applicationContext).also { previewPlayer = it }
+        // Пауза — через движок (MainActivity.pausePlayback приватный, а движок
+        // умеет паузу и без открытого окна). Без открытой книги просто ничего не делает.
+        ReaderEngine.pausePlayback()
+        if (p.isReady) {
+            speakPreview(p)
+            return
+        }
+        previewWaiting = true
+        p.setEngine(prefs.getString(MainActivity.KEY_ENGINE, null)) { ok ->
+            runOnUiThread {
+                previewWaiting = false
+                if (ok) speakPreview(p) else toast(getString(R.string.voice_preview_failed))
+            }
+        }
+    }
+
+    /** Проговорить образец теми настройками, что сейчас стоят в prefs. */
+    private fun speakPreview(p: SpeechPlayer) {
+        p.speed = prefs.getFloat(MainActivity.KEY_SPEED, 1f)
+        p.pitch = prefs.getFloat(MainActivity.KEY_PITCH, 1f)
+        p.volume = prefs.getFloat(MainActivity.KEY_VOLUME, 1f)
+        prefs.getString(MainActivity.KEY_VOICE, null)?.let { p.selectVoice(it) }
+        Diag.log(act, "voice", "«прослушать»: проба голоса из настроек")
+        p.speak(getString(R.string.voice_preview_sample))
+    }
+
+    /** Окно настроек закрывается — пробный движок больше не нужен. */
+    fun shutdownPreview() {
+        previewWaiting = false
+        previewPlayer?.shutdown()
+        previewPlayer = null
+    }
 
     /** Движок/голос меняем через живой плеер открытой книги (если она есть).
      *  Из библиотеки (без книги) предложить открыть книгу — голос выбирать

@@ -312,6 +312,26 @@ internal object ReaderEngine {
             }
         }
 
+        /** «Выход» из карточки в шторке (msg4073). Владелец слушает без окна и
+         *  хочет закончить: гасим чтение, отпускаем фокус (чтобы музыка из
+         *  другого плеера не осталась приглушённой), сохраняем место. Карточку
+         *  убирает служба — она же и прислала эту команду. Если чтение стояло
+         *  на паузе, фокус всё равно отдаём: пауза его держит намеренно, но
+         *  после «Выхода» возвращаться к нам уже некому. */
+        override fun onMediaExit() {
+            main.post {
+                if (book == null) return@post
+                Diag.log(ctx, "activity", "«выход» из карточки: чтение встало")
+                if (playing) {
+                    pausePlayback(keepFocus = false)
+                } else {
+                    dropAudioFocus()
+                    savePosition()
+                    pushPlayState()
+                }
+            }
+        }
+
         override fun onMediaSkip(delta: Int) {
             // Кнопка «назад» (-1) / «вперёд» (+1) гарнитуры. Что она делает — своя
             // настройка на кнопку (msg2136). По умолчанию — «Предложение»: кнопка
@@ -998,7 +1018,10 @@ internal object ReaderEngine {
         return BookStore.byUri(ctx, u)
     }
 
-    private fun waitApplyBookVoice(attempt: Int) {
+    /** Сколько раз (по 200 мс, ~4с) ждать список голосов движка (msg3550). */
+    private val voiceListTries = 20
+
+    private fun waitApplyBookVoice(attempt: Int, voiceWait: Int = 0) {
         val eng = perBookEngine
         val vce = perBookVoice
         val p = player ?: return
@@ -1006,6 +1029,15 @@ internal object ReaderEngine {
         if (!p.isReady) {
             if (attempt > 40) return // ~8с — движок так и не поднялся
             main.postDelayed({ waitApplyBookVoice(attempt + 1) }, 200)
+            return
+        }
+        // msg3550: «движок готов» и «список голосов пришёл» — разные события:
+        // Android отдаёт голоса чуть позже инициализации. Пустой список — это
+        // «ещё не знаю», а не «голоса нет»: раньше проверка заскакивала раньше
+        // списка, объявляла «голос не найден» и голос книги не выставлялся —
+        // книга уезжала на обычный голос. Ждём список, как ждём готовность.
+        if (vce != null && p.voices.isEmpty() && voiceWait < voiceListTries) {
+            main.postDelayed({ waitApplyBookVoice(attempt, voiceWait + 1) }, 200)
             return
         }
         if (eng != null && eng != p.enginePackage) {
@@ -1016,8 +1048,9 @@ internal object ReaderEngine {
                             p.selectVoice(vce)
                             voiceName = vce
                         }
-                        announceIfBookVoiceMissing(vce)
-                        host?.onSpeedUiRefresh()
+                        // Движок перезапустился — список голосов поедет заново
+                        // (пустой). Проходим тем же циклом, а не проверяем сразу.
+                        waitApplyBookVoice(0, 0)
                     } else {
                         p.setEngine(null) { _ ->
                             main.post {
@@ -1038,13 +1071,22 @@ internal object ReaderEngine {
         }
     }
 
-    /** Запомненный для книги голос не найден — один раз сказать об этом. */
+    /** Запомненный для книги голос не найден — один раз сказать об этом.
+     *  По пустому списку голосов решение не принимаем (msg3550): это «ещё не
+     *  знаю», а не «голоса нет» — иначе объявление было бы ложным. */
     private fun announceIfBookVoiceMissing(vce: String?) {
         val p = player ?: return
         if (vce == null || voiceMissingAnnounced || !p.isReady) return
+        if (p.voices.isEmpty()) {
+            Diag.log(ctx, "voice", "список голосов пуст — про голос книги «$vce» молчу")
+            return
+        }
         if (p.voices.none { it.name == vce }) {
             voiceMissingAnnounced = true
+            Diag.log(ctx, "voice", "голос книги «$vce» не найден среди ${p.voices.size} голосов")
             host?.onAnnounce(ctx.getString(R.string.voice_book_missing))
+        } else {
+            Diag.log(ctx, "voice", "голос книги «$vce» на месте (${p.voices.size} голосов)")
         }
     }
 

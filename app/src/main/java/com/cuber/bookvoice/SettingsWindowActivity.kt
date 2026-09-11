@@ -40,6 +40,9 @@ class SettingsWindowActivity : SectionActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Проба голоса («Прослушать» в «Голосе») держит свой движок — с закрытием
+        // окна он больше не нужен (msg4087).
+        settings.shutdownPreview()
         // Возврат с этого окна на полку не должен прыгать в последнюю книгу:
         // полка покажется «снизу», и её resume это воспринял бы как старт.
         // Страховка поверх rootBack (там флаг ставится раньше, до finish()).

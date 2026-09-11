@@ -131,6 +131,28 @@ class SpeechPlayer(context: Context) {
     private var reqSeq = 0L
     private val pending = HashMap<Long, Pending>()
 
+    // ---------- Сторож молчания (msg4077) ----------
+
+    /** Движок или плеер могут не отозваться ВООБЩЕ: в логе пользователя
+     *  (RMX3472, Android 14, v0.4.24) чтение встало на «старт чтения (предл. 131)»
+     *  и дальше ни звука, ни ошибки — ни `onDone`, ни `onError`. Ждать вечно
+     *  нельзя: читалка замолкает насовсем. Токены гасят только свой сторож —
+     *  событие на одном этапе не отменяет надзор за другим. */
+    private var synthWatchToken = 0L
+    private var playWatchToken = 0L
+    private var directWatchToken = 0L
+
+    /** Перезапусков движка подряд из-за молчания (сбрасывается удачной речью). */
+    private var retriesInRow = 0
+
+    /** Текст, который надо переспросить, когда движок поднимется после перезапуска. */
+    private var retryAfterRestart: String? = null
+
+    /** Текст, заявку на который движок уже потерял один раз (msg4103). Первый обрыв
+     *  лечим повторной заявкой без перезапуска движка; второй подряд — перезапуском.
+     *  Сбрасывается любым доспевшим синтезом и на остановке дыхания (stop/start). */
+    private var softRetriedText: String? = null
+
     private class Pending(val kind: Kind, val text: String, val file: File?) {
         enum class Kind { FILE, DIRECT }
         var cancelled = false
@@ -164,7 +186,26 @@ class SpeechPlayer(context: Context) {
                         main.post { synthFailed(id, errorCode) }
                     }
                 })
+                // msg3550: список голосов движок отдаёт не в момент init, а
+                // позже — выбранный голос (в т.ч. свой у книги) в этот момент
+                // поставить нечем. Как только список приехал, доставляем голос.
+                tts?.setOnVoicesChangedListener { applySpeedAndVoice() }
                 applySpeedAndVoice()
+                // Сторож (msg4077): движок перезапущен после молчания — переспросить
+                // фразу, которую он не досказал. Скорость и голос уже применены выше.
+                // Состояние «эту фразу ждут» восстанавливаем руками: start() его
+                // обнулил (resetPipeline), а synthFinished играет только то, что ждут.
+                retryAfterRestart?.let { t ->
+                    retryAfterRestart = null
+                    currentText = t
+                    awaitingPlayText = t
+                    synthToFile(t)
+                }
+            } else {
+                retryAfterRestart?.let {
+                    retryAfterRestart = null
+                    Diag.log(appContext, "tts", "движок не поднялся после перезапуска (status=$status)")
+                }
             }
             engineReadyCallback?.invoke(ok)
             engineReadyCallback = null
@@ -238,6 +279,20 @@ class SpeechPlayer(context: Context) {
     fun stop() {
         currentText = null
         awaitingPlayText = null
+        // msg4103: заявка, которая была «в полёте», здесь же и отменяется —
+        // tts.stop() её гасит, а pending ниже чистится. Метку «синтез идёт»
+        // снимаем вместе с ней: иначе speak() того же предложения (пауза →
+        // продолжить) ждал бы ответа по заявке, которой уже нет, и чтение
+        // замолкало бы навсегда. Именно это и видно в логе пользователя
+        // (ivona.tts): pause → «старт чтения (предл. 145)» → тишина.
+        prefetchInFlightText = null
+        softRetriedText = null
+        // Сторож молчания (msg4077): тишина попрошена — надзор снимаем, чтобы
+        // он не «оживил» чтение, которое владелец только что остановил.
+        synthWatchToken++
+        playWatchToken++
+        directWatchToken++
+        retryAfterRestart = null
         clearPrefetch()
         releaseMedia()
         // Останавливаем и сам движок: иначе запасное прямое произнесение
@@ -267,6 +322,93 @@ class SpeechPlayer(context: Context) {
         }
     }
 
+    // ---------- Сторож молчания (msg4077) ----------
+
+    /** Взвести надзор за синтезом [text]: не отозвался за [SYNTH_STALL_MS] —
+     *  считаем движок замолчавшим. */
+    private fun armSynthWatch(text: String) {
+        val token = ++synthWatchToken
+        main.postDelayed({ if (token == synthWatchToken) onSynthWatchdog(text) }, SYNTH_STALL_MS)
+    }
+
+    /** Синтез молчит дольше разумного. Лестница мер (msg4103): переспросить фразу
+     *  без перезапуска движка → перезапустить движок (до [MAX_RESTARTS] раз) →
+     *  страховка ([onSynthLost]: прямая речь, а то и пропуск фразы). Чтение
+     *  продолжается в любом случае — молчания навсегда быть не должно. */
+    private fun onSynthWatchdog(text: String) {
+        // Заготовка могла доспеть, пока сторож спал, — тогда сторожить нечего.
+        val stuck = pending.filter {
+            it.value.kind == Pending.Kind.FILE && it.value.text == text && !it.value.cancelled
+        }
+        if (stuck.isEmpty()) return
+        if (media != null) {
+            // Играет предыдущая фраза: движок сейчас не трогаем, иначе оборвём звук.
+            armSynthWatch(text)
+            return
+        }
+        val waited = SYNTH_STALL_MS / 1000
+        stuck.forEach { (id, p) ->
+            p.cancelled = true
+            p.file?.delete()
+            pending.remove(id)
+        }
+        if (prefetchInFlightText == text) prefetchInFlightText = null
+        val wanted = text == awaitingPlayText
+        // msg4103: первый обрыв — переспрашиваем фразу заново, НЕ трогая движок.
+        // Лог пользователя (ivona.tts, RMX3472): движок терял одну-единственную
+        // заявку, а следующие обслуживал исправно — предл. 146 зазвучал через
+        // 1.1 с после начала синтеза. Перезапуск движка — тяжёлая мера (заново
+        // init, голос, скорость), берегём её для второго обрыва подряд.
+        if (softRetriedText != text && ready) {
+            softRetriedText = text
+            Diag.log(appContext, "tts",
+                "синтез молчит $waited с (${text.take(40)}…) — переспрашиваю фразу заново")
+            if (wanted) synthToFile(text)
+            return
+        }
+        if (retriesInRow < MAX_RESTARTS) {
+            retriesInRow++
+            Diag.log(
+                appContext, "tts",
+                "движок молчит $waited с (${text.take(40)}…) — перезапускаю движок, попытка $retriesInRow"
+            )
+            if (wanted) retryAfterRestart = text
+            start(enginePackage)
+            return
+        }
+        Diag.log(appContext, "tts", "движок молчит $waited с и перезапуски не помогли — фразу пропускаю")
+        retriesInRow = 0
+        if (wanted) onSynthLost(text)
+    }
+
+    /** Взвести надзор за подготовкой файла: локальный wav готовится доли секунды. */
+    private fun armPlayWatch(text: String?) {
+        val token = ++playWatchToken
+        main.postDelayed({ if (token == playWatchToken) onPlayWatchdog(text) }, PLAY_STALL_MS)
+    }
+
+    private fun onPlayWatchdog(text: String?) {
+        Diag.log(appContext, "sound", "свой звук не подготовился за ${PLAY_STALL_MS / 1000} с — говорю напрямую")
+        releaseMedia()
+        fallbackDirect(text)
+    }
+
+    /** Взвести надзор за прямой речью движка: `speak()` мог отчитаться успехом и
+     *  потом промолчать — тогда `onDone` не придёт и чтение встанет. */
+    private fun armDirectWatch(id: Long) {
+        val token = ++directWatchToken
+        main.postDelayed({
+            if (token != directWatchToken) return@postDelayed
+            if (pending.remove(id) == null) return@postDelayed
+            Diag.log(
+                appContext, "tts",
+                "прямая речь молчит ${DIRECT_STALL_MS / 1000} с — пропускаю фразу, чтение идёт дальше"
+            )
+            retriesInRow = 0
+            onDone?.invoke()
+        }, DIRECT_STALL_MS)
+    }
+
     // ---------- Синтез ----------
 
     /** Запустить синтез [text] в файл. По завершении судьба файла решается в
@@ -277,6 +419,7 @@ class SpeechPlayer(context: Context) {
         val file = File(synthDir, "s_${reqSeq}.wav")
         val id = reqSeq++
         pending[id] = Pending(Pending.Kind.FILE, text, file)
+        armSynthWatch(text)
         val r = runCatching {
             t.synthesizeToFile(text, null, file, id.toString())
         }.getOrDefault(TextToSpeech.ERROR)
@@ -287,6 +430,7 @@ class SpeechPlayer(context: Context) {
     }
     /** Завершился синтез (или прямое произнесение) с [id]. На главном потоке. */
     private fun synthFinished(id: Long) {
+        directWatchToken++ // речь движка отозвалась — надзор за ней больше не нужен
         val p = pending.remove(id) ?: return
         if (p.cancelled) {
             p.file?.delete()
@@ -295,6 +439,7 @@ class SpeechPlayer(context: Context) {
         when (p.kind) {
             Pending.Kind.DIRECT -> {
                 // Страховочное произнесение движком закончилось само.
+                retriesInRow = 0 // движок жив — счётчик перезапусков обнуляем
                 onDone?.invoke()
             }
             Pending.Kind.FILE -> {
@@ -304,6 +449,7 @@ class SpeechPlayer(context: Context) {
                     onSynthLost(p.text)
                     return
                 }
+                softRetriedText = null // синтез доспел — движок отзывается, обрывов нет
                 if (p.text == awaitingPlayText) {
                     // Это тот текст, который уже попросили говорить.
                     awaitingPlayText = null
@@ -311,6 +457,9 @@ class SpeechPlayer(context: Context) {
                     playFile(f)
                 } else if (p.text == prefetchInFlightText) {
                     // Упреждающий синтез завершился, пока его ещё не просили.
+                    // msg4077: засечка в лог — без неё по логу не видно, доспела
+                    // заготовка или синтез молча повис.
+                    Diag.log(appContext, "sound", "заготовка готова: ${f.name} (${f.length()} байт)")
                     prefetchInFlightText = null
                     prefetchText = p.text
                     prefetchFile = f
@@ -324,6 +473,7 @@ class SpeechPlayer(context: Context) {
 
     /** Синтез с [id] сорвался — разбираемся, был ли это запрошенный текст. */
     private fun synthFailed(id: Long, errorCode: Int) {
+        directWatchToken++
         val p = pending.remove(id) ?: return
         p.file?.delete()
         if (p.cancelled || p.kind != Pending.Kind.FILE) return
@@ -350,6 +500,8 @@ class SpeechPlayer(context: Context) {
             pending.remove(id)
             // Совсем ничего не вышло — пропускаем предложение, чтобы чтение не встало.
             onDone?.invoke()
+        } else {
+            armDirectWatch(id)
         }
     }
 
@@ -364,6 +516,7 @@ class SpeechPlayer(context: Context) {
             mp.setAudioSessionId(audioSessionId)
             mp.setDataSource(f.absolutePath)
             mp.setOnPreparedListener {
+                playWatchToken++ // файл готов — сторож подготовки больше не нужен
                 if (gen != playGen || media !== null) {
                     // Успели остановить, пока файл готовился, — не играем.
                     runCatching { it.release() }
@@ -373,6 +526,7 @@ class SpeechPlayer(context: Context) {
                 media = it
                 it.setVolume(volume, volume)
                 it.start()
+                retriesInRow = 0 // звук пошёл — движок и плеер живы
                 Diag.log(appContext, "sound", "играю свой звук: ${f.name} (${f.length()} байт)")
                 // Предложение начало звучать — готовим следующее заранее.
                 requestPrefetch()
@@ -384,6 +538,7 @@ class SpeechPlayer(context: Context) {
                 onDone?.invoke()
             }
             mp.setOnErrorListener { p, what, extra ->
+                playWatchToken++
                 runCatching { p.release() }
                 if (media === p) media = null
                 f.delete()
@@ -392,8 +547,13 @@ class SpeechPlayer(context: Context) {
                 fallbackDirect(text)
                 true
             }
+            // msg4077: засечка «файл отдан плееру» — по логу видно, где встало:
+            // синтез не доспел или плеер не подготовил файл.
+            Diag.log(appContext, "sound", "готовлю свой звук: ${f.name} (${f.length()} байт)")
+            armPlayWatch(text)
             mp.prepareAsync()
         } catch (e: Exception) {
+            playWatchToken++
             runCatching { mp.release() }
             f.delete()
             if (gen == playGen) {
@@ -421,6 +581,8 @@ class SpeechPlayer(context: Context) {
         if (r != TextToSpeech.SUCCESS) {
             pending.remove(id)
             onDone?.invoke()
+        } else {
+            armDirectWatch(id)
         }
     }
 
@@ -448,8 +610,12 @@ class SpeechPlayer(context: Context) {
 
     /** Полностью обнулить состояние пайплайна (без остановки TTS). */
     private fun resetPipeline() {
+        synthWatchToken++
+        playWatchToken++
+        directWatchToken++
         awaitingPlayText = null
         prefetchInFlightText = null
+        softRetriedText = null
         clearPrefetch()
         releaseMedia()
         currentText = null
@@ -472,6 +638,20 @@ class SpeechPlayer(context: Context) {
     }
 
     companion object {
+        /** Сторож молчания (msg4077): сколько ждём движок на синтез одной фразы.
+         *  Обычный синтез в логе занимает доли секунды — 15 с это запас в десятки раз. */
+        private const val SYNTH_STALL_MS = 15_000L
+
+        /** Сколько ждём MediaPlayer на подготовку локального wav-файла. */
+        private const val PLAY_STALL_MS = 12_000L
+
+        /** Прямая речь движка: медленный темп и длинная фраза могут звучать долго,
+         *  поэтому срок щедрый — тишина дольше трёх минут уже точно сбой. */
+        private const val DIRECT_STALL_MS = 180_000L
+
+        /** Перезапусков движка подряд, после которых фразу просто пропускаем. */
+        private const val MAX_RESTARTS = 2
+
         /** Резервный способ перечислить движки через PackageManager, если getEngines пуст. */
         private fun queryEngines(context: Context): List<Pair<String, String>> {
             val pm = context.packageManager

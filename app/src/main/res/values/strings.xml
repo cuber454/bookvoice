@@ -269,6 +269,9 @@
     <string name="settings_group_start_hint">Запуск, листание и шаг кнопок</string>
     <string name="settings_group_library_hint">Папка с книгами, куда и в каком формате качать</string>
     <string name="settings_group_diag_hint">Проверка обновлений и журнал приложения</string>
+    <string name="settings_about_hint">Что это за программа и её фишки</string>
+    <string name="settings_chat">Группа BookVoice в Telegram</string>
+    <string name="settings_chat_hint">Вопросы, идеи, сообщения об ошибках. При сбое удобно сначала отправить лог</string>
     <!-- Настраиваемые свайпы вправо/влево в читалке (#77) -->
     <string name="gesture_right_title">Свайп вправо</string>
     <string name="gesture_left_title">Свайп влево</string>
@@ -346,6 +349,11 @@
     <string name="volume_cd">Громкость</string>
     <string name="voice_engine_title">Голос и движок</string>
     <string name="voice_engine_value">Голос и движок…</string>
+    <!-- msg4087: проба голоса прямо из настроек — услышать выбранный голос,
+         скорость и тон, не открывая книгу (в книге для этого «Прослушать»). -->
+    <string name="voice_preview">Прослушать</string>
+    <string name="voice_preview_sample">Так звучит выбранный голос, скорость и тон чтения</string>
+    <string name="voice_preview_failed">Голосовой движок не запустился — выбери его в «Голос и движок»</string>
     <string name="voice_need_book">Чтобы сменить голос, открой любую книгу и нажми «Голос чтения» внизу экрана</string>
     <string name="engine_step">1. Выберите движок синтеза</string>
     <string name="engine_back">← К выбору движка</string>
@@ -601,7 +609,10 @@
     <string name="voice_remember_hint">С галочкой голос запомнится только для этой книги. Без галочки голос станет общим для всех книг без своего голоса.</string>
 
     <!-- 0.4.14 (#54): полноэкранная панель голоса — кнопка проверки голоса -->
-    <string name="voice_test_play">Проверить голос</string>
+    <!-- msg4099: одна надпись на обеих панелях голоса (в книге и в настройках) —
+         Сергей просил не путаться, когда кнопка стоит в одинаковом месте. Пока
+         читает — «Пауза» (текст ставится в MainActivity.updatePlayButton). -->
+    <string name="voice_test_play">Прослушать</string>
 
     <!-- 0.3.42: меню долгого нажатия на закладке (#103) -->
     <string name="bm_actions_title">Действия с закладкой</string>
