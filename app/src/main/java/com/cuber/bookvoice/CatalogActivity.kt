@@ -32,8 +32,6 @@ import com.cuber.bookvoice.databinding.ActivityCatalogBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.File
 import java.net.URLEncoder
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * Онлайн-каталоги книг по протоколу OPDS (v0.3.26).
@@ -300,8 +298,9 @@ class CatalogActivity(private val act: SectionActivity) {
      *  позиция умирала в тот же миг, и следующий вход в «Сетевые библиотеки»
      *  начинался с корня, хотя место было записано.
      *
-     *  Полного выхода это не касается: место живёт на диске (msg4250), а не
-     *  только в процессе, — чистить здесь нечего в любом случае. */
+     *  Полного выхода это не касается: место живёт в памяти процесса, а «Выход из
+     *  приложения» процесс убивает (TabNav.exitApp) — начинать чистить нечего.
+     *  Холодный запуск по этой же причине открывает каталог с корня (msg4266). */
     fun dispose() {
         dlDialog?.dismiss()
         dlDialog = null
@@ -325,10 +324,6 @@ class CatalogActivity(private val act: SectionActivity) {
         CatalogMemory.feeds = feeds
         CatalogMemory.topBook = book
         CatalogMemory.topBookSource = src
-        // Место запоминаем и «на диск» (msg4250): Сергей хочет, чтобы каталог
-        // открывался там же и после полного перезапуска приложения, а не только
-        // после ухода на полку.
-        CatalogMemory.save(act)
     }
 
     /** Выход на полку (кнопка «Библиотека» и равнозначные): сначала запомнить место. */
@@ -345,13 +340,6 @@ class CatalogActivity(private val act: SectionActivity) {
      *  ленту или страницу книги показывает renderTop. Память не чистим — место
      *  хранится, пока его не перезапишет следующий выход с другого уровня. */
     private fun restorePosition() {
-        // Пусто в памяти процесса — значит приложение перезапускали: поднимаем
-        // место с диска (msg4250). Если и там пусто (выходили из корня или
-        // каталог ни разу не открывали) — load ничего не меняет, и мы выйдем
-        // строкой ниже: свежий вход начинается с корня, как раньше.
-        if (CatalogMemory.feeds.isEmpty() && CatalogMemory.topBook == null) {
-            CatalogMemory.load(act)
-        }
         if (CatalogMemory.feeds.isEmpty() && CatalogMemory.topBook == null) return
         nav.clear()
         for ((url, title) in CatalogMemory.feeds) nav.add(Nv.Feed(url, title))
@@ -2140,109 +2128,6 @@ object CatalogMemory {
     var topBook: OpdsItem.Book? = null
     var topBookSource = ""
 
-    /** Место в каталоге живёт не только в процессе, но и на диске (msg4250):
-     *  Сергей просил, чтобы оно переживало полный выход из приложения. Ключ —
-     *  в тех же настройках «reader», значение — одна строка JSON: стек лент
-     *  (адрес + подпись) и, если стояли на странице книги, сама книга. */
-    private const val KEY = "catalog_place"
-
-    private fun prefs(c: Context) =
-        c.getSharedPreferences("reader", Context.MODE_PRIVATE)
-
-    /** Запомнить место на диск. Пустое место (вышли из корня) ключ чистит: тогда
-     *  следующий вход начнётся с корня, а не поднимет давнюю запись. */
-    fun save(c: Context) {
-        if (feeds.isEmpty() && topBook == null) {
-            prefs(c).edit().remove(KEY).apply()
-            return
-        }
-        val o = JSONObject()
-        val fs = JSONArray()
-        for ((url, title) in feeds) fs.put(JSONObject().put("u", url).put("t", title))
-        o.put("feeds", fs)
-        o.put("src", topBookSource)
-        topBook?.let { o.put("book", bookToJson(it)) }
-        prefs(c).edit().putString(KEY, o.toString()).apply()
-    }
-
-    /** Поднять место с диска. Битый JSON молча пропускаем: показать корень
-     *  каталога лучше, чем упасть на входе. */
-    fun load(c: Context) {
-        val raw = prefs(c).getString(KEY, null) ?: return
-        val o = runCatching { JSONObject(raw) }.getOrNull() ?: return
-        val fs = o.optJSONArray("feeds")
-        val list = ArrayList<Pair<String, String>>()
-        if (fs != null) for (i in 0 until fs.length()) {
-            val e = fs.optJSONObject(i) ?: continue
-            val u = e.optString("u")
-            if (u.isNotBlank()) list.add(u to e.optString("t"))
-        }
-        feeds = list
-        topBookSource = o.optString("src")
-        topBook = o.optJSONObject("book")?.let { bookFromJson(it) }
-    }
-
-    private fun bookToJson(b: OpdsItem.Book): JSONObject = JSONObject().apply {
-        put("title", b.title)
-        put("authors", JSONArray(b.authors))
-        put("url", b.url)
-        put("ext", b.ext)
-        put("genres", JSONArray(b.genres))
-        put("annotation", b.annotation ?: JSONObject.NULL)
-        put("annotationHtml", b.annotationHtml ?: JSONObject.NULL)
-        put("siteUrl", b.siteUrl ?: JSONObject.NULL)
-        put(
-            "downloads",
-            JSONArray().apply {
-                for (d in b.downloads) {
-                    put(JSONObject().put("l", d.label).put("e", d.ext).put("u", d.url))
-                }
-            },
-        )
-        b.authorFeed?.let { put("authorFeed", relatedToJson(it)) }
-        b.seriesFeed?.let { put("seriesFeed", relatedToJson(it)) }
-    }
-
-    private fun bookFromJson(o: JSONObject): OpdsItem.Book {
-        val dl = ArrayList<OpdsFormat>()
-        o.optJSONArray("downloads")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val d = arr.optJSONObject(i) ?: continue
-                dl.add(OpdsFormat(d.optString("l"), d.optString("e"), d.optString("u")))
-            }
-        }
-        return OpdsItem.Book(
-            title = o.optString("title"),
-            authors = strList(o.optJSONArray("authors")),
-            url = o.optString("url"),
-            ext = o.optString("ext"),
-            genres = strList(o.optJSONArray("genres")),
-            annotation = optStr(o, "annotation"),
-            annotationHtml = optStr(o, "annotationHtml"),
-            downloads = dl,
-            authorFeed = relatedFromJson(o.optJSONObject("authorFeed")),
-            seriesFeed = relatedFromJson(o.optJSONObject("seriesFeed")),
-            siteUrl = optStr(o, "siteUrl"),
-        )
-    }
-
-    private fun relatedToJson(r: OpdsRelated) =
-        JSONObject().put("l", r.label).put("u", r.url)
-
-    private fun relatedFromJson(o: JSONObject?): OpdsRelated? =
-        o?.let { OpdsRelated(it.optString("l"), it.optString("u")) }
-
-    /** optString на JSONObject.NULL отдаёт строку «null» — отличаем пусто от NULL. */
-    private fun optStr(o: JSONObject, key: String): String? =
-        if (o.isNull(key)) null else o.optString(key).takeIf { it.isNotEmpty() }
-
-    private fun strList(a: JSONArray?): List<String> {
-        if (a == null) return emptyList()
-        val out = ArrayList<String>(a.length())
-        for (i in 0 until a.length()) {
-            val s = a.optString(i)
-            if (s.isNotEmpty()) out.add(s)
-        }
-        return out
-    }
+    // На диск место НЕ пишем (msg4266): Сергей решил, что история ходит только
+    // внутри текущего сеанса, а холодный запуск открывает каталог с корня.
 }
