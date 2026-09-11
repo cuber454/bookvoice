@@ -105,6 +105,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     /** Момент последнего прыжка «на ходу» (msg4372): чаще раза в [LIVE_JUMP_MS]
      *  голос не перезапускаем — TTS не успевает договорить слово. */
     private var lastLiveJumpAt = 0L
+    /** Последний процент, показанный на экране чтения (msg4377) — чтобы не
+     *  писать в журнал одну и ту же строку на каждое обновление статистики. */
+    private var lastLoggedPct = -1
     private var voiceName: String?
         get() = ReaderEngine.voiceName
         set(v) { ReaderEngine.voiceName = v }
@@ -1613,8 +1616,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val readWords = cumWords.getOrNull(g) ?: 0L
         val totalWords = cumWords.getOrNull(total) ?: readWords
         val remainWords = (totalWords - readWords).coerceAtLeast(0L)
+        val pct = readPercent()
         binding.tvStats.text =
-            "Прочитано ~${fmtMin(readWords / wpm)}, осталось ~${fmtMin(remainWords / wpm)} (${readPercent()}%)"
+            "Прочитано ~${fmtMin(readWords / wpm)}, осталось ~${fmtMin(remainWords / wpm)} ($pct%)"
+        // msg4377 (диагностика): Сергей сравнил «в полке 2%, а в книжке 3%».
+        // В журнал пишем КАЖДУЮ смену процента на экране — тогда видно, что
+        // именно показывала книга в тот момент, когда полка показывала другое.
+        if (pct != lastLoggedPct) {
+            lastLoggedPct = pct
+            Diag.log(this, "activity", "на экране $pct% (глава $chapterIdx, предл. $sentenceIdx)")
+        }
     }
 
     /** Минуты → «12 мин» / «1 ч 5 мин». Доли меньше минуты показываем «<1 мин». */
