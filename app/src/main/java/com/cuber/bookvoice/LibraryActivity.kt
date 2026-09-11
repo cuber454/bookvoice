@@ -210,6 +210,11 @@ class LibraryActivity(private val act: SectionActivity) {
         if (returnFromReader && shelfReady) {
             pendingBookFocusUri = null
             Diag.log(act, "focus", "L1b: возврат из ридера — полку не трогаю")
+            // msg4356: полку не пересобираем, но значения в строках обновляем —
+            // иначе после чтения в строке висит старый процент (в книге 5%, на
+            // полке 17%): записи-то книга перезаписала, а строка осталась от
+            // прошлой сборки. Порядок и позиции не меняем, фокус не трогаем.
+            refreshRowsInPlace()
             binding.bookList.postDelayed({
                 val f = TabNav.focusedNow(binding.root)
                 Diag.log(act, "focus", "L1b ИТОГ(+0.6с): фокус на ${f ?: "нигде/неизвестно"}")
@@ -1531,6 +1536,18 @@ class LibraryActivity(private val act: SectionActivity) {
      *  (авто-скан той же папки). Работает только с включённым «Доступом ко всем
      *  файлам» и сопоставимой папкой; иначе null — склейку не делаем. */
     private class TreePaths(val dir: File, val treeDocId: String)
+
+    /** Обновить данные строк полки по месту (msg4356): после возврата из книги
+     *  записи в реестре уже свежие, а строки — от прошлой сборки. Пересборка
+     *  полки тут запрещена (L1b: сдвинула бы фокус), поэтому меняем только
+     *  содержимое изменившихся строк, порядок и позиции не трогаем. */
+    private fun refreshRowsInPlace() {
+        val fresh = BookStore.all(act).associateBy { it.uri }
+        if (fresh.isEmpty()) return
+        shownRecords = shownRecords.map { fresh[it.uri] ?: it }
+        adapter.updateInPlace(fresh)
+        updateContinueButton()
+    }
 
     /** Хвост адреса записи для диагностики (схема + последний сегмент): по нему
      *  видно, один файл лежит в библиотеке под двумя адресами или это две разные

@@ -43,6 +43,19 @@ class BookAdapter(
         notifyDataSetChanged()
     }
 
+    /** Обновить записи ПО МЕСТУ: тот же порядок, те же позиции, только свежие
+     *  данные в строках, которые изменились. msg4356: после возврата из книги
+     *  полку не пересобираем (L1b — чтобы не сдвинуть фокус), но процент в
+     *  строке обязан догнать книгу, иначе на полке висит старое «17%». */
+    fun updateInPlace(fresh: Map<String, BookRecord>) {
+        for (i in items.indices) {
+            val now = fresh[items[i].uri] ?: continue
+            if (now == items[i]) continue
+            items[i] = now
+            notifyItemChanged(i)
+        }
+    }
+
     override fun getItemCount(): Int = items.size
 
     override fun getItemViewType(position: Int): Int = viewMode
