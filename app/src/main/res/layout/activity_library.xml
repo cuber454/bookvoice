@@ -96,9 +96,13 @@
          слышно, куда ведёт; нет доступной последней книги — скрыта совсем
          (visibility ставит код). По умолчанию gone: до первого refresh пустая
          кнопка в a11y-дереве не висит.
-         btnCatalogs: быстрый вход в окно «Каталоги» поверх полки — ровно тот же
-         переход, что пункт «Каталоги» в «⋮» полки; видна ВСЕГДА (пустая полка —
-         логично сразу идти за книгой). -->
+         btnCatalogs: быстрый вход в окно «Сетевые библиотеки» поверх полки — ровно
+         тот же переход, что пункт «Сетевые библиотеки» в «⋮» полки; видна ВСЕГДА
+         (пустая полка —
+         логично сразу идти за книгой).
+         msg4191/4193: у кнопки два имени — на экране короткое «Библиотеки», а
+         синтезатору она называется «Сетевые библиотеки» (contentDescription).
+         Так кнопка влезает в нижний ряд и не выдавливает «Открыть книгу». -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -131,7 +135,8 @@
             android:layout_width="wrap_content"
             android:layout_height="58dp"
             android:layout_marginStart="8dp"
-            android:text="@string/catalog_title"
+            android:contentDescription="@string/catalog_title"
+            android:text="@string/catalog_title_short"
             android:textSize="17sp" />
     </LinearLayout>
 
