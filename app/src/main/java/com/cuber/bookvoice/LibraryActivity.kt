@@ -558,17 +558,28 @@ class LibraryActivity(private val act: SectionActivity) {
         // «… (1)»). BookStore уже убрал проигравшие записи, здесь чистим их
         // файлы на диске, чтобы авто-скан папки не вернул копию отдельной
         // строкой. Новые дубли не появятся: каталог узнаёт скачанное по sourceUrl.
-        val (all0, dupUris) = BookStore.mergeSourceDuplicates(act)
+        val (_, dupUris) = BookStore.mergeSourceDuplicates(act)
         if (dupUris.isNotEmpty()) {
             dupUris.forEach { removeDupFile(it) }
             Diag.log(act, "lib", "склеены дубли скачанных книг: ${dupUris.size}")
+        }
+        // msg4348: две записи с ОДНИМ названием — на слух это одна книга, и
+        // какую из двух строк он откроет, то место и всплывёт: у каждой свой
+        // прогресс. Отсюда жалоба «книга не запоминает место». Файлы на диске не
+        // трогаем — убираем лишнюю запись и прячем её адрес от авто-скана.
+        val (all1, titleDupUris) = BookStore.mergeSameTitleCopies(act)
+        if (titleDupUris.isNotEmpty()) {
+            titleDupUris.forEach {
+                hideFromScan(it)
+                Diag.log(act, "lib", "склеена вторая строка той же книги (файл не тронут): $it")
+            }
         }
         // msg1345/1346: sourceUrl-склейка не видит пару «скачано в папку (file://)
         // + авто-скан той же папки (content://)» — у скана sourceUrl нет. Если
         // папку удалось сопоставить с реальным путём, склеиваем и такие: один
         // файл на диске = одна запись, сохраняем с прогрессом чтения.
         val resolver = treeResolver()
-        val all = if (resolver != null) mergeSameFileCopies(resolver) else all0
+        val all = if (resolver != null) mergeSameFileCopies(resolver) else all1
         // Фильтр по статусу (msg643): «Все» — без фильтра, конкретный статус —
         // только книги с ним; «Избранное» (msg2555) — по флагу favorite, книги
         // любого статуса. Сортировка применяется уже к отфильтрованному списку.
@@ -649,9 +660,13 @@ class LibraryActivity(private val act: SectionActivity) {
         // msg4322 (диагностика): из чего полка взяла цифру для строки книги.
         // Сергей: «ползунком дошёл до 20%, вышел — на полке 0%». Здесь видно,
         // что лежит в записи: место, процент и что из этого показано.
+        // msg4348: к строке добавлены имя файла и хвост адреса — по логу видно,
+        // один это файл под двумя адресами или две разные книги с одним
+        // названием (на слух их не различить, отсюда путаница с местом).
         Diag.log(
             act, "shelf",
-            "строка «${rec.displayTitle}»: запись глава ${rec.chapter}, предл. ${rec.sentence}, " +
+            "строка «${rec.displayTitle}» [${rec.name}, ${uriTail(rec.uri)}]: " +
+                "запись глава ${rec.chapter}, предл. ${rec.sentence}, " +
                 "процент ${rec.readPct} → " + (pct?.let { "$it%" } ?: "без строки прогресса")
         )
         return pct?.let { getString(R.string.lib_progress_pct, it) }
@@ -1516,6 +1531,14 @@ class LibraryActivity(private val act: SectionActivity) {
      *  (авто-скан той же папки). Работает только с включённым «Доступом ко всем
      *  файлам» и сопоставимой папкой; иначе null — склейку не делаем. */
     private class TreePaths(val dir: File, val treeDocId: String)
+
+    /** Хвост адреса записи для диагностики (схема + последний сегмент): по нему
+     *  видно, один файл лежит в библиотеке под двумя адресами или это две разные
+     *  книги с одинаковым названием (msg4348). */
+    private fun uriTail(uriStr: String): String {
+        val u = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return "?"
+        return "${u.scheme}:…/" + (u.lastPathSegment ?: "?").takeLast(40)
+    }
 
     private fun treeResolver(): TreePaths? {
         val treeStr = treeUri() ?: return null

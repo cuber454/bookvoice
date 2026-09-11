@@ -246,6 +246,45 @@ object BookStore {
         return all(context) to removed
     }
 
+    /** Склейка записей, которые читатель не различит на слух: одно и то же
+     *  название книги. msg4348: на полке «100 научных опытов…» стояла ДВУМЯ
+     *  строками — с местом глава 21 (19%) и глава 0 (0%); обе звучали
+     *  одинаково, и место чтения зависело от того, какую строку он откроет.
+     *  Отсюда и «книга не запоминает место».
+     *
+     *  Сравниваем только настоящее название (из файла или заданное вручную) —
+     *  записи без метаданных различаются хотя бы именем файла, их не трогаем.
+     *  Файлы на диске не удаляем, убираем лишь лишнюю запись; её адрес от
+     *  авто-скана прячет вызывающий. Возвращает (список, uri удалённых). */
+    @Synchronized
+    fun mergeSameTitleCopies(context: Context): Pair<List<BookRecord>, List<String>> {
+        val list = all(context)
+        val byTitle = HashMap<String, MutableList<BookRecord>>()
+        list.forEach { r ->
+            // Порядок как у displayTitle: своё название важнее метаданных.
+            val t = r.customTitle?.takeIf { it.isNotBlank() }
+                ?: r.title?.takeIf { it.isNotBlank() }
+                ?: return@forEach
+            byTitle.getOrPut(normTitle(t)) { ArrayList() }.add(r)
+        }
+        val removed = ArrayList<String>()
+        for (g in byTitle.values) {
+            if (g.size < 2) continue
+            var best = g[0]
+            for (r in g) best = betterForKeep(best, r)
+            for (r in g) if (r.uri != best.uri) removed.add(r.uri)
+        }
+        if (removed.isNotEmpty()) {
+            val drop = removed.toSet()
+            save(context, list.filterNot { it.uri in drop })
+        }
+        return all(context) to removed
+    }
+
+    /** Ключ сравнения названий: регистр и лишние пробелы не в счёт. */
+    private fun normTitle(s: String): String =
+        s.trim().lowercase(java.util.Locale.ROOT).replace(Regex("\\s+"), " ")
+
     /** Какая из двух записей-дублей одной книги ценнее для сохранения.
      *  Сначала прогресс чтения (статус, проценты, позиция — см. [dupRank]);
      *  затем избранное (msg2555): пометку «в избранном» пользователь ставил
