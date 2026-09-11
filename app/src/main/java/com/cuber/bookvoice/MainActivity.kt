@@ -38,6 +38,7 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.cuber.bookvoice.databinding.ActivityMainBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.json.JSONArray
@@ -91,6 +92,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         get() = ReaderEngine.cumWords
         set(v) { ReaderEngine.cumWords = v }
     private var scrubbing = false
+    /** Портянка (msg4330): пока применяем место с прокрутки, сами список не
+     *  прокручиваем — рука уже там, а лишний scrollToPosition дёрнул бы ленту
+     *  (и снёс бы с экрана заголовок главы, на котором остановился читатель). */
+    private var suppressScroll = false
     private var voiceName: String?
         get() = ReaderEngine.voiceName
         set(v) { ReaderEngine.voiceName = v }
@@ -220,6 +225,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.sentenceList.layoutManager = layoutManager
         binding.sentenceList.adapter = adapter
         binding.sentenceList.setHasFixedSize(true)
+        // Портянка (msg4330): лента теперь одна на всю книгу, и рука уезжает по
+        // ней дальше, чем уезжала по одной главе. Остановился — верхняя строка
+        // экрана становится местом книги: слайдер, «Глава N из M» и процент едут
+        // за ней, и это место книга запоминает. Пока голос читает — не
+        // вмешиваемся, иначе чтение дёргается под пальцем.
+        binding.sentenceList.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) applyScrollPlace()
+            }
+        })
 
         installSwipe()
 
@@ -943,7 +958,36 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  «Прокручивать к читаемому предложению». */
     private fun scrollToSentence(row: Int) {
         if (row < 0) return
+        if (suppressScroll) return
         if (prefs.getBoolean(KEY_SCROLL, true)) layoutManager.scrollToPosition(row)
+    }
+
+    /** Портянка (msg4330): читатель доехал рукой до места — оно и есть место
+     *  книги. Прокрутка списка раньше была «посмотреть»: слайдер, «Глава N из M»
+     *  и процент стояли на месте чтения, а рука уезжала отдельно, и книга
+     *  запоминала не то, что на экране. Теперь на остановке прокрутки верхняя
+     *  строка ленты становится новым местом.
+     *
+     *  Три условия, чтобы не мешать: голос молчит (иначе чтение прыгало бы за
+     *  пальцем), палец не на слайдере, и прежнее место уже уехало с экрана —
+     *  докрутка вокруг читаемого предложения и наша же авто-прокрутка за
+     *  голосом места не меняют. */
+    private fun applyScrollPlace() {
+        val bk = book ?: return
+        if (playing || scrubbing) return
+        val top = layoutManager.findFirstVisibleItemPosition()
+        if (top < 0) return
+        val p = adapter.placeOf(top) ?: return
+        if (p.first == chapterIdx && p.second == sentenceIdx) return
+        val curRow = adapter.flatOf(chapterIdx, sentenceIdx)
+        if (curRow >= top && curRow <= layoutManager.findLastVisibleItemPosition()) return
+        if (bk.chapters.getOrNull(p.first)?.sentences.isNullOrEmpty()) return
+        val sameChapter = p.first == chapterIdx
+        if (!ReaderEngine.placeFromScroll(p.first, p.second)) return
+        suppressScroll = true
+        if (sameChapter) onMovedInChapter(sentenceIdx) else onChapterLoaded()
+        suppressScroll = false
+        Diag.log(this, "activity", "место по прокрутке: глава $chapterIdx, предл. $sentenceIdx")
     }
 
     /** Настраиваемые свайпы влево/вправо по тексту (#77). Без TalkBack жест —

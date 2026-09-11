@@ -896,6 +896,24 @@ internal object ReaderEngine {
         ))
     }
 
+    /** Портянка (msg4330): место, до которого читатель доехал рукой по ленте.
+     *  Это его выбор — как ручной переход, поэтому снимает «место остановки»
+     *  (rewindFloor, msg2093) и не даёт авто-сбросу перебить себя. Запись места
+     *  здесь быстрая (prefs), полная — как обычно при паузе/выходе. Голос и
+     *  плеер не трогаем: чтение с нового места само не начинается, экран
+     *  перерисовывает вызывающий. false — книгу/главу взять неоткуда. */
+    fun placeFromScroll(ch: Int, s: Int): Boolean {
+        val bk = book ?: return false
+        val cur = bk.chapters.getOrNull(ch)?.sentences ?: return false
+        if (cur.isEmpty()) return false
+        rewindFloor = null
+        userMoved = true
+        chapterIdx = ch
+        sentenceIdx = s.coerceIn(0, cur.lastIndex)
+        persistPosition()
+        return true
+    }
+
     /** Быстрая запись позиции в prefs — зовётся часто, только prefs без DB. */
     fun persistPosition() {
         if (book == null) return
