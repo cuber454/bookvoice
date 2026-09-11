@@ -1046,7 +1046,12 @@ class CatalogActivity(private val act: SectionActivity) {
     }
 
     /** Строка-элемент без роли «кнопки»: клик — основное действие. Возвращает
-     *  TextView, чтобы вызывающий мог навесить долгое нажатие. */
+     *  TextView, чтобы вызывающий мог навесить долгое нажатие.
+     *
+     *  msg4173: снизу строки — линия-разделитель, вертикальные отступы 8dp → 11dp.
+     *  Так строки списка (книги, папки, сами каталоги) не сливаются в одно полотно.
+     *  Это просьба слабовидящего читателя из отзыва, поэтому и линия светлее обычных
+     *  линий приложения, и воздух между строками больше прежнего. */
     private fun addRowText(
         label: String,
         cd: String? = null,
@@ -1057,7 +1062,8 @@ class CatalogActivity(private val act: SectionActivity) {
             contentDescription = cd
             textSize = 17f
             setTextColor(0xFFE8EAED.toInt())
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setPadding(dp(12), dp(11), dp(12), dp(11))
+            setBackgroundResource(R.drawable.list_row_divider)
             isFocusable = true
             isClickable = true
             setOnClickListener { onClick() }
