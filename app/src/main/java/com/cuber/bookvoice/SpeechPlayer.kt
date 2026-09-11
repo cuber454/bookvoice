@@ -192,7 +192,7 @@ class SpeechPlayer(context: Context) {
                 // нет (сборка 0.4.25: setOnVoicesChangedListener не резолвится),
                 // поэтому спрашиваем сами несколько раз.
                 applySpeedAndVoice()
-                if (tts?.voices.isNullOrEmpty()) waitForVoices(VOICE_WAIT_STEPS.size)
+                if (tts?.voices.isNullOrEmpty()) waitForVoices(voiceWaitSteps.size)
                 // Сторож (msg4077): движок перезапущен после молчания — переспросить
                 // фразу, которую он не досказал. Скорость и голос уже применены выше.
                 // Состояние «эту фразу ждут» восстанавливаем руками: start() его
