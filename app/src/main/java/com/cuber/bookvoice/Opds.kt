@@ -25,7 +25,12 @@ import java.util.concurrent.TimeUnit
  * Какие источники хранятся — [OpdsPrefs]; скачивание/парсинг — [OpdsNet] и
  * [OpdsParser]; экран — [CatalogActivity].
  */
-class OpdsException(message: String) : Exception(message)
+open class OpdsException(message: String) : Exception(message)
+
+/** Библиотека просит вход (#20): сервер ответил 401 с Basic-заголовком
+ *  (`www-authenticate: Basic`). Отдельный тип нужен, чтобы каталог не показывал
+ *  «ошибку», а спросил имя и пароль и повторил ту же страницу. */
+class OpdsNeedLogin(val url: String) : OpdsException("библиотека просит вход")
 
 /** Формат файла книги, который каталог отдаёт на скачивание. BookVoice умеет
  *  читать FB2/EPUB/TXT — остальные (rtf/mobi/html) в список не попадают. */
@@ -209,14 +214,20 @@ object OpdsNet {
 
     data class Fetch(val bytes: ByteArray, val finalUrl: String)
 
-    fun get(url: String, accept: String): Fetch {
-        val req = Request.Builder()
-            .url(url)
-            .header("User-Agent", UA)
-            .header("Accept", accept)
-            .build()
+    /** Собрать запрос: обычные заголовки плюс, если для этого хоста сохранён вход,
+     *  `Authorization: Basic …` (#20). Чужому хосту пароль не уходит — см. [OpdsAuth]. */
+    private fun request(c: Context, url: String, accept: String?): Request {
+        val b = Request.Builder().url(url).header("User-Agent", UA)
+        if (accept != null) b.header("Accept", accept)
+        OpdsAuth.headerFor(c, url)?.let { b.header("Authorization", it) }
+        return b.build()
+    }
+
+    fun get(c: Context, url: String, accept: String): Fetch {
+        val req = request(c, url, accept)
         try {
             client.newCall(req).execute().use { resp ->
+                if (resp.code == 401) throw OpdsNeedLogin(url)
                 if (!resp.isSuccessful) throw OpdsException("сервер ответил: HTTP ${resp.code}")
                 val bytes = resp.body?.bytes() ?: ByteArray(0)
                 // url последнего запроса — после редиректов; по нему резолвим ссылки фида.
@@ -233,17 +244,15 @@ object OpdsNet {
      *  зовём [onProgress](прочитано, всего). «Всего» — из заголовка Content-Length;
      *  если сервер размер не прислал (total = -1), точный процент невозможен. */
     fun fetchProgress(
+        c: Context,
         url: String,
         accept: String,
         onProgress: (read: Long, total: Long) -> Unit,
     ): Fetch {
-        val req = Request.Builder()
-            .url(url)
-            .header("User-Agent", UA)
-            .header("Accept", accept)
-            .build()
+        val req = request(c, url, accept)
         try {
             client.newCall(req).execute().use { resp ->
+                if (resp.code == 401) throw OpdsNeedLogin(url)
                 if (!resp.isSuccessful) throw OpdsException("сервер ответил: HTTP ${resp.code}")
                 val body = resp.body ?: throw OpdsException("сервер не прислал тело")
                 val total = body.contentLength()
@@ -270,11 +279,20 @@ object OpdsNet {
 
     /** Проверка доступности адреса (меню долгого нажатия): null — отвечает,
      *  иначе — текст ошибки. Тело не сохраняем, таймауты короткие. */
-    fun check(url: String): String? {
-        val req = Request.Builder().url(url).header("User-Agent", UA).build()
+    fun check(c: Context, url: String): String? {
+        val req = request(c, url, null)
         return try {
             pingClient.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) null else "сервер ответил: HTTP ${resp.code}"
+                when {
+                    resp.isSuccessful -> null
+                    // 401 — не поломка, а просьба войти (#20): запоминаем хост,
+                    // чтобы в меню библиотеки появился пункт «Войти».
+                    resp.code == 401 -> {
+                        OpdsAuth.noteAsked(c, url)
+                        c.getString(R.string.catalog_need_login)
+                    }
+                    else -> "сервер ответил: HTTP ${resp.code}"
+                }
             }
         } catch (e: Exception) {
             e.message ?: "нет связи с сервером"

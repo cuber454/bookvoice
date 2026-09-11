@@ -21,6 +21,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -743,7 +744,8 @@ class CatalogActivity(private val act: SectionActivity) {
 
     /** Меню долгого нажатия на каталог в списке (#53): открыть, изменить,
      *  проверить, передвинуть, удалить. «Выше/ниже» показываем, только если
-     *  каталог можно сдвинуть в эту сторону. */
+     *  каталог можно сдвинуть в эту сторону. «Войти/Выйти» (#20) — только там,
+     *  где вход есть или где библиотека сама его попросила. */
     private fun showSourceMenu(s: OpdsPrefs.Source) {
         val sources = OpdsPrefs.sources(act)
         val idx = sources.indexOfFirst { it.url == s.url }
@@ -751,6 +753,13 @@ class CatalogActivity(private val act: SectionActivity) {
         actions.add(getString(R.string.catalog_open_short) to { openSource(s) })
         actions.add(getString(R.string.catalog_edit) to { showEditDialog(s) })
         actions.add(getString(R.string.catalog_check) to { checkSource(s) })
+        if (OpdsAuth.hasFor(act, s.url)) {
+            actions.add(
+                getString(R.string.catalog_logout_menu, OpdsAuth.login(act)) to { logoutSource(s) },
+            )
+        } else if (OpdsAuth.askedBefore(act, s.url)) {
+            actions.add(getString(R.string.catalog_login_menu) to { askLogin(s.url) })
+        }
         if (idx > 0) {
             actions.add(getString(R.string.catalog_move_up) to { moveSource(s, -1) })
         }
@@ -777,7 +786,7 @@ class CatalogActivity(private val act: SectionActivity) {
     private fun checkSource(s: OpdsPrefs.Source) {
         toast(getString(R.string.catalog_checking, s.name))
         Thread {
-            val err = OpdsNet.check(s.url)
+            val err = OpdsNet.check(act, s.url)
             runOnUiThread {
                 if (err == null) {
                     toast(getString(R.string.catalog_check_ok, s.name))
@@ -786,6 +795,94 @@ class CatalogActivity(private val act: SectionActivity) {
                 }
             }
         }.start()
+    }
+
+    // ---------------- Вход в библиотеку (#20, msg4240) ----------------
+
+    /** Окошко входа: имя пользователя и пароль. Зовём, когда сервер ответил 401
+     *  («Моя полка» flibusta) или когда человек сам выбрал «Войти» в меню.
+     *
+     *  Пароль уходит библиотеке заголовком Basic и остаётся в приватном хранилище
+     *  приложения — в diag.log и в Telegram он не попадает. После входа повторяем
+     *  ровно то действие, которое упёрлось в 401: [onDone] — обычно повторная
+     *  загрузка той же страницы каталога. Если человек закрыл окошко, не входя
+     *  (кнопка «Отмена» или «назад»), зовём [onCancel]. */
+    private fun askLogin(
+        url: String,
+        wrong: Boolean = false,
+        onDone: () -> Unit = {},
+        onCancel: () -> Unit = {},
+    ) {
+        // Нажал «Войти» — считаем, что человек в окошке разобрался: даже если
+        // логин пустой, «отменой» это не считаем.
+        var handled = false
+        val host = OpdsPrefs.hostOf(url)
+        OpdsAuth.noteAsked(act, url)
+        val user = EditText(act).apply {
+            hint = getString(R.string.catalog_login_user)
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(OpdsAuth.login(act))
+        }
+        val pass = EditText(act).apply {
+            hint = getString(R.string.catalog_login_pass)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        // Незрячему полезно уметь вернуться в поле и перечитать набранное:
+        // у скрытого пароля скринридер читает «точка», у показанного — буквы.
+        val show = CheckBox(act).apply {
+            setText(R.string.catalog_login_show)
+            setOnCheckedChangeListener { _, on ->
+                val variation = if (on) InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                else InputType.TYPE_TEXT_VARIATION_PASSWORD
+                pass.inputType = InputType.TYPE_CLASS_TEXT or variation
+                pass.setSelection(pass.text?.length ?: 0)
+            }
+        }
+        val box = LinearLayout(act).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+            addView(user, lp().apply { bottomMargin = dp(6) })
+            addView(pass, lp().apply { bottomMargin = dp(6) })
+            addView(show)
+        }
+        val builder = MaterialAlertDialogBuilder(act)
+            .setTitle(getString(R.string.catalog_login_title, host))
+            .setView(box)
+            .setPositiveButton(R.string.catalog_login_ok) { _, _ ->
+                handled = true
+                val u = user.text?.toString()?.trim().orEmpty()
+                if (u.isEmpty()) {
+                    toast(getString(R.string.catalog_login_empty))
+                    return@setPositiveButton
+                }
+                val p = pass.text?.toString().orEmpty()
+                OpdsAuth.save(act, host, u, p)
+                // Ни логин, ни тем более пароль в лог не пишем (#20): журнал
+                // уходит тестерам, там хватает хоста.
+                Diag.log(act, "opds", "вход сохранён для $host")
+                toast(getString(R.string.catalog_login_saved))
+                onDone()
+            }
+            .setNegativeButton(R.string.dialog_cancel, null)
+        val msg = ArrayList<String>()
+        if (wrong) msg.add(getString(R.string.catalog_login_wrong))
+        val insecure = OpdsPrefs.sources(act).any { src ->
+            src.url.startsWith("http://") &&
+                OpdsPrefs.hostOf(src.url).equals(host, ignoreCase = true)
+        }
+        if (insecure) msg.add(getString(R.string.catalog_login_insecure))
+        if (msg.isNotEmpty()) builder.setMessage(msg.joinToString("\n\n"))
+        val dlg = builder.create()
+        dlg.setOnDismissListener { if (!handled) onCancel() }
+        dlg.show()
+    }
+
+    /** Выход из библиотеки: забываем логин и пароль. */
+    private fun logoutSource(s: OpdsPrefs.Source) {
+        OpdsAuth.clear(act)
+        Diag.log(act, "opds", "вход забыт: ${OpdsPrefs.hostOf(s.url)}")
+        toast(getString(R.string.catalog_logout_done))
+        renderTop()
     }
 
     /** Редактирование каталога: имя и адрес (#53). */
@@ -869,7 +966,7 @@ class CatalogActivity(private val act: SectionActivity) {
         Diag.log(act, "opds", "открываю ленту: ${s.url}")
         Thread {
             val r = runCatching {
-                val f = OpdsNet.get(s.url, acceptFeed)
+                val f = OpdsNet.get(act, s.url, acceptFeed)
                 OpdsParser.parse(f.finalUrl, f.bytes)
             }
             runOnUiThread {
@@ -899,27 +996,46 @@ class CatalogActivity(private val act: SectionActivity) {
                         }
                     }
                 }.onFailure { e ->
-                    sessions.remove(s.url)
-                    pendingVoiceSearch = false
-                    Diag.log(
-                        act, "opds",
-                        "лента не открылась: ${s.url} — ${e.message}",
-                    )
-                    if (isTopFeed(s.url)) {
-                        // Корневая лента не открылась — возврат в корень тоже
-                        // возвращает фокус на её каталог (msg1468).
-                        if (nav.size == 1) rootFocusUrl = s.url
-                        nav.removeAt(nav.size - 1)
-                        renderTop()
-                        toast(getString(
-                            R.string.catalog_load_fail,
-                            (e as? OpdsException)?.message
-                                ?: (e.message ?: getString(R.string.catalog_err_unknown)),
-                        ))
+                    // 401 (#20): не «ошибка», а просьба войти — спрашиваем логин
+                    // и повторяем ту же ленту. Навигация не рвётся: человек
+                    // остаётся в том разделе, куда шёл («Моя полка»).
+                    if (e is OpdsNeedLogin) {
+                        Diag.log(act, "opds", "лента просит вход: ${s.url}")
+                        askLogin(
+                            e.url,
+                            wrong = OpdsAuth.hasFor(act, e.url),
+                            onDone = { fetchFirst(s) },
+                            onCancel = { failFirst(s, e) },
+                        )
+                        return@onFailure
                     }
+                    failFirst(s, e)
                 }
             }
         }.start()
+    }
+
+    /** Первая страница ленты не открылась: забываем неудачную сессию и уходим из
+     *  раздела (если всё ещё стоим в нём), сказав об этом вслух. Сюда же попадает
+     *  отмена входа в библиотеку (#20) — это не «ошибка сети», и текст другой. */
+    private fun failFirst(s: FeedSession, e: Throwable?) {
+        sessions.remove(s.url)
+        pendingVoiceSearch = false
+        Diag.log(act, "opds", "лента не открылась: ${s.url} — ${e?.message}")
+        if (isTopFeed(s.url)) {
+            // Корневая лента не открылась — возврат в корень тоже возвращает
+            // фокус на её каталог (msg1468).
+            if (nav.size == 1) rootFocusUrl = s.url
+            nav.removeAt(nav.size - 1)
+            renderTop()
+            if (e is OpdsNeedLogin) {
+                toast(getString(R.string.catalog_login_cancel))
+            } else {
+                val msg = (e as? OpdsException)?.message
+                    ?: (e?.message ?: getString(R.string.catalog_err_unknown))
+                toast(getString(R.string.catalog_load_fail, msg))
+            }
+        }
     }
 
     private fun announceFeed(s: FeedSession) {
@@ -1130,7 +1246,7 @@ class CatalogActivity(private val act: SectionActivity) {
         Diag.log(act, "opds", "догружаю страницу: $url")
         Thread {
             val r = runCatching {
-                val f = OpdsNet.get(url, acceptFeed)
+                val f = OpdsNet.get(act, url, acceptFeed)
                 OpdsParser.parse(f.finalUrl, f.bytes)
             }
             runOnUiThread {
@@ -1159,6 +1275,13 @@ class CatalogActivity(private val act: SectionActivity) {
                         binding.scroll.post { prefillIfShort(s) }
                     }
                 }.onFailure { e ->
+                    // Вход кончился посреди списка (#20) — спрашиваем и догружаем
+                    // ту же страницу, строку «повторить» не показываем.
+                    if (e is OpdsNeedLogin) {
+                        Diag.log(act, "opds", "страница просит вход: $url")
+                        askLogin(e.url, wrong = OpdsAuth.hasFor(act, e.url)) { loadNext(s) }
+                        return@onFailure
+                    }
                     s.failMsg = (e as? OpdsException)?.message
                         ?: (e.message ?: getString(R.string.catalog_err_unknown))
                     Diag.log(act, "opds", "страница не догрузилась: $url — ${s.failMsg}")
@@ -1782,7 +1905,7 @@ class CatalogActivity(private val act: SectionActivity) {
             val res = runCatching {
                 // msg1264: тело читаем кусками и шлём прогресс. Дедуп по проценту
                 // на фоне: publishProgress уходит в UI только когда процент сменился.
-                val fetch = OpdsNet.fetchProgress(fmt.url, "*/*") { read, total ->
+                val fetch = OpdsNet.fetchProgress(act, fmt.url, "*/*") { read, total ->
                     val pct = if (total > 0) {
                         (read * 100 / total).toInt().coerceIn(0, 100)
                     } else {
@@ -1824,6 +1947,13 @@ class CatalogActivity(private val act: SectionActivity) {
                     val cur = nav.lastOrNull()
                     if (cur is Nv.Book && cur.item.url == b.url) {
                         renderBookPage(cur, announce = false)
+                    }
+                } else if (err is OpdsNeedLogin) {
+                    // Книга отдаётся только после входа (#20): спрашиваем логин и
+                    // повторяем это же скачивание — человек уже нажал «Скачать».
+                    Diag.log(act, "opds", "книга просит вход: \"${b.title}\"")
+                    askLogin(err.url, wrong = OpdsAuth.hasFor(act, err.url)) {
+                        downloadFormat(b, fmt)
                     }
                 } else {
                     val msg = (err as? OpdsException)?.message

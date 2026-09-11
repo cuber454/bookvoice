@@ -129,6 +129,22 @@
     <string name="catalog_move_up">Передвинуть выше</string>
     <string name="catalog_move_down">Передвинуть ниже</string>
     <string name="catalog_moved">Библиотека передвинута в списке</string>
+    <!-- Вход в библиотеку (#20, msg4240): «Моя полка» flibusta открывается только
+         после логина (HTTP Basic). Пароль в текстах не участвует никогда. -->
+    <string name="catalog_login_menu">Войти в библиотеку…</string>
+    <string name="catalog_logout_menu">Выйти из библиотеки (%1$s)</string>
+    <string name="catalog_logout_done">Вышел из библиотеки</string>
+    <string name="catalog_login_title">Вход в библиотеку: %1$s</string>
+    <string name="catalog_login_user">Имя пользователя</string>
+    <string name="catalog_login_pass">Пароль</string>
+    <string name="catalog_login_show">Показать пароль</string>
+    <string name="catalog_login_ok">Войти</string>
+    <string name="catalog_login_saved">Вход сохранён — открываю</string>
+    <string name="catalog_login_cancel">Вход отменён — раздел не открылся</string>
+    <string name="catalog_login_wrong">Вход не подошёл. Проверь имя и пароль.</string>
+    <string name="catalog_login_empty">Имя пользователя не заполнено — вход не сохранён</string>
+    <string name="catalog_login_insecure">Внимание: адрес библиотеки без https — пароль пойдёт незашифрованным.</string>
+    <string name="catalog_need_login">библиотека просит вход — зайди через меню библиотеки</string>
     <string name="catalog_check">Проверить библиотеку</string>
     <string name="catalog_checking">Проверяю „%1$s“…</string>
     <string name="catalog_check_ok">Библиотека „%1$s“ отвечает</string>
