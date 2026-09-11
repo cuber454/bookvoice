@@ -387,7 +387,7 @@ class SpeechPlayer(context: Context) {
         // Реальное время молчания, а не номинал сторожа: если часы «убежали»
         // далеко за 15 с — значит процесс спал (msg4211, #19).
         val waited = ((SystemClock.elapsedRealtime() - watchFromMs) / 1000).toInt()
-            .coerceAtLeast(SYNTH_STALL_MS / 1000)
+            .coerceAtLeast((SYNTH_STALL_MS / 1000).toInt())
         stuck.forEach { (id, p) ->
             p.cancelled = true
             p.file?.delete()
