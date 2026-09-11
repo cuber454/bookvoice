@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Строка-действие в «О программе» (#18): «Что нового» — не текст справки, а
+     кнопка, поэтому и выглядит иначе (цвет ссылки, подсветка под пальцем).
+     Доступный элемент = сама строка, как у пунктов настроек. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/aboutLink"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?attr/selectableItemBackground"
+    android:clickable="true"
+    android:focusable="true"
+    android:paddingStart="4dp"
+    android:paddingTop="20dp"
+    android:paddingEnd="4dp"
+    android:paddingBottom="8dp"
+    android:textColor="#8AB4F8"
+    android:textSize="20sp" />

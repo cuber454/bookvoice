@@ -27,6 +27,11 @@ class BookVoiceApp : Application() {
         // падает в GlyphList.<clinit> «glyphlist.txt not found» (краш 0.3.39,
         // msg758). init() один раз при старте приложения чинит это для всех вызовов.
         PDFBoxResourceLoader.init(this)
+        // «Что нового» (#18): отличаем свежую установку от обновления. Здесь —
+        // самое раннее место процесса, где prefs ещё не тронуты ни одним экраном,
+        // поэтому «в prefs пусто» честно значит «приложение только поставили».
+        // Окошко после обновления полка покажет сама (WhatsNew.showOnLaunch).
+        WhatsNew.markFirstRunIfFresh(this)
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {

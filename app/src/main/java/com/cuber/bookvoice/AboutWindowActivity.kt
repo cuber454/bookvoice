@@ -120,6 +120,17 @@ class AboutWindowActivity : SectionActivity() {
         )
         for (section in sections) addSection(root, section)
 
+        // msg4133: «Что нового» — постоянный вход. Окошко на полке одноразовое
+        // (показали и пометили), а переслушать список человеку может захотеться
+        // в любой момент — здесь он под рукой. Строки нет, если для этой версии
+        // новостей не заведено: пустая кнопка хуже её отсутствия.
+        if (WhatsNew.hasNotes(this)) {
+            val link = layoutInflater.inflate(R.layout.item_about_link, root, false) as TextView
+            link.text = getString(R.string.whats_new_title)
+            link.setOnClickListener { WhatsNew.showForAbout(this) }
+            root.addView(link)
+        }
+
         // msg3925: секции про связь с автором здесь больше нет. Группа — это
         // действие, и живёт она строкой «Группа BookVoice в Telegram» в корне
         // настроек; в справке она была тупиком — текст, который отправляет

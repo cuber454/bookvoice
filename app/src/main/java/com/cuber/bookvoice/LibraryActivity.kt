@@ -220,6 +220,10 @@ class LibraryActivity(private val act: SectionActivity) {
      *  onResume Activity; переключение вкладок больше не поднимает окно, и явного
      *  входа «по вкладке» нет (msg1676+) — сюда всегда возвращаются «снизу». */
     fun resume() {
+        // Первый показ полки в этом окне = запуск приложения (возвраты из книги
+        // и окон-поверх сюда не считаются). Нужен «Что нового» (#18): окошко
+        // живёт только в запуск (msg4125), а не при каждом возврате.
+        val freshShelf = !shelfReady
         // Сортировку можно поменять на экране настроек — перечитываем её при
         // каждом возврате сюда (в т.ч. из настроек). У вкладки может быть своя
         // (msg2713/2717): фильтр в поле, сортировка — под него.
@@ -329,7 +333,18 @@ class LibraryActivity(private val act: SectionActivity) {
                     binding.root.postDelayed({
                         coldAutoOpenPending = false
                         suppressShelfA11y(false)
-                        if (!act.isFinishing) openLastBook()
+                        if (act.isFinishing) return@postDelayed
+                        // «Что нового» (#18, msg4113-4141, вариант A): окошко
+                        // показывается ДО книги — авто-открытие ждёт «Понятно»
+                        // (одноразовая секунда против пропущенной новости).
+                        // Вернулось false — окошка нет, открываем как раньше.
+                        // Ушёл по кнопке в Telegram — книгу сейчас не открываем:
+                        // чтение зазвучало бы за спиной, в чужом приложении; на
+                        // возврате полка снова пройдёт холодным стартом и откроет.
+                        val whatsNewShown = WhatsNew.showOnLaunch(act) { proceed ->
+                            if (proceed) openLastBook()
+                        }
+                        if (!whatsNewShown) openLastBook()
                     }, 600)
                 }
                 return
@@ -366,6 +381,16 @@ class LibraryActivity(private val act: SectionActivity) {
             // закрыт, озвучке не мешаем. Раз в процесс тихо спрашиваем GitHub
             // о новой версии; предложение (если есть) появится с паузой.
             UpdateFlow.auto(act)
+        }
+        // «Что нового» (#18) для запусков БЕЗ авто-открытия книги: последней
+        // книги нет, «Открыть с помощью», выбор «всегда начинать с полки».
+        // Здесь полка уже собрана и объявлена, окно можно звать через секунду —
+        // не накрывая имя окна. Условие «свежая полка» и есть признак запуска;
+        // suppress/внешний файл — не запуск, а чужой сценарий.
+        if (freshShelf && !suppress && !launchWasExternal) {
+            binding.root.postDelayed({
+                if (!act.isFinishing) WhatsNew.showOnLaunch(act) { }
+            }, 1000)
         }
     }
 
