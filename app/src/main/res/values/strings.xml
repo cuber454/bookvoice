@@ -24,7 +24,6 @@
     <string name="auto_off">Авто: выкл</string>
     <string name="auto_desc_on">Автопродолжение включено, читает подряд без остановки</string>
     <string name="auto_desc_off">Автопродолжение выключено, читает одно предложение за раз</string>
-    <string name="next_chapter_row">Следующая глава →</string>
     <string name="engine_loading">Настраиваю движок…</string>
 
     <!-- Библиотека -->

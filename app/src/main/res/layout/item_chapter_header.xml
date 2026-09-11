@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Строка-заголовок главы в сплошной ленте книги (msg4308). Текст — название
+     главы ровно так, как оно написано в книге; доступна скринридеру как
+     заголовок (accessibilityHeading), а двойной тап уводит в начало главы. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/tvChapterHeader"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:accessibilityHeading="true"
+    android:focusable="true"
+    android:importantForAccessibility="yes"
+    android:lineSpacingExtra="4dp"
+    android:paddingStart="4dp"
+    android:paddingTop="24dp"
+    android:paddingEnd="4dp"
+    android:paddingBottom="6dp"
+    android:textColor="#8AB4F8"
+    android:textSize="22sp"
+    android:textStyle="bold" />

@@ -76,6 +76,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         get() = ReaderEngine.playing
         set(v) { ReaderEngine.playing = v }
 
+    /** Книга, для которой уже собрана лента списка (портянка, msg4308).
+     *  Состояние ОКНА, а не движка: смена книги — пересобрать ленту, смена
+     *  главы внутри той же книги — только перевести каретку. */
+    private var adapterBook: BookDocument? = null
+
     // Прогресс по всей книге — для слайдера перемотки и оценки времени чтения.
     // chapterStart[c] — номер первого предложения главы c в глобальной нумерации,
     // cumWords[i] — сколько слов в предложениях с номерами < i.
@@ -146,10 +151,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private var searchCurrent = -1
     private var searchGen = 0
 
+    // msg4308: список — вся книга одной лентой. Позиция в ленте (row) — не то же
+    // самое, что предложение в главе, поэтому на входе переводим её обратно в
+    // «главу + предложение» (placeOf), а в движок уже уходит привычное место.
     private val adapter = SentenceAdapter(
-        onSentenceClick = { pos -> onSentenceTapped(pos) },
-        onNextChapterClick = { goTo(chapterIdx + 1, 0) },
-        onSentenceLongClick = { pos -> onSentenceLongPressed(pos) },
+        onSentenceClick = { row -> onSentenceTapped(row) },
+        onSentenceLongClick = { row -> onSentenceLongPressed(row) },
     )
 
     private val prefs by lazy { getSharedPreferences("reader", MODE_PRIVATE) }
@@ -169,8 +176,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     override fun onPlayStateChanged() = updatePlayButton()
 
     override fun onMovedInChapter(s: Int) {
-        adapter.setCurrent(s)
-        scrollToSentence(s)
+        val row = adapter.flatOf(chapterIdx, s)
+        adapter.setCurrent(row)
+        scrollToSentence(row)
         updatePosition()
     }
 
@@ -544,7 +552,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     }
 
     private fun showEmpty() {
-        adapter.submit(emptyList(), false)
+        adapter.clear()
+        adapterBook = null
         closeSearchPanel()
         refreshChrome()
     }
@@ -898,33 +907,38 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun loadChapter() {
         val bk = book ?: return
+        // Лента собирается один раз на книгу: смена главы при чтении больше не
+        // пересобирает список (раньше здесь submit() одной главы и убивал
+        // прокрутку — начало книги было недостижимо, msg4288).
+        if (adapterBook !== bk) {
+            adapter.submitBook(bk.chapters)
+            adapterBook = bk
+        }
         val cur = bk.chapters.getOrNull(chapterIdx)?.sentences ?: emptyList()
         if (cur.isEmpty()) {
-            adapter.submit(emptyList(), false)
+            adapter.setCurrent(-1)
             updatePosition()
             return
         }
         sentenceIdx = sentenceIdx.coerceIn(0, cur.lastIndex)
-        adapter.submit(cur, chapterIdx < bk.chapters.lastIndex)
-        adapter.setCurrent(sentenceIdx)
         refreshSelectionMarkers()
-        scrollToSentence(sentenceIdx)
-        updatePosition()
+        showCurrent()
     }
 
     private fun showCurrent() {
         val cur = book?.chapters?.getOrNull(chapterIdx)?.sentences ?: return
         if (cur.isEmpty()) return
-        val pos = sentenceIdx.coerceIn(0, cur.lastIndex)
-        adapter.setCurrent(pos)
-        scrollToSentence(pos)
+        val row = adapter.flatOf(chapterIdx, sentenceIdx.coerceIn(0, cur.lastIndex))
+        adapter.setCurrent(row)
+        scrollToSentence(row)
         updatePosition()
     }
 
-    /** Прокрутить список к позиции, если в настройках включено
+    /** Прокрутить список к строке ленты, если в настройках включено
      *  «Прокручивать к читаемому предложению». */
-    private fun scrollToSentence(pos: Int) {
-        if (prefs.getBoolean(KEY_SCROLL, true)) layoutManager.scrollToPosition(pos)
+    private fun scrollToSentence(row: Int) {
+        if (row < 0) return
+        if (prefs.getBoolean(KEY_SCROLL, true)) layoutManager.scrollToPosition(row)
     }
 
     /** Настраиваемые свайпы влево/вправо по тексту (#77). Без TalkBack жест —
@@ -1205,9 +1219,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  Всегда переводит читаемую позицию на это предложение; если чтение ещё
      *  не шло и в настройках включено «двойной тап начинает чтение» — начинаем
      *  озвучивать отсюда (см. [KEY_TAP_TO_PLAY]). */
-    private fun onSentenceTapped(pos: Int) {
+    private fun onSentenceTapped(row: Int) {
         if (book == null) return
-        goTo(chapterIdx, pos)
+        // Строка ленты → место в книге (у заголовка главы это её начало).
+        val p = adapter.placeOf(row) ?: return
+        goTo(p.first, p.second)
         if (!playing && prefs.getBoolean(KEY_TAP_TO_PLAY, true)) requestStart()
     }
 
@@ -2348,26 +2364,27 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     // ---------------- #105/#106: выделение фрагмента ----------------
 
-    /** Подсветить начало выделения, если оно в текущей главе (список читалки
-     *  показывает только одну главу). */
+    /** Подсветить начало выделения. Список — вся книга одной лентой (msg4308),
+     *  поэтому начало фрагмента может быть в любой главе, а не только в текущей. */
     private fun refreshSelectionMarkers() {
         val a = selAnchor
-        if (a != null && a.chapter == chapterIdx) adapter.setSelectionAnchor(a.sentence)
-        else adapter.setSelectionAnchor(null)
+        val row = if (a != null) adapter.flatOf(a.chapter, a.sentence) else -1
+        adapter.setSelectionAnchor(if (row >= 0) row else null)
     }
 
     /** Долгое нажатие на предложении: первое удержание отмечает начало
      *  фрагмента, второе (в любом месте книги) — открывает окно действий. */
-    private fun onSentenceLongPressed(pos: Int) {
+    private fun onSentenceLongPressed(row: Int) {
         val bk = book ?: return
-        val cur = bk.chapters.getOrNull(chapterIdx)?.sentences ?: return
+        val p = adapter.placeOf(row) ?: return
+        val cur = bk.chapters.getOrNull(p.first)?.sentences ?: return
         if (cur.isEmpty()) return
         if (playing) pausePlayback(keepFocus = true)
-        val here = Place(chapterIdx, pos.coerceIn(0, cur.lastIndex))
+        val here = Place(p.first, p.second.coerceIn(0, cur.lastIndex))
         val a = selAnchor
         if (a == null) {
             selAnchor = here
-            adapter.setSelectionAnchor(pos.coerceIn(0, cur.lastIndex))
+            adapter.setSelectionAnchor(row)
             binding.sentenceList.announceForAccessibility(getString(R.string.sel_anchor_start))
         } else {
             showSelectionWindow(a, here)
@@ -2431,14 +2448,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             binding.sentenceList.announceForAccessibility(getString(R.string.sel_empty))
             return
         }
-        // Подсветить диапазон, если он пересекается с видимой главой.
-        if (chapterIdx in start.chapter..end.chapter) {
-            val from = if (chapterIdx == start.chapter) start.sentence else 0
-            val to = if (chapterIdx == end.chapter) end.sentence else Int.MAX_VALUE
-            adapter.setSelectionRange(from, to)
-        } else {
-            adapter.setSelectionRange(null, null)
-        }
+        // Подсветить весь диапазон — теперь он виден целиком, даже если кусок
+        // пересекает границу глав (в ленте они идут подряд, msg4308).
+        val from = adapter.flatOf(start.chapter, start.sentence)
+        val to = adapter.flatOf(end.chapter, end.sentence)
+        if (from >= 0 && to >= from) adapter.setSelectionRange(from, to)
+        else adapter.setSelectionRange(null, null)
         val dlg = MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.sel_title, count))
             .setItems(arrayOf(

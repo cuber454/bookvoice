@@ -10,8 +10,11 @@ android {
         applicationId = "com.cuber.bookvoice"
         minSdk = 24
         targetSdk = 36
-        versionCode = 86
-        versionName = "0.4.26"
+        // Ветка portyanka: сплошная прокрутка книги (портянка, msg4308).
+        // Номер выше 0.4.26, чтобы в «О программе» было видно, какая сборка
+        // стоит на телефоне. Соберём релизом — только по слову Сергея.
+        versionCode = 87
+        versionName = "0.4.27"
     }
 
     signingConfigs {
