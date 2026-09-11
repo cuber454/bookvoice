@@ -384,6 +384,19 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         // #99: останавливать чтение, когда отключаются наушники.
         addCheck(R.string.headphones_pause_title, MainActivity.KEY_PAUSE_HEADSET, true)
+
+        // Портянка (msg4372): тройка про прокрутку — что она делает с местом и с
+        // голосом. Переехала сюда из «Интерфейса»: «Интерфейс» — что видно на
+        // экране чтения, «Чтение» — как ведут себя голос и место.
+        // 1) место едет за лентой, пока голос молчит (msg4338);
+        // 2) во время чтения отпущенная прокрутка перекидывает голос на верхнюю
+        //    строку (вариант А);
+        // 3) то же, но не дожидаясь отпускания — голос перескакивает на ходу
+        //    (вариант Б), работает поверх второй.
+        addHint(getString(R.string.scroll_group_hint))
+        addCheck(R.string.scroll_place_title, MainActivity.KEY_SCROLL_PLACE, true)
+        addCheck(R.string.scroll_follow_title, MainActivity.KEY_SCROLL_FOLLOW, true)
+        addCheck(R.string.scroll_jump_live_title, MainActivity.KEY_SCROLL_JUMP_LIVE, true)
     }
 
     /** Ползунок скорости/тона по списку значений [values] (RateSteps): свайп
@@ -487,9 +500,6 @@ class SettingsActivity(private val act: SectionActivity) {
         // Автопрокрутка текста (#318) — переехала из «Управления» (msg721): тоже
         // про поведение экрана чтения, не про звук или запуск.
         addCheck(R.string.scroll_title, MainActivity.KEY_SCROLL, true)
-        // Портянка (msg4338): второе состояние того же поведения — прокрутка
-        // рукой двигает место книги. Выкл — лента только для осмотра.
-        addCheck(R.string.scroll_place_title, MainActivity.KEY_SCROLL_PLACE, true)
 
         // Вкладки Библиотеки (#97): отдельный блок «Интерфейса» — порядок и
         // видимость верхних фильтров «Читаю/Новые/Прочитанные/Все». «Все»

@@ -96,6 +96,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  прокручиваем — рука уже там, а лишний scrollToPosition дёрнул бы ленту
      *  (и снёс бы с экрана заголовок главы, на котором остановился читатель). */
     private var suppressScroll = false
+    /** Портянка (msg4372): куда читатель увёл ленту рукой. Держим отдельно от
+     *  «верхней строки на остановке»: между «увёл» и «отпустил» лента успевает
+     *  дёрнуться назад за голосом (авто-прокрутка к читаемому), и к остановке
+     *  цель потерялась бы. Ставится, когда читаемое предложение уехало с экрана;
+     *  снимается на остановке прокрутки или на прыжке «на ходу». */
+    private var pendingScrollTarget: Pair<Int, Int>? = null
+    /** Момент последнего прыжка «на ходу» (msg4372): чаще раза в [LIVE_JUMP_MS]
+     *  голос не перезапускаем — TTS не успевает договорить слово. */
+    private var lastLiveJumpAt = 0L
     private var voiceName: String?
         get() = ReaderEngine.voiceName
         set(v) { ReaderEngine.voiceName = v }
@@ -244,6 +253,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // за ней, и это место книга запоминает. Пока голос читает — не
         // вмешиваемся, иначе чтение дёргается под пальцем.
         binding.sentenceList.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                if (dy == 0) return
+                noteScrollTarget()
+                maybeJumpLive()
+            }
+
             override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
                 if (newState == RecyclerView.SCROLL_STATE_IDLE) applyScrollPlace()
             }
@@ -972,6 +987,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private fun scrollToSentence(row: Int) {
         if (row < 0) return
         if (suppressScroll) return
+        // Портянка (msg4372): читатель увёл ленту и ещё не отпустил — за голосом
+        // не подтягиваем, иначе лента вырывается у него из-под руки и уезжает
+        // назад. Цель помним, на остановке прокрутки к ней вернёмся.
+        if (pendingScrollTarget != null) return
         if (prefs.getBoolean(KEY_SCROLL, true)) layoutManager.scrollToPosition(row)
     }
 
@@ -987,21 +1006,70 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  голосом места не меняют. */
     private fun applyScrollPlace() {
         val bk = book ?: return
+        // Цель копится в onScrolled; её нет — лента стоит на читаемом, брать нечего.
+        val target = pendingScrollTarget
+        pendingScrollTarget = null
+        if (target == null) return
         if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
-        if (playing || scrubbing) return
-        val top = layoutManager.findFirstVisibleItemPosition()
-        if (top < 0) return
-        val p = adapter.placeOf(top) ?: return
-        if (p.first == chapterIdx && p.second == sentenceIdx) return
-        val curRow = adapter.flatOf(chapterIdx, sentenceIdx)
-        if (curRow >= top && curRow <= layoutManager.findLastVisibleItemPosition()) return
-        if (bk.chapters.getOrNull(p.first)?.sentences.isNullOrEmpty()) return
-        val sameChapter = p.first == chapterIdx
-        if (!ReaderEngine.placeFromScroll(p.first, p.second)) return
+        if (scrubbing) return
+        if (bk.chapters.getOrNull(target.first)?.sentences.isNullOrEmpty()) return
+        if (playing) {
+            // Вариант А (msg4372): чтение идёт, читатель отпустил прокрутку —
+            // голос переезжает на верхнюю строку и читает дальше с неё. Галочка
+            // выключена — во время чтения лента остаётся только «посмотреть».
+            if (!prefs.getBoolean(KEY_SCROLL_FOLLOW, true)) return
+            goTo(target.first, target.second)
+            Diag.log(
+                this, "activity",
+                "скачок чтения по прокрутке: глава ${target.first}, предл. ${target.second}"
+            )
+            return
+        }
+        val sameChapter = target.first == chapterIdx
+        if (!ReaderEngine.placeFromScroll(target.first, target.second)) return
         suppressScroll = true
         if (sameChapter) onMovedInChapter(sentenceIdx) else onChapterLoaded()
         suppressScroll = false
         Diag.log(this, "activity", "место по прокрутке: глава $chapterIdx, предл. $sentenceIdx")
+    }
+
+    /** Пока читатель ведёт ленту рукой, помним верхнюю строку — она станет новым
+     *  местом (msg4372). Наша авто-прокрутка за голосом цель не ставит: при ней
+     *  читаемое предложение остаётся на экране, а условие — оно уехало вниз. */
+    private fun noteScrollTarget() {
+        if (book == null || scrubbing) return
+        if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
+        val top = layoutManager.findFirstVisibleItemPosition()
+        if (top < 0) return
+        val p = adapter.placeOf(top) ?: return
+        val curRow = adapter.flatOf(chapterIdx, sentenceIdx)
+        // Читаемое предложение снова на экране — читатель вернулся к своему
+        // месту, менять нечего: прежнюю цель забываем.
+        if (p.first == chapterIdx && p.second == sentenceIdx ||
+            curRow >= top && curRow <= layoutManager.findLastVisibleItemPosition()
+        ) {
+            pendingScrollTarget = null
+            return
+        }
+        pendingScrollTarget = p
+    }
+
+    /** Вариант Б (msg4372): голос перескакивает на верхнюю строку прямо во время
+     *  движения ленты, не дожидаясь отпускания. Живёт поверх варианта А — без
+     *  него во время чтения лента голос не тянет; и не чаще [LIVE_JUMP_MS], иначе
+     *  каждый сдвиг пальца перезапускал бы речь с начала предложения. */
+    private fun maybeJumpLive() {
+        if (!playing) return
+        if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
+        if (!prefs.getBoolean(KEY_SCROLL_FOLLOW, true)) return
+        if (!prefs.getBoolean(KEY_SCROLL_JUMP_LIVE, true)) return
+        val t = pendingScrollTarget ?: return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastLiveJumpAt < LIVE_JUMP_MS) return
+        lastLiveJumpAt = now
+        pendingScrollTarget = null
+        goTo(t.first, t.second)
+        Diag.log(this, "activity", "прыжок на ходу: глава ${t.first}, предл. ${t.second}")
     }
 
     /** Настраиваемые свайпы влево/вправо по тексту (#77). Без TalkBack жест —
@@ -3104,6 +3172,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Портянка (msg4338): прокрутка рукой становится местом чтения. Выкл —
         // прежнее поведение: место двигают только чтение, кнопки и ползунок.
         internal const val KEY_SCROLL_PLACE = "scroll_moves_place"
+        // Портянка (msg4372, вариант А): во время чтения отпущенная прокрутка
+        // перекидывает голос на верхнюю строку — он читает дальше с неё.
+        internal const val KEY_SCROLL_FOLLOW = "scroll_follows_reading"
+        // Портянка (msg4372, вариант Б): то же, но прямо во время движения ленты,
+        // не дожидаясь отпускания. Живёт поверх KEY_SCROLL_FOLLOW.
+        internal const val KEY_SCROLL_JUMP_LIVE = "scroll_jump_live"
+        /** Не чаще этого перезапускаем речь на прыжке «на ходу» (мс): TTS не
+         *  успевает договорить слово, если дёргать его каждый сдвиг пальца. */
+        private const val LIVE_JUMP_MS = 700L
         internal const val KEY_TAP_TO_PLAY = "tap_to_play"
         internal const val KEY_TOC_PLAY = "toc_play"
         internal const val KEY_BM_PLAY = "bm_play"
