@@ -188,9 +188,11 @@ class SpeechPlayer(context: Context) {
                 })
                 // msg3550: список голосов движок отдаёт не в момент init, а
                 // позже — выбранный голос (в т.ч. свой у книги) в этот момент
-                // поставить нечем. Как только список приехал, доставляем голос.
-                tts?.setOnVoicesChangedListener { applySpeedAndVoice() }
+                // поставить нечем. Публичного уведомления «список готов» в SDK
+                // нет (сборка 0.4.25: setOnVoicesChangedListener не резолвится),
+                // поэтому спрашиваем сами несколько раз.
                 applySpeedAndVoice()
+                if (tts?.voices.isNullOrEmpty()) waitForVoices(VOICE_WAIT_STEPS.size)
                 // Сторож (msg4077): движок перезапущен после молчания — переспросить
                 // фразу, которую он не досказал. Скорость и голос уже применены выше.
                 // Состояние «эту фразу ждут» восстанавливаем руками: start() его
@@ -320,6 +322,29 @@ class SpeechPlayer(context: Context) {
             val v = t.voices?.firstOrNull { it.name == name }
             if (v != null) t.voice = v
         }
+    }
+
+    /** Задержки повторных вопросов «а голоса уже приехали?» после init (msg3550).
+     *  Каждая следующая длиннее: первый ответ чаще всего приходит почти сразу,
+     *  а медленный движок отзывается через секунду-полторы. */
+    private val voiceWaitSteps = longArrayOf(300, 700, 1500)
+
+    /** Голоса движка приезжают не в момент init ([applySpeedAndVoice] тогда не
+     *  находит выбранный голос и оставляет как есть — настройки не портятся).
+     *  Публичного уведомления о готовности списка в SDK нет, поэтому спрашиваем
+     *  сами: до [voiceWaitSteps].size раз с растущей паузой. */
+    private fun waitForVoices(stepsLeft: Int) {
+        if (stepsLeft <= 0) return
+        val delay = voiceWaitSteps[voiceWaitSteps.size - stepsLeft]
+        main.postDelayed({
+            if (!ready) return@postDelayed
+            if (tts?.voices.isNullOrEmpty()) {
+                waitForVoices(stepsLeft - 1)
+            } else {
+                applySpeedAndVoice()
+                Diag.log(appContext, "tts", "голоса движка приехали не сразу (через $delay мс)")
+            }
+        }, delay)
     }
 
     // ---------- Сторож молчания (msg4077) ----------
