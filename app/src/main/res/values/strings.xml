@@ -97,43 +97,43 @@
     <string name="folder_scan_result">Добавлено новых книг: %1$d</string>
     <string name="scanning_start">Сканирую и достаю названия…</string>
 
-    <!-- Онлайн-каталоги (OPDS, v0.3.20) -->
-    <string name="catalog_library_btn">🌐 Онлайн-каталоги</string>
-    <string name="catalog_title">Каталоги</string>
-    <string name="catalog_sources_title">Мои каталоги</string>
-    <string name="catalog_empty">Каталогов пока нет. Нажми ⋮ справа вверху, выбери „Добавить каталог“ и введи адрес — например https://flibusta.is/opds</string>
-    <string name="catalog_add">Добавить каталог</string>
+    <!-- Сетевые библиотеки (OPDS, v0.3.20; переименованы из «каталогов» — msg4187) -->
+    <string name="catalog_library_btn">🌐 Сетевые библиотеки</string>
+    <string name="catalog_title">Сетевые библиотеки</string>
+    <string name="catalog_sources_title">Мои библиотеки</string>
+    <string name="catalog_empty">Библиотек пока нет. Нажми ⋮ справа вверху, выбери „Добавить библиотеку“ и введи адрес — например https://flibusta.is/opds</string>
+    <string name="catalog_add">Добавить библиотеку</string>
     <string name="catalog_add_ok">Добавить</string>
-    <string name="catalog_added">Каталог добавлен: %1$s</string>
-    <string name="catalog_url_dialog">Адрес каталога (OPDS)</string>
+    <string name="catalog_added">Библиотека добавлена: %1$s</string>
+    <string name="catalog_url_dialog">Адрес библиотеки (OPDS)</string>
     <string name="catalog_url_hint">https://flibusta.is/opds</string>
-    <string name="catalog_bad_url">Не похоже на адрес каталога — проверь ссылку</string>
-    <string name="catalog_remove">Удалить каталог</string>
-    <string name="catalog_remove_ask">Удалить каталог „%1$s“?</string>
+    <string name="catalog_bad_url">Не похоже на адрес библиотеки — проверь ссылку</string>
+    <string name="catalog_remove">Удалить библиотеку</string>
+    <string name="catalog_remove_ask">Удалить библиотеку „%1$s“?</string>
     <string name="catalog_remove_ok">Удалить</string>
-    <string name="catalog_open_short">Открыть каталог</string>
-    <string name="catalog_edit">Изменить каталог</string>
+    <string name="catalog_open_short">Открыть библиотеку</string>
+    <string name="catalog_edit">Изменить библиотеку</string>
     <string name="catalog_edit_ok">Сохранить</string>
-    <string name="catalog_edit_saved">Каталог обновлён: %1$s</string>
+    <string name="catalog_edit_saved">Библиотека обновлена: %1$s</string>
     <string name="catalog_name_hint">Название</string>
     <string name="catalog_move_up">Передвинуть выше</string>
     <string name="catalog_move_down">Передвинуть ниже</string>
-    <string name="catalog_moved">Каталог передвинут в списке</string>
-    <string name="catalog_check">Проверить каталог</string>
+    <string name="catalog_moved">Библиотека передвинута в списке</string>
+    <string name="catalog_check">Проверить библиотеку</string>
     <string name="catalog_checking">Проверяю „%1$s“…</string>
-    <string name="catalog_check_ok">Каталог „%1$s“ отвечает</string>
-    <string name="catalog_check_fail">Каталог „%1$s“ не отвечает: %2$s</string>
+    <string name="catalog_check_ok">Библиотека „%1$s“ отвечает</string>
+    <string name="catalog_check_fail">Библиотека „%1$s“ не отвечает: %2$s</string>
     <string name="catalog_section_cd">Раздел. %1$s</string>
     <string name="catalog_book_cd">Книга, скачать и добавить в библиотеку. %1$s</string>
     <string name="catalog_sections">Разделы</string>
     <string name="catalog_books">Книги</string>
     <string name="catalog_pages">Страницы</string>
     <string name="catalog_next">Дальше ▸</string>
-    <string name="catalog_loading">Загружаю каталог…</string>
-    <string name="catalog_load_fail">Не получилось открыть каталог: %1$s. Проверь интернет и попробуй другой каталог из списка.</string>
+    <string name="catalog_loading">Загружаю библиотеку…</string>
+    <string name="catalog_load_fail">Не получилось открыть библиотеку: %1$s. Проверь интернет и попробуй другую библиотеку из списка.</string>
     <string name="catalog_err_unknown">неизвестная ошибка</string>
     <string name="catalog_empty_feed">Здесь пусто — попробуй другой раздел.</string>
-    <string name="catalog_search">Поиск в каталоге</string>
+    <string name="catalog_search">Поиск в библиотеке</string>
     <string name="catalog_search_hint">Название или автор</string>
     <string name="catalog_search_ok">Найти</string>
     <!-- msg3214: панель поиска каталога — кнопка голосового ввода и подсказка при
@@ -142,7 +142,7 @@
     <string name="catalog_search_empty">Сначала введите название или автора — или нажмите микрофон</string>
     <string name="catalog_search_voice_prompt">Продиктуйте название книги или автора</string>
     <string name="catalog_search_voice_announce">Ищу: %1$s</string>
-    <string name="catalog_announce">Каталог: %1$s. Разделов %2$d, книг %3$d.</string>
+    <string name="catalog_announce">Библиотека: %1$s. Разделов %2$d, книг %3$d.</string>
     <string name="catalog_dl_start">Скачиваю „%1$s“…</string>
     <string name="catalog_dl_done">Готово: „%1$s“ добавлена в библиотеку</string>
     <string name="catalog_dl_fail">Не скачалось: %1$s</string>
@@ -166,7 +166,7 @@
     <string name="catalog_book_dl_cd">Скачать книгу „%1$s“</string>
     <string name="catalog_info_authors">Авторы: %1$s</string>
     <string name="catalog_info_genres">Жанры: %1$s</string>
-    <string name="catalog_info_source">Каталог: %1$s</string>
+    <string name="catalog_info_source">Библиотека: %1$s</string>
     <string name="catalog_annotation_title">Аннотация</string>
     <string name="catalog_book_announce">Книга „%1$s“. %2$s</string>
     <string name="catalog_more_loading">Догружаю следующие книги…</string>
@@ -379,7 +379,7 @@
     <string name="title_page_title">Показывать титульный лист в начале книги</string>
 
     <string name="net_permission_title">Нужен доступ в интернет</string>
-    <string name="net_permission_message">Интернет нужен BookVoice для каталогов книг, но доступ к нему у приложения отключён. Система сама об этом не спросит — откройте настройки приложения кнопкой ниже и включите переключатель «Интернет».</string>
+    <string name="net_permission_message">Интернет нужен BookVoice для сетевых библиотек, но доступ к нему у приложения отключён. Система сама об этом не спросит — откройте настройки приложения кнопкой ниже и включите переключатель «Интернет».</string>
     <string name="net_permission_open">Открыть настройки</string>
 
     <string name="step_title">Кнопки назад и далее шагают по</string>
