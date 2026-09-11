@@ -178,7 +178,20 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     override fun onChapterLoaded() = loadChapter()
 
-    override fun onPlayStateChanged() = updatePlayButton()
+    override fun onPlayStateChanged() {
+        updatePlayButton()
+        // Портянка (msg4338): чтение встало, а лента стоит не на читаемом —
+        // читатель уехал рукой и смотрит в другое место; оно и становится
+        // местом книги, с него продолжит ▶. Читаемое на экране (обычная пауза,
+        // конец главы) — трогать нечего. Ключ «Прокручивать к читаемому»
+        // выключен — лента за голосом не ходит, брать её верх нельзя.
+        if (!playing &&
+            prefs.getBoolean(KEY_SCROLL, true) &&
+            prefs.getBoolean(KEY_SCROLL_PLACE, true)
+        ) {
+            binding.sentenceList.postDelayed({ applyScrollPlace() }, 300)
+        }
+    }
 
     override fun onMovedInChapter(s: Int) {
         val row = adapter.flatOf(chapterIdx, s)
@@ -974,6 +987,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  голосом места не меняют. */
     private fun applyScrollPlace() {
         val bk = book ?: return
+        if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
         if (playing || scrubbing) return
         val top = layoutManager.findFirstVisibleItemPosition()
         if (top < 0) return
@@ -3087,6 +3101,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val CH_NAV_CHAPTERS = "chapters"
         internal const val CH_NAV_ALL = "all"
         internal const val KEY_SCROLL = "scroll_to_current"
+        // Портянка (msg4338): прокрутка рукой становится местом чтения. Выкл —
+        // прежнее поведение: место двигают только чтение, кнопки и ползунок.
+        internal const val KEY_SCROLL_PLACE = "scroll_moves_place"
         internal const val KEY_TAP_TO_PLAY = "tap_to_play"
         internal const val KEY_TOC_PLAY = "toc_play"
         internal const val KEY_BM_PLAY = "bm_play"

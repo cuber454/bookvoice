@@ -398,6 +398,7 @@
     <string name="start_screen_last">Последняя книга</string>
 
     <string name="scroll_title">Прокручивать к читаемому предложению</string>
+    <string name="scroll_place_title">Прокрутка двигает место чтения</string>
     <string name="scroll_on">Прокрутка к читаемому включена</string>
     <string name="scroll_off">Прокрутка к читаемому выключена</string>
 
