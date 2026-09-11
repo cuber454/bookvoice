@@ -38,6 +38,7 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.cuber.bookvoice.databinding.ActivityMainBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.json.JSONArray
@@ -212,6 +213,26 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.sentenceList.layoutManager = layoutManager
         binding.sentenceList.adapter = adapter
         binding.sentenceList.setHasFixedSize(true)
+
+        // msg4276: рука сильнее автопрокрутки. Пока идёт чтение, список привязан
+        // к читаемому предложению, и каждый наш scrollToPosition отменяет то, что
+        // человек только что прокрутил: до первого экрана не добраться — тебя
+        // возвращает к текущей фразе. Поэтому отличаем свою прокрутку от чужой:
+        // onScrolled, пришедший не от нашего вызова, — это человек (пальцем или
+        // свайпом скринридера), и автопрокрутка уступает до явного шага по книге.
+        binding.sentenceList.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                // Смена данных тоже роняет сюда событие с нулевым сдвигом —
+                // это не человек, прокрутки не было.
+                if (dx == 0 && dy == 0) return
+                if (selfScrolling || autoScrollWaiting) return
+                autoScrollWaiting = true
+                Diag.log(
+                    this@MainActivity, "reader",
+                    "список прокручен не нами — автопрокрутка ждёт шага (msg4276)"
+                )
+            }
+        })
 
         installSwipe()
 
@@ -908,6 +929,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         adapter.submit(cur, chapterIdx < bk.chapters.lastIndex)
         adapter.setCurrent(sentenceIdx)
         refreshSelectionMarkers()
+        // Новая глава — новый экран: список снова идёт за чтением (msg4276).
+        // Снимаем ожидание вплотную к прокрутке: смена данных выше тоже может
+        // уронить событие прокрутки, и оно не должно съесть наш переход.
+        resumeAutoScroll()
         scrollToSentence(sentenceIdx)
         updatePosition()
     }
@@ -917,14 +942,39 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (cur.isEmpty()) return
         val pos = sentenceIdx.coerceIn(0, cur.lastIndex)
         adapter.setCurrent(pos)
+        // Чтение начали (кнопкой, гарнитурой или по готовности книги) — шаг
+        // явный: список снова идёт за чтением, даже если его увели рукой
+        // (msg4276). Сюда приходят все пути старта: движок сам зовёт
+        // [ReaderEngine.Host.onShowCurrent].
+        resumeAutoScroll()
         scrollToSentence(pos)
         updatePosition()
     }
 
+    /** Ждёт ли автопрокрутка явного шага: список прокрутил человек (msg4276). */
+    private var autoScrollWaiting = false
+
+    /** Наша прокрутка в полёте — чтобы её же событие не приняли за ручную. */
+    private var selfScrolling = false
+
+    /** Шаг по книге сделан явно (предложение, оглавление, закладка, новая глава) —
+     *  автопрокрутка снова ведёт список за чтением. */
+    private fun resumeAutoScroll() {
+        autoScrollWaiting = false
+    }
+
     /** Прокрутить список к позиции, если в настройках включено
-     *  «Прокручивать к читаемому предложению». */
+     *  «Прокручивать к читаемому предложению» и человек не увёл список сам
+     *  (msg4276: пока он листает, чтение его не дёргает). */
     private fun scrollToSentence(pos: Int) {
-        if (prefs.getBoolean(KEY_SCROLL, true)) layoutManager.scrollToPosition(pos)
+        if (!prefs.getBoolean(KEY_SCROLL, true)) return
+        if (autoScrollWaiting) return
+        selfScrolling = true
+        layoutManager.scrollToPosition(pos)
+        // Событие своей прокрутки приходит отложенно (scrollToPosition — это
+        // requestLayout, прокрутка случится на следующем проходе разметки),
+        // поэтому снимаем флаг не сразу, а с запасом по времени.
+        binding.sentenceList.postDelayed({ selfScrolling = false }, SELF_SCROLL_MS)
     }
 
     /** Настраиваемые свайпы влево/вправо по тексту (#77). Без TalkBack жест —
@@ -1199,7 +1249,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.btnNextChapter.contentDescription = getString(next)
     }
 
-    private fun goTo(ch: Int, s: Int) = ReaderEngine.goTo(ch, s)
+    private fun goTo(ch: Int, s: Int) {
+        // Явный шаг по книге (тап по предложению, кнопки шага, оглавление, поиск,
+        // закладка, ползунок) — автопрокрутка снова ведёт список (msg4276).
+        resumeAutoScroll()
+        ReaderEngine.goTo(ch, s)
+    }
 
     /** Двойной тап по предложению (при чтении TalkBack'ом — активация строки).
      *  Всегда переводит читаемую позицию на это предложение; если чтение ещё
@@ -3023,6 +3078,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val CH_NAV_CHAPTERS = "chapters"
         internal const val CH_NAV_ALL = "all"
         internal const val KEY_SCROLL = "scroll_to_current"
+
+        /** Сколько ждать своего события прокрутки, прежде чем считать следующее
+         *  за ручное (msg4276). */
+        private const val SELF_SCROLL_MS = 200L
         internal const val KEY_TAP_TO_PLAY = "tap_to_play"
         internal const val KEY_TOC_PLAY = "toc_play"
         internal const val KEY_BM_PLAY = "bm_play"
