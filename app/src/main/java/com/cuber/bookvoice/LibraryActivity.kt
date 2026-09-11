@@ -650,7 +650,7 @@ class LibraryActivity(private val act: SectionActivity) {
         // Сергей: «ползунком дошёл до 20%, вышел — на полке 0%». Здесь видно,
         // что лежит в записи: место, процент и что из этого показано.
         Diag.log(
-            this, "shelf",
+            act, "shelf",
             "строка «${rec.displayTitle}»: запись глава ${rec.chapter}, предл. ${rec.sentence}, " +
                 "процент ${rec.readPct} → " + (pct?.let { "$it%" } ?: "без строки прогресса")
         )
