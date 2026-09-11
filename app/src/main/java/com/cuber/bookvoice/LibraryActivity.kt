@@ -640,13 +640,21 @@ class LibraryActivity(private val act: SectionActivity) {
      *  строку прогресса не показываем; она появится после первого же открытия
      *  книги, когда ридер пересчитает позицию. */
     private fun progressText(rec: BookRecord): String? {
-        val pct = when {
+        val pct: Int? = when {
             rec.status == BookRecord.STATUS_FINISHED -> 100
             rec.readPct > 0 -> rec.readPct.coerceIn(0, 100)
-            rec.chapter > 0 || rec.sentence > 0 -> return null
+            rec.chapter > 0 || rec.sentence > 0 -> null
             else -> 0
         }
-        return getString(R.string.lib_progress_pct, pct)
+        // msg4322 (диагностика): из чего полка взяла цифру для строки книги.
+        // Сергей: «ползунком дошёл до 20%, вышел — на полке 0%». Здесь видно,
+        // что лежит в записи: место, процент и что из этого показано.
+        Diag.log(
+            this, "shelf",
+            "строка «${rec.displayTitle}»: запись глава ${rec.chapter}, предл. ${rec.sentence}, " +
+                "процент ${rec.readPct} → " + (pct?.let { "$it%" } ?: "без строки прогресса")
+        )
+        return pct?.let { getString(R.string.lib_progress_pct, it) }
     }
 
     private fun statusLabel(status: Int): String = getString(

@@ -480,11 +480,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         } else if (sameAsLast) {
             ch = prefs.getInt(KEY_CHAPTER, 0)
             s = prefs.getInt(KEY_SENTENCE, 0)
-            Diag.log(this, "activity", "место из prefs (последняя книга): глава $ch, предл. $s")
+            // msg4322: к месту добавлен процент ИЗ ЗАПИСИ КНИГИ — та цифра, которую
+            // показывает полка. Расхождение с местом сразу видно в логе.
+            Diag.log(
+                this, "activity",
+                "место из prefs (последняя книга): глава $ch, предл. $s (в записи ${rec?.readPct ?: -1}%)"
+            )
         } else if (rec != null) {
             ch = rec.chapter
             s = rec.sentence
-            Diag.log(this, "activity", "место из записи: глава $ch, предл. $s")
+            Diag.log(this, "activity", "место из записи: глава $ch, предл. $s (${rec.readPct}%)")
         } else {
             ch = prefs.getInt(KEY_CHAPTER, 0)
             s = prefs.getInt(KEY_SENTENCE, 0)

@@ -875,7 +875,12 @@ internal object ReaderEngine {
         if (book == null) return
         guardResetToStart()
         val p = guardedPlace()
-        Diag.log(ctx, "activity", "сохранено место: глава ${p.chapter}, предл. ${p.sentence}")
+        // msg4322: в строку добавлен процент — жалоба «дошёл ползунком до 20%,
+        // вышел, а на полке 0%». Теперь видно, что именно записано в книгу.
+        Diag.log(
+            ctx, "activity",
+            "сохранено место: глава ${p.chapter}, предл. ${p.sentence} (${readPercentAt(p)}%)"
+        )
         prefs.edit()
             .putInt(MainActivity.KEY_CHAPTER, p.chapter)
             .putInt(MainActivity.KEY_SENTENCE, p.sentence)
