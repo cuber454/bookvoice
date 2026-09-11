@@ -8,6 +8,7 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
@@ -350,11 +351,23 @@ class SpeechPlayer(context: Context) {
     // ---------- Сторож молчания (msg4077) ----------
 
     /** Взвести надзор за синтезом [text]: не отозвался за [SYNTH_STALL_MS] —
-     *  считаем движок замолчавшим. */
+     *  считаем движок замолчавшим.
+     *
+     *  Засекаем и МОМЕНТ взведения надзора (msg4211): в логе тестера сторож
+     *  сработал через 42 с вместо 15 — таймеры `postDelayed` не шли, процесс
+     *  спал. Часы elapsedRealtime идут и во сне, поэтому разница честно
+     *  показывает, сколько устройство простояло замороженным. Засечка — на
+     *  каждом взведении: взводят его только по настоящему событию (заявка на
+     *  синтез или отсрочка, пока играет предыдущая фраза), и если бы момент
+     *  не обновлялся, повтор той же фразы через полчаса выдал бы «спал 1800 с». */
     private fun armSynthWatch(text: String) {
+        watchFromMs = SystemClock.elapsedRealtime()
         val token = ++synthWatchToken
         main.postDelayed({ if (token == synthWatchToken) onSynthWatchdog(text) }, SYNTH_STALL_MS)
     }
+
+    /** Когда взведён текущий надзор за синтезом (для честной цифры в логе). */
+    private var watchFromMs = 0L
 
     /** Синтез молчит дольше разумного. Лестница мер (msg4103): переспросить фразу
      *  без перезапуска движка → перезапустить движок (до [MAX_RESTARTS] раз) →
@@ -371,7 +384,10 @@ class SpeechPlayer(context: Context) {
             armSynthWatch(text)
             return
         }
-        val waited = SYNTH_STALL_MS / 1000
+        // Реальное время молчания, а не номинал сторожа: если часы «убежали»
+        // далеко за 15 с — значит процесс спал (msg4211, #19).
+        val waited = ((SystemClock.elapsedRealtime() - watchFromMs) / 1000).toInt()
+            .coerceAtLeast(SYNTH_STALL_MS / 1000)
         stuck.forEach { (id, p) ->
             p.cancelled = true
             p.file?.delete()

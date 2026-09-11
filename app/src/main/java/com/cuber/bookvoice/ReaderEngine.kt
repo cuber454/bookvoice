@@ -249,6 +249,7 @@ internal object ReaderEngine {
         pausedByFocusLoss = false
         dropAudioFocus()
         playing = false
+        KeepAwake.release() // #19: читалка закрылась — блокировку снимаем
         cancelSleepTimer()
         MediaSessionService.stop(ctx)
         player?.shutdown()
@@ -614,6 +615,11 @@ internal object ReaderEngine {
         // больше не актуальна, сами не «оживём» не вовремя.
         pausedByFocusLoss = false
         playing = true
+        // msg4211 (#19): чтение начинается — держим процессор, чтобы телефон,
+        // лежащий экраном вниз, не заснул между фразами (лог тестера: сторож
+        // сработал через 42 с вместо 15 — таймеры не шли, процесс спал).
+        // Отпускаем на паузе/конце книги/закрытии читалки, иначе батарея.
+        KeepAwake.acquire(ctx)
         ensureMediaService()
         Diag.log(
             ctx, "activity",
@@ -671,6 +677,7 @@ internal object ReaderEngine {
         Diag.log(ctx, "activity", "чтение закончилось само (конец/остановка)")
         cancelSleepTimer() // таймер сна дальше не нужен — дочитали или встали на границе
         playing = false
+        KeepAwake.release() // #19: чтение кончилось — процессор отпускаем
         dropAudioFocus()
         // msg1119: дочитал до конца — фиксируем, чтобы повторно не начать с начала.
         savePosition()
@@ -721,6 +728,9 @@ internal object ReaderEngine {
         )
         playing = false
         player?.stop()
+        // #19: чтение встало — процессор больше не держим (в т.ч. на паузе из-за
+        // звонка: дальше чтение возобновит [startSpeakingCurrent]).
+        KeepAwake.release()
         pausedByFocusLoss = byFocusLoss
         // Пользовательская пауза/стоп снимает таймер сна: он ставился «уснуть
         // под чтение», а чтение уже прервали руками (msg2567). Прерывание чужим

@@ -8,6 +8,13 @@
     <!-- Онлайн-каталоги книг (OPDS): скачиваем ленты и сами книги. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Чтение не должно замирать, когда телефон лежит (msg4211, #19): экран
+         гаснет как обычно, а процессор под PARTIAL_WAKE_LOCK работает —
+         иначе система уводит устройство в глубокий сон между фразами и
+         замирают и синтез, и сторож. Блокировку держим только на время
+         чтения (см. KeepAwake). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- Foreground-медиа-сервис: без этого набора прав Android уронит
          сервис на старте (SecurityException на startForeground). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
