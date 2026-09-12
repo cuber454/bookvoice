@@ -495,9 +495,12 @@ object BookParser {
         var inDescription = false
         var authorOpen = false
         var bodyStarted = false
-        var target = ""                    // "", "bt", "name"
+        var target = ""                    // "", "bt", "name", "ann"
         var btBuf = StringBuilder()
         var nameBuf = StringBuilder()
+        var annBuf = StringBuilder()
+        var inAnnotation = false
+        val annParagraphs = ArrayList<String>()
 
         var type = xp.eventType
         while (type != XmlPullParser.END_DOCUMENT) {
@@ -510,11 +513,20 @@ object BookParser {
                         target = "name"
                         nameBuf = StringBuilder()
                     }
+                    // Аннотация (издательский пересказ книги) — в <description> до
+                    // текста; FBReader начинает книгу с неё, читаем её первой главой
+                    // (msg4801). Режем по абзацам <p>, как и основной текст.
+                    "annotation" -> if (inDescription) { inAnnotation = true; annBuf = StringBuilder() }
+                    "p" -> if (inAnnotation) { annBuf = StringBuilder() }
                     "body" -> bodyStarted = true
                 }
-                XmlPullParser.TEXT -> when (target) {
-                    "bt" -> btBuf.append(xp.text)
-                    "name" -> nameBuf.append(xp.text)
+                XmlPullParser.TEXT -> {
+                    val tx = xp.text
+                    when (target) {
+                        "bt" -> btBuf.append(tx)
+                        "name" -> nameBuf.append(tx)
+                    }
+                    if (inAnnotation) annBuf.append(tx)
                 }
                 XmlPullParser.END_TAG -> when (xp.name) {
                     "book-title" -> if (target == "bt") {
@@ -527,6 +539,18 @@ object BookParser {
                         target = ""
                     }
                     "author" -> authorOpen = false
+                    "p" -> if (inAnnotation) {
+                        val t = annBuf.toString().trim()
+                        if (t.isNotEmpty()) annParagraphs.add(t)
+                        annBuf = StringBuilder()
+                    }
+                    "annotation" -> {
+                        if (inAnnotation) {
+                            val t = annBuf.toString().trim()
+                            if (t.isNotEmpty()) annParagraphs.add(t)
+                        }
+                        inAnnotation = false
+                    }
                     "description" -> inDescription = false
                 }
             }
@@ -538,9 +562,17 @@ object BookParser {
         val chapters = if (bodyStarted) collectFb2Chapters(xp) else emptyList()
         if (chapters.isEmpty()) return null
 
+        // Аннотация идёт первой главой — как первая страница в FBReader.
+        val all = ArrayList<Chapter>()
+        if (annParagraphs.isNotEmpty()) {
+            val s = TextSplit.fromParagraphs(annParagraphs)
+            if (s.isNotEmpty()) all.add(Chapter("Аннотация", s))
+        }
+        all.addAll(chapters)
+
         val author = authorParts.joinToString(" ").trim().ifEmpty { null }
         val tt = bookTitle?.takeIf { it.isNotEmpty() }
-        return BookDocument(tt, author, chapters)
+        return BookDocument(tt, author, all)
     }
 
     /** Ссылка-сноска в абзаце: id заметки и текст метки, как он стоит в книге. */
