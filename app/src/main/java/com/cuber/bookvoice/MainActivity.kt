@@ -2179,7 +2179,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         actions.add(getString(R.string.catalog_title) to {
             startActivity(Intent(this, CatalogWindowActivity::class.java))
         })
-        actions.add(getString(R.string.settings_btn) to { startSettingsTab() })  // msg1176: Настройки → «⋮»
         actions.add(getString(R.string.reader_action_back) to { goBackPlace() })
         actions.add(getString(
             if (finished) R.string.status_reading_toggle else R.string.status_finished_toggle
@@ -2210,6 +2209,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // клик открывает выбор времён/«выключить» (см. showSleepTimerDialog).
         actions.add(sleepTimerMenuLabel() to { showSleepTimerDialog() })
         // msg2762: «Голос чтения» убран из меню — дубль кнопки «Голос» нижнего ряда.
+        // msg4693: «Настройки» — прямо перед «Выходом», как в остальных меню.
+        actions.add(getString(R.string.settings_btn) to { startSettingsTab() })
         actions.add(getString(R.string.app_exit) to { exitApp() })  // msg1278: последним.
         MaterialAlertDialogBuilder(this)
             // msg1687: заголовок «Действия» убран — звучал пунктом, но не нажимался.

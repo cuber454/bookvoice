@@ -428,7 +428,7 @@ class CatalogActivity(private val act: SectionActivity) {
     /** «⋮ Ещё» окна Каталога: в корне «Мои каталоги» первым идёт «Добавить
      *  каталог» (msg2371: вход в добавление переехал сюда из убранного FAB), затем
      *  «Библиотека» (прыжок на полку-дом из глубины, редизайн msg1676+),
-     *  «Настройки программы» (msg4657), «Настройки скачивания»,
+     *  «Настройки скачивания», «Настройки программы» (msg4657),
      *  «Выход из приложения». На глубине пункт добавления
      *  не показываем (каталог уже открыт). Бывшую шестерёнку ⚙ из шапки убрали
      *  (msg1474): у настроек скачивания один вход — здесь, на странице книги —
@@ -441,15 +441,16 @@ class CatalogActivity(private val act: SectionActivity) {
         actions.add(getString(R.string.go_library) to {  // домой: до полки.
             leaveToLibrary()  // msg2445: место каталога запоминаем перед уходом.
         })
+        actions.add(getString(R.string.catalog_dl_settings_title) to { openDlSettings() })
         // msg4657: «Настройки программы» — как в «⋮» полки и читалки, чтобы из
         // сетевых библиотек не приходилось идти на полку ради настроек. Окном
         // поверх каталога: закрытие возвращает в каталог. Ярлык отличается от
         // соседних «Настройки скачивания» (catalog_dl_settings_title) — на слух
-        // два пункта «Настройки…» подряд путали бы.
+        // два пункта «Настройки…» подряд путали бы. msg4693: стоит прямо перед
+        // «Выходом», как во всех меню.
         actions.add(getString(R.string.settings_program) to {
             act.startActivity(Intent(act, SettingsWindowActivity::class.java))
         })
-        actions.add(getString(R.string.catalog_dl_settings_title) to { openDlSettings() })
         actions.add(getString(R.string.app_exit) to { TabNav.exitApp(act) })  // msg1278: последним.
         MaterialAlertDialogBuilder(act)
             .setItems(actions.map { it.first }.toTypedArray()) { _, which ->

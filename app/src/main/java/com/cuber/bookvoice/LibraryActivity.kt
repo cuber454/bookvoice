@@ -831,24 +831,26 @@ class LibraryActivity(private val act: SectionActivity) {
         val qCount = QuoteStore.all(act).size
         val items = arrayOf(
             getString(R.string.catalog_title),   // msg1676+: «Каталоги» окном поверх.
-            getString(R.string.settings_title),  // msg1676+: «Настройки» окном поверх.
             getString(R.string.lib_menu_open_file),
             getString(if (tree == null) R.string.choose_folder else R.string.lib_menu_scan),
             getString(R.string.lib_menu_sort),
             getString(R.string.lib_menu_view),
             getString(R.string.quotes_section, qCount),
+            // msg4693: «Настройки» — прямо перед «Выходом» (одно место во всех
+            // меню): в конце списка её и ищут, а не в шапке.
+            getString(R.string.settings_title),  // msg1676+: «Настройки» окном поверх.
             getString(R.string.app_exit),  // msg1278: Выход из приложения — последним.
         )
         MaterialAlertDialogBuilder(act)
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> startActivity(Intent(act, CatalogWindowActivity::class.java))
-                    1 -> startActivity(Intent(act, SettingsWindowActivity::class.java))
-                    2 -> act.openDocPicker(arrayOf("*/*")) { uri -> if (uri != null) onBookPicked(uri) }
-                    3 -> onFolderButton()
-                    4 -> showGlobalSortDialog()
-                    5 -> showViewDialog()
-                    6 -> startActivity(Intent(act, QuotesActivity::class.java))
+                    1 -> act.openDocPicker(arrayOf("*/*")) { uri -> if (uri != null) onBookPicked(uri) }
+                    2 -> onFolderButton()
+                    3 -> showGlobalSortDialog()
+                    4 -> showViewDialog()
+                    5 -> startActivity(Intent(act, QuotesActivity::class.java))
+                    6 -> startActivity(Intent(act, SettingsWindowActivity::class.java))
                     7 -> exitApp()
                 }
             }
