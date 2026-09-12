@@ -1555,6 +1555,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (scrubbing) return // пока палец на слайдере — недёргаем бегунок
         binding.seekProgress.max = (total - 1).coerceAtLeast(0)
         binding.seekProgress.progress = currentGlobal().coerceIn(0, (total - 1).coerceAtLeast(0))
+        // msg4388: ползунок озвучивает TalkBack, и процент он считает сам —
+        // делением progress/max с округлением, а строка статистики и запись
+        // книги отбрасывают дробь (Сергей: «в книге на 1% меньше, чем на
+        // полке»). Задаём ползунку наше число явно, чтобы он говорил ровно то
+        // же, что видно в строке «(N%)» и что уезжает на полку. Приём тот же,
+        // что у ползунков в диалогах ридера (addRateSliderTo/addVolumeSliderTo).
+        if (Build.VERSION.SDK_INT >= 30) binding.seekProgress.stateDescription = "${readPercent()}%"
     }
 
     /** Индексы для перемотки и статистики: начало каждой главы и слова по
@@ -1629,7 +1636,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // именно показывала книга в тот момент, когда полка показывала другое.
         if (pct != lastLoggedPct) {
             lastLoggedPct = pct
-            Diag.log(this, "activity", "на экране $pct% (глава $chapterIdx, предл. $sentenceIdx)")
+            // msg4388: рядом с процентом на экране пишем процент ИЗ ЗАПИСИ книги —
+            // то число, которое прямо сейчас показала бы полка. Если Сергей
+            // видит «в книге на 1% меньше», здесь будет видно, расходятся ли
+            // числа в один и тот же момент или дело в разном времени записи.
+            val recPct = currentUri?.let { BookStore.byUri(this, it)?.readPct } ?: -1
+            Diag.log(this, "activity",
+                "на экране $pct% (глава $chapterIdx, предл. $sentenceIdx), в записи $recPct%")
         }
     }
 
