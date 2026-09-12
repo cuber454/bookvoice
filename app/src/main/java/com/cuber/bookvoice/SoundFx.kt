@@ -14,8 +14,19 @@ import android.media.MediaPlayer
 object SoundFx {
     /** «Книга готова»: короткий мелодичный сигнал после долгой загрузки. */
     fun ready(ctx: Context) {
+        play(ctx, R.raw.sound_ready)
+    }
+
+    /** «Говори»: сигнал голосового поиска (msg4755). Подаётся ровно в тот
+     *  момент, когда микрофон уже слушает, — по нему владелец и начинает
+     *  говорить. Без него приходилось угадывать паузу и начало фразы терялось. */
+    fun listen(ctx: Context) {
+        play(ctx, R.raw.sound_listen)
+    }
+
+    private fun play(ctx: Context, res: Int) {
         try {
-            val mp = MediaPlayer.create(ctx, R.raw.sound_ready) ?: return
+            val mp = MediaPlayer.create(ctx, res) ?: return
             mp.setOnCompletionListener { it.release() }
             mp.setOnErrorListener { p, _, _ -> p.release(); true }
             mp.start()
