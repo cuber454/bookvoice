@@ -303,10 +303,37 @@
     <string name="settings_group_library_hint">Папка с книгами, куда и в каком формате качать</string>
     <string name="settings_group_diag_hint">Проверка обновлений и журнал приложения</string>
     <string name="settings_about_hint">Что это за программа и её фишки</string>
-    <string name="settings_bg_title">Работа в фоне при заблокированном экране</string>
     <string name="settings_bg_hint_on">Разрешена: система не останавливает чтение</string>
-    <string name="settings_bg_hint_off">Не разрешена — на Poco и realme чтение может замолкать. Нажмите, чтобы разрешить</string>
+    <string name="settings_bg_hint_off">Не разрешена — на Poco и realme чтение может замолкать. Откройте, чтобы разрешить</string>
     <string name="settings_bg_already">Работа в фоне уже разрешена</string>
+
+    <!-- «Не засыпать» (msg4705/4709): экран-помощник для прошивок MIUI/HyperOS
+         (Poco) и ColorOS (realme), которые морозят чтение своим сторожем энергии.
+         Строка корня настроек ведёт сюда; название общее с заголовком окна. -->
+    <string name="sleep_title">Не засыпать</string>
+    <string name="sleep_intro">На Poco и realme чтение иногда замолкает, когда экран погас: прошивка морозит приложение своим сторожем энергии — это отдельно от обычной экономии батареи. Ниже видно, что уже разрешено, и что можно дотянуть руками. Чем больше разрешено, тем реже замирает.</string>
+    <string name="sleep_battery_on">Оптимизация батареи: не ограничена — система не останавливает чтение</string>
+    <string name="sleep_battery_off">Оптимизация батареи: ограничена — с погасшим экраном чтение может замолкать</string>
+    <string name="sleep_bg_on">Фоновая активность приложения: разрешена</string>
+    <string name="sleep_bg_off">Фоновая активность приложения: запрещена системой — чтение будет останавливаться</string>
+    <string name="sleep_ask_title">Разрешить работу в фоне</string>
+    <string name="sleep_ask_hint">Системный запрос: одно нажатие и одно подтверждение</string>
+    <string name="sleep_ask_result">Запросил разрешение — система спросит подтверждение, ответьте «Разрешить»</string>
+    <string name="sleep_ask_result_list">Окна запроса на этой прошивке нет — открыл список оптимизации батареи: найдите BookVoice и выберите «Не ограничивать»</string>
+    <string name="sleep_autostart_title">Автозапуск</string>
+    <string name="sleep_autostart_hint">Экран прошивки: там BookVoice надо перевести в разрешённые</string>
+    <string name="sleep_autostart_result">Открываю экран «Автозапуск» прошивки %1$s — найдите BookVoice и разрешите ему автозапуск</string>
+    <string name="sleep_autostart_none">Экрана автозапуска на этой прошивке нет — открываю настройки приложения: там те же переключатели лежат внутри</string>
+    <string name="sleep_app_title">Настройки приложения</string>
+    <string name="sleep_app_hint">Здесь на прошивке — «Автозапуск», «Разрешить фоновую активность» и «Батарея»</string>
+    <string name="sleep_app_result">Открываю настройки приложения — проверьте «Разрешить фоновую активность» и «Батарея»</string>
+    <string name="sleep_app_failed">Системный экран не открылся — зайдите вручную: Настройки, Приложения, BookVoice</string>
+    <string name="sleep_engine_title">Настройки движка речи</string>
+    <string name="sleep_engine_hint">Ограничение батареи снимается и с самого синтезатора — у тестера помогло именно это</string>
+    <string name="sleep_engine_result">Открываю системный раздел «Синтез речи» — снимите ограничение батареи с движка, которым читаете</string>
+    <string name="sleep_engine_failed">Системного раздела «Синтез речи» нет — найдите его в настройках телефона руками</string>
+    <string name="sleep_lock_hint">Ещё помогает закрепить BookVoice в списке недавних: откройте недавние, вызовите меню карточки приложения и выберите замок. Тогда прошивка не выгружает его из памяти.</string>
+    <string name="sleep_log_hint">Пока идёт чтение, в журнал раз в минуту пишется отметка. Дыра во времени в журнале значит, что процесс был заморожен системой, а не ошибка программы.</string>
     <string name="settings_chat">Группа BookVoice в Telegram</string>
     <string name="settings_chat_hint">Вопросы, идеи, сообщения об ошибках. При сбое удобно сначала отправить лог</string>
     <!-- Настраиваемые свайпы вправо/влево в читалке (#77) -->

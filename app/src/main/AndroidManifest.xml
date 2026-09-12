@@ -122,6 +122,14 @@
             android:name=".AboutWindowActivity"
             android:exported="false" />
 
+        <!-- «Не засыпать» (msg4705/4709): состояние энергетических запретов и
+             дороги к прошивочным экранам (автозапуск MIUI/ColorOS, фоновая
+             активность, ограничение у движка речи). Открывается строкой корня
+             Настроек; своих intent-filter нет. -->
+        <activity
+            android:name=".SleepWindowActivity"
+            android:exported="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="false" />
