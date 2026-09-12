@@ -885,6 +885,15 @@ internal object ReaderEngine {
             .putInt(MainActivity.KEY_CHAPTER, p.chapter)
             .putInt(MainActivity.KEY_SENTENCE, p.sentence)
             .apply()
+        writePlaceToRecord(p)
+    }
+
+    /** Полная запись места в книгу (реестр библиотеки): по ней полка показывает
+     *  строку «прочитано N%». msg4377: раньше это делалось только здесь и в
+     *  savePosition, а смена места прокруткой писала одни prefs — если прокрутка
+     *  срабатывала уже после сохранения при выходе, книга открывалась на новом
+     *  месте, а полка показывала старое число (Сергей: «в полке 2%, в книжке 3%»). */
+    private fun writePlaceToRecord(p: Place) {
         val u = currentUri ?: return
         val ex = BookStore.byUri(ctx, u) ?: return
         BookStore.upsert(ctx, ex.copy(
@@ -898,9 +907,10 @@ internal object ReaderEngine {
 
     /** Портянка (msg4330): место, до которого читатель доехал рукой по ленте.
      *  Это его выбор — как ручной переход, поэтому снимает «место остановки»
-     *  (rewindFloor, msg2093) и не даёт авто-сбросу перебить себя. Запись места
-     *  здесь быстрая (prefs), полная — как обычно при паузе/выходе. Голос и
-     *  плеер не трогаем: чтение с нового места само не начинается, экран
+     *  (rewindFloor, msg2093) и не даёт авто-сбросу перебить себя. Пишем и prefs,
+     *  и запись книги (msg4377): смена места прокруткой может случиться уже после
+     *  сохранения при выходе, и тогда полка осталась бы со старым процентом.
+     *  Голос и плеер не трогаем: чтение с нового места само не начинается, экран
      *  перерисовывает вызывающий. false — книгу/главу взять неоткуда. */
     fun placeFromScroll(ch: Int, s: Int): Boolean {
         val bk = book ?: return false
@@ -911,6 +921,12 @@ internal object ReaderEngine {
         chapterIdx = ch
         sentenceIdx = s.coerceIn(0, cur.lastIndex)
         persistPosition()
+        val p = Place(chapterIdx, sentenceIdx)
+        writePlaceToRecord(p)
+        Diag.log(
+            ctx, "activity",
+            "место записано в книгу: глава ${p.chapter}, предл. ${p.sentence} (${readPercentAt(p)}%)"
+        )
         return true
     }
 

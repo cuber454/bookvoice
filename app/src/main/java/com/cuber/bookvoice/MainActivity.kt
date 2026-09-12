@@ -1009,6 +1009,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  голосом места не меняют. */
     private fun applyScrollPlace() {
         val bk = book ?: return
+        // msg4377: смена места приходит с задержкой 300 мс после остановки
+        // чтения — если читатель в этот момент уже вышел из книги, место
+        // двигать поздно: сохранение при выходе прошло, и полка разошлась бы
+        // с книгой.
+        if (isFinishing || isDestroyed) return
         // Цель копится в onScrolled; её нет — лента стоит на читаемом, брать нечего.
         val target = pendingScrollTarget
         pendingScrollTarget = null
