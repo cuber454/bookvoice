@@ -596,6 +596,13 @@ object BookParser {
         return if (from == 0) raw else ArrayList(raw.subList(from, raw.size))
     }
 
+    /** Теги FB2, текст которых становится абзацами книги. `text-author` —
+     *  подпись под цитатой или эпиграфом («Из рекламного проспекта», «Дьякон
+     *  Равак, Лада, третий сектор»): без неё цитата читается как речь самого
+     *  рассказчика, а строка, которая в файле есть, из книги пропадает
+     *  (msg4771, книга тестера @Spartach72 — 144 такие строки). */
+    private val fb2ParagraphTags = setOf("p", "v", "subtitle", "text-author")
+
     /** Рекурсивно читает один <section> до его закрытия (включая вложенные). */
     private fun readFb2Section(xp: XmlPullParser): Fb2Sec {
         var title: String? = null
@@ -611,7 +618,7 @@ object BookParser {
                 XmlPullParser.START_TAG -> when (xp.name) {
                     "title" -> { collectingTitle = true; titleBuf.setLength(0) }
                     "section" -> subs.add(readFb2Section(xp))
-                    "p", "v", "subtitle" -> if (!collectingTitle) { inP = true; pBuf.setLength(0) }
+                    in fb2ParagraphTags -> if (!collectingTitle) { inP = true; pBuf.setLength(0) }
                 }
                 XmlPullParser.TEXT -> {
                     val tx = xp.text
@@ -623,7 +630,7 @@ object BookParser {
                         title = titleBuf.toString().trim().takeIf { it.isNotEmpty() }
                         collectingTitle = false
                     }
-                    "p", "v", "subtitle" -> if (inP) {
+                    in fb2ParagraphTags -> if (inP) {
                         val t = pBuf.toString().trim()
                         if (t.isNotEmpty()) own.add(t)
                         inP = false
