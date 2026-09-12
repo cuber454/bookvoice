@@ -731,19 +731,27 @@ internal object ReaderEngine {
         return n.coerceAtLeast(1)
     }
 
+    /** Текст, пригодный к озвучке: книжные маркеры пропуска «<…>» и «‹…›»
+     *  движок читает словами — «меньше», «больше» (жалоба Сергея, msg4438).
+     *  Убираем угловые скобки, многоточие оставляем: на месте пропуска остаётся
+     *  пауза, а не пропадает весь кусок. */
+    private fun voiceText(raw: String): String =
+        raw.replace('<', ' ').replace('>', ' ').replace('‹', ' ').replace('›', ' ')
+            .replace(Regex("\\s+"), " ").trim()
+
     /** Текст фразы из [n] предложений с позиции (ch, s). Название главы
      *  добавляет только первое предложение — как и в [spokenText]. null — если
-     *  произносить нечего (одни знаки: маркеры пропуска «‹…›», линейки и т.п.). */
+     *  произносить нечего (одни знаки: маркеры пропуска, линейки и т.п.). */
     private fun chunkText(ch: Int, s: Int, n: Int): String? {
         val cur = book?.chapters?.getOrNull(ch)?.sentences ?: return null
-        val head = spokenText(ch, s) ?: return null
+        val head = voiceText(spokenText(ch, s) ?: return null)
         val sb = StringBuilder(head)
         for (i in 1 until n) {
             val t = cur.getOrNull(s + i)?.text?.trim() ?: break
             if (t.isEmpty()) continue
-            sb.append(' ').append(t)
+            sb.append(' ').append(voiceText(t))
         }
-        val out = sb.toString()
+        val out = sb.toString().trim()
         return if (out.any { it.isLetterOrDigit() }) out else null
     }
 
