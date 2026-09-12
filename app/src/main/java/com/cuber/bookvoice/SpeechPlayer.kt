@@ -70,6 +70,48 @@ class SpeechPlayer(context: Context) {
      *  тишины по краям нет вовсе), но файл не портит. */
     var tightPauses: Boolean = true
 
+    /** Бесшовная передача звука встык (msg4598, ТЕСТОВАЯ настройка).
+     *
+     *  Зачем. Замер по журналу Сергея (msg4594): между «фраза доиграла» и
+     *  «играю свой звук» следующей фразы проходит 86–177 мс, к ним добавляется
+     *  ~190 мс запаздывания самого MediaPlayer (длительность фразы ровно на
+     *  столько больше, чем размер файла / 48 000 байт/с) — на слух это пауза
+     *  около 0,3 с на КАЖДОМ стыке предложений.
+     *
+     *  Что делает. Пока звучит текущая фраза, следующая готовая заготовка
+     *  прицепляется к играющему плееру платформенным
+     *  [MediaPlayer.setNextMediaPlayer]: систему не нужно просить «начни
+     *  следующий файл» в момент окончания — она сама продолжает звук тем же
+     *  аудиотрактом. Наш перезапуск и его задержки из стыка уходят.
+     *
+     *  По умолчанию ВЫКЛ: пока это тестовая настройка, обычное поведение
+     *  остаётся прежним, и Сергей сравнивает оба варианта на слух одной
+     *  галочкой. */
+    var gapless: Boolean = false
+
+    /** Текст фразы, которая звучит прямо сейчас. */
+    private var playingText: String? = null
+
+    /** Следующая фраза, прицепленная к играющему плееру встык (msg4598). */
+    private var chainedPlayer: MediaPlayer? = null
+    private var chainedText: String? = null
+    private var chainedFile: File? = null
+
+    /** Прицепка готовится: файл отдан MediaPlayer, ответа ещё нет. В счёт
+     *  заготовок входит наравне с готовой прицепкой (см. [requestPrefetch]) —
+     *  иначе на время подготовки очередь заказала бы ту же фразу второй раз. */
+    private var chainInFlight = false
+
+    /** Поколение прицепок: запоздавший ответ MediaPlayer после stop() не должен
+     *  ничего прицеплять к уже отпущенному плееру. */
+    private var chainSeq = 0L
+
+    /** Текст, который вот-вот попросит движок после перехода встык (msg4598).
+     *  Отличает «движок сдвинулся, фраза уже звучит» от жеста «повторить»:
+     *  повтор приходит тем же путём (startSpeakingCurrent → speak), но это
+     *  осознанная просьба сыграть фразу заново. */
+    private var gaplessHopText: String? = null
+
     /** Сколько раз за сессию журналируем пустой звук от движка (не спамить). */
     private var emptySoundLogged = 0
 
@@ -280,6 +322,23 @@ class SpeechPlayer(context: Context) {
         val t = tts
         if (t == null || !ready || text.isBlank()) return
         currentText = text
+
+        // Переход встык (msg4598): движок сдвинулся на следующую фразу, а звук
+        // её уже играет — его начал не мы, а платформа в момент окончания
+        // предыдущей (см. onPhraseCompleted). Здесь нельзя ни releaseMedia()
+        // (оборвал бы звук на середине), ни playFile (сыграл бы фразу второй раз).
+        // Метка ставится ровно перед вызовом onDone, поэтому под неё попадает
+        // только продолжение движка, а не жест «повторить предложение».
+        // Проверку на играющий media здесь не ставим: фраза могла оказаться
+        // пустой (движок изредка отдаёт файл из одного заголовка) и доиграть
+        // раньше, чем движок попросит её же, — тогда без метки мы синтезировали
+        // бы её второй раз и услышали повтор.
+        if (gapless && gaplessHopText != null && text == gaplessHopText) {
+            gaplessHopText = null
+            requestPrefetch() // место в очереди освободилось — просим следующую
+            return
+        }
+        gaplessHopText = null
         releaseMedia()
 
         // Готовая заранее заготовка этой же фразы — играем без задержки.
@@ -557,6 +616,10 @@ class SpeechPlayer(context: Context) {
                         // msg4472: заготовка доспела — сразу просим следующую,
                         // пока играет текущая. Так очередь наполняется сама.
                         requestPrefetch()
+                        // msg4598: прицепляем её встык, если звук уже идёт. Без
+                        // этого стык бесшовным становился бы только у тех фраз,
+                        // чья следующая была готова к моменту старта.
+                        media?.let { m -> chainNext(m, playGen) }
                     }
                 } else {
                     // Осиротевший синтез (устаревшая заготовка) — просто удаляем.
@@ -787,29 +850,28 @@ class SpeechPlayer(context: Context) {
                     return@setOnPreparedListener
                 }
                 media = it
+                playingText = text
                 it.setVolume(volume, volume)
                 it.start()
                 retriesInRow = 0 // звук пошёл — движок и плеер живы
                 Diag.log(appContext, "sound", "играю свой звук: ${f.name} (${f.length()} байт)")
+                // msg4598: следующую заготовку прицепляем СРАЗУ, до requestPrefetch —
+                // она уходит из очереди и обязана считаться занятой в её глубине.
+                chainNext(it, gen)
                 // Предложение начало звучать — готовим следующее заранее.
                 requestPrefetch()
             }
-            mp.setOnCompletionListener {
-                // msg4402 (диагностика пауз): конец фразы. Разница отметок
-                // «фраза доиграла» → следующее «играю свой звук» — это и есть
-                // пауза между предложениями; по ней видно, помогла ли обрезка.
-                Diag.log(appContext, "sound", "фраза доиграла: ${f.name}")
-                runCatching { it.release() }
-                if (media === it) media = null
-                f.delete()
-                onDone?.invoke()
-            }
+            mp.setOnCompletionListener { onPhraseCompleted(it, f, gen) }
             mp.setOnErrorListener { p, what, extra ->
                 playWatchToken++
                 runCatching { p.release() }
-                if (media === p) media = null
+                if (media === p) {
+                    media = null
+                    playingText = null
+                }
                 f.delete()
                 if (gen != playGen) return@setOnErrorListener true
+                dropChain() // прицепленная фраза относится к упавшему плееру — её отпускаем
                 Diag.log(appContext, "sound", "свой звук не заиграл (what=$what extra=$extra) — говорю напрямую")
                 fallbackDirect(text)
                 true
@@ -828,6 +890,125 @@ class SpeechPlayer(context: Context) {
                 fallbackDirect(text)
             }
         }
+    }
+
+    /** Фраза доиграла — конец звука или переход встык (msg4598).
+     *
+     *  Обычный путь: отпускаем плеер, удаляем файл и говорим движку «дальше»
+     *  ([onDone] у него отложен). Если к плееру была прицеплена следующая
+     *  заготовка, платформа уже начала её сама — тогда эстафета передаётся без
+     *  нашей задержки: текущим становится прицепленный плеер, а движку мы
+     *  сообщаем о сдвиге на фразу так же, как в обычном пути. */
+    private fun onPhraseCompleted(mp: MediaPlayer, f: File, gen: Long) {
+        // msg4402 (диагностика пауз): конец фразы. Разница отметок «фраза
+        // доиграла» → следующее «играю свой звук» — это и есть пауза между
+        // предложениями; по ней видно, помогла ли обрезка. В режиме встык вместо
+        // «играю свой звук» идёт «встык сработал» — звук не перезапускался.
+        Diag.log(appContext, "sound", "фраза доиграла: ${f.name}")
+        val next = chainedPlayer
+        if (gapless && next != null && media === mp && gen == playGen) {
+            val nextText = chainedText
+            val nextFile = chainedFile
+            chainedPlayer = null
+            chainedText = null
+            chainedFile = null
+            runCatching { mp.release() }
+            f.delete()
+            media = next
+            playingText = nextText
+            playWatchToken++ // сторож надзора за «подготовкой» к этому звуку не относится
+            Diag.log(appContext, "sound", "встык сработал: ${nextFile?.name ?: "?"}")
+            // Движок сдвинется на эту же фразу (onDone отложен в главный поток):
+            // его speak() узнает текст по метке и не станет играть его заново.
+            gaplessHopText = nextText
+            onDone?.invoke()
+            // Тянем следующую заготовку в цепочку, пока звучит эта. requestPrefetch
+            // здесь не зовём: движок ещё не сдвинул позицию, и он ответил бы про
+            // фразу, которая уже звучит, — заготовку попросит его же speak().
+            chainNext(next, gen)
+            return
+        }
+        runCatching { mp.release() }
+        if (media === mp) {
+            media = null
+            playingText = null
+        }
+        f.delete()
+        onDone?.invoke()
+    }
+
+    /** Прицепить следующую готовую заготовку к играющему плееру (msg4598).
+     *
+     *  Платформа начинает прицепленный файл сама в момент окончания текущего —
+     *  тем же аудиотрактом, без нашей задержки на запуск. Берём только голову
+     *  очереди: заготовки лежат в том порядке, в каком прозвучат. */
+    private fun chainNext(cur: MediaPlayer, gen: Long) {
+        if (!gapless || chainedPlayer != null || chainInFlight) return
+        if (gen != playGen) return
+        val head = readyQueue.firstOrNull() ?: return
+        if (head.first == playingText) return
+        val (text, file) = head
+        // Заготовка уходит из очереди в цепочку сразу: и очередь, и счётчик
+        // глубины в requestPrefetch обязаны видеть её занятой.
+        readyQueue.removeFirst()
+        chainInFlight = true
+        val seq = ++chainSeq
+        val mp = MediaPlayer()
+        try {
+            mp.setAudioAttributes(audioAttrs)
+            mp.setAudioSessionId(audioSessionId)
+            mp.setDataSource(file.absolutePath)
+            mp.setOnPreparedListener { next ->
+                if (seq != chainSeq || gen != playGen || media !== cur) {
+                    // Прицепку отменили (остановка, смена фразы), пока файл готовился.
+                    chainInFlight = false
+                    runCatching { next.release() }
+                    file.delete()
+                    return@setOnPreparedListener
+                }
+                val ok = runCatching { cur.setNextMediaPlayer(next) }.isSuccess
+                if (!ok) {
+                    // Прошивка перехода не приняла — играем стык как раньше.
+                    chainInFlight = false
+                    runCatching { next.release() }
+                    file.delete()
+                    Diag.log(appContext, "sound", "встык не принят — стык как раньше: ${file.name}")
+                    return@setOnPreparedListener
+                }
+                chainInFlight = false
+                chainedPlayer = next
+                chainedText = text
+                chainedFile = file
+                next.setVolume(volume, volume)
+                next.setOnCompletionListener { onPhraseCompleted(next, file, gen) }
+                Diag.log(appContext, "sound", "встык прицеплено: ${file.name} (${file.length()} байт)")
+            }
+            mp.setOnErrorListener { p, _, _ ->
+                chainInFlight = false
+                runCatching { p.release() }
+                file.delete()
+                Diag.log(appContext, "sound", "встык не подготовился: ${file.name}")
+                true
+            }
+            mp.prepareAsync()
+        } catch (e: Exception) {
+            chainInFlight = false
+            runCatching { mp.release() }
+            file.delete()
+            Diag.log(appContext, "sound", "встык не подготовился: ${e.message}")
+        }
+    }
+
+    /** Отпустить прицепленную заготовку, не играя её (остановка, ошибка плеера,
+     *  смена фразы). Файл удаляем: очередь заготовок наполнится сама. */
+    private fun dropChain() {
+        chainSeq++ // запоздавший ответ готовящейся прицепки больше не наш
+        chainInFlight = false
+        chainedPlayer?.let { runCatching { it.release() } }
+        chainedPlayer = null
+        chainedText = null
+        chainedFile?.delete()
+        chainedFile = null
     }
 
     /** Собственный аудиоплеер не смог сыграть файл (редкий случай) — чтобы
@@ -856,6 +1037,9 @@ class SpeechPlayer(context: Context) {
     /** Отменить текущее проигрывание. onDone НЕ вызывается. */
     private fun releaseMedia() {
         playGen++
+        dropChain() // прицепленная фраза играет тем же трактом — её тоже отпускаем
+        playingText = null
+        gaplessHopText = null
         media?.let { m ->
             runCatching { m.stop() }
             runCatching { m.release() }
@@ -873,8 +1057,11 @@ class SpeechPlayer(context: Context) {
     private fun requestPrefetch() {
         if (awaitingPlayText != null) return // текущая фраза ещё не сыграна
         val inFlight = if (prefetchInFlightText != null) 1 else 0
-        if (readyQueue.size + inFlight >= prefetchDepth) return
-        val offset = readyQueue.size + inFlight + 1
+        // msg4598: прицепленная встык фраза уже не в очереди, но она впереди —
+        // считаем её наравне с остальными, иначе заказали бы её же второй раз.
+        val chained = if (chainedPlayer != null || chainInFlight) 1 else 0
+        if (readyQueue.size + inFlight + chained >= prefetchDepth) return
+        val offset = readyQueue.size + inFlight + chained + 1
         val next = onNeedNext?.invoke(offset) ?: return
         if (next.isBlank() || next == currentText) return
         if (readyQueue.any { it.first == next }) return

@@ -398,6 +398,11 @@ class SettingsActivity(private val act: SectionActivity) {
         // галочкой: без неё непонятно, откуда пауза вообще берётся.
         addHint(getString(R.string.tight_pauses_hint))
         addCheck(R.string.tight_pauses_title, MainActivity.KEY_TIGHT_PAUSES, true)
+        // msg4598: бесшовная передача звука встык — про то же самое (стык
+        // предложений), поэтому стоит сразу за «Короткими паузами». Пока это
+        // тестовая галочка для сравнения на слух, по умолчанию выключена.
+        addHint(getString(R.string.gapless_hint))
+        addCheck(R.string.gapless_title, MainActivity.KEY_GAPLESS, false)
 
         // Портянка (msg4372): пара про прокрутку — что она делает с местом и с
         // голосом. Переехала сюда из «Интерфейса»: «Интерфейс» — что видно на
