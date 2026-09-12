@@ -2112,6 +2112,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             BookStore.byUri(this, u)?.status == BookRecord.STATUS_FINISHED
         val actions = ArrayList<Pair<String, () -> Unit>>()
         actions.add(getString(R.string.go_library) to { startLibrary() })   // msg1176/1179: из шапки → «⋮»
+        // msg4464 (тестер @TifloMir через Сергея): из открытой книги хочется
+        // сразу прыгнуть в сетевые библиотеки, без захода на полку. Пункт стоит
+        // рядом с «Библиотека» — там же, где глаз ищет книжные места.
+        actions.add(getString(R.string.catalog_title) to {
+            startActivity(Intent(this, CatalogWindowActivity::class.java))
+        })
         actions.add(getString(R.string.settings_btn) to { startSettingsTab() })  // msg1176: Настройки → «⋮»
         actions.add(getString(R.string.reader_action_back) to { goBackPlace() })
         actions.add(getString(
