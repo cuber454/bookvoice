@@ -16,7 +16,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
@@ -100,11 +99,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  «верхней строки на остановке»: между «увёл» и «отпустил» лента успевает
      *  дёрнуться назад за голосом (авто-прокрутка к читаемому), и к остановке
      *  цель потерялась бы. Ставится, когда читаемое предложение уехало с экрана;
-     *  снимается на остановке прокрутки или на прыжке «на ходу». */
+     *  снимается на остановке прокрутки (там её и разбирает [applyScrollPlace]). */
     private var pendingScrollTarget: Pair<Int, Int>? = null
-    /** Момент последнего прыжка «на ходу» (msg4372): чаще раза в [LIVE_JUMP_MS]
-     *  голос не перезапускаем — TTS не успевает договорить слово. */
-    private var lastLiveJumpAt = 0L
     /** Последний процент, показанный на экране чтения (msg4377) — чтобы не
      *  писать в журнал одну и ту же строку на каждое обновление статистики. */
     private var lastLoggedPct = -1
@@ -259,7 +255,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
                 if (dy == 0) return
                 noteScrollTarget()
-                maybeJumpLive()
             }
 
             override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
@@ -1060,24 +1055,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             return
         }
         pendingScrollTarget = p
-    }
-
-    /** Вариант Б (msg4372): голос перескакивает на верхнюю строку прямо во время
-     *  движения ленты, не дожидаясь отпускания. Живёт поверх варианта А — без
-     *  него во время чтения лента голос не тянет; и не чаще [LIVE_JUMP_MS], иначе
-     *  каждый сдвиг пальца перезапускал бы речь с начала предложения. */
-    private fun maybeJumpLive() {
-        if (!playing) return
-        if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
-        if (!prefs.getBoolean(KEY_SCROLL_FOLLOW, true)) return
-        if (!prefs.getBoolean(KEY_SCROLL_JUMP_LIVE, true)) return
-        val t = pendingScrollTarget ?: return
-        val now = SystemClock.uptimeMillis()
-        if (now - lastLiveJumpAt < LIVE_JUMP_MS) return
-        lastLiveJumpAt = now
-        pendingScrollTarget = null
-        goTo(t.first, t.second)
-        Diag.log(this, "activity", "прыжок на ходу: глава ${t.first}, предл. ${t.second}")
     }
 
     /** Настраиваемые свайпы влево/вправо по тексту (#77). Без TalkBack жест —
@@ -3208,15 +3185,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Портянка (msg4372, вариант А): во время чтения отпущенная прокрутка
         // перекидывает голос на верхнюю строку — он читает дальше с неё.
         internal const val KEY_SCROLL_FOLLOW = "scroll_follows_reading"
-        // Портянка (msg4372, вариант Б): то же, но прямо во время движения ленты,
-        // не дожидаясь отпускания. Живёт поверх KEY_SCROLL_FOLLOW.
-        internal const val KEY_SCROLL_JUMP_LIVE = "scroll_jump_live"
-        /** Не чаще этого перезапускаем речь на прыжке «на ходу» (мс): TTS не
-         *  успевает договорить слово, если дёргать его каждый сдвиг пальца. */
-        private const val LIVE_JUMP_MS = 700L
-        // msg4402: короткие паузы между предложениями — обрезать тишину по краям
-        // синтезированных файлов. По умолчанию выкл: поведение чтения не меняем
-        // никому без спроса, просьбу тестера включают галочкой.
+        // msg4402: короткие паузы между предложениями — склейка соседних
+        // предложений в одну фразу. По умолчанию вкл (msg4446): просьба тестера,
+        // полезно всем; явно сохранённое значение владельца перебивает умолчание.
         internal const val KEY_TIGHT_PAUSES = "tight_sentence_pauses"
         internal const val KEY_TAP_TO_PLAY = "tap_to_play"
         internal const val KEY_TOC_PLAY = "toc_play"

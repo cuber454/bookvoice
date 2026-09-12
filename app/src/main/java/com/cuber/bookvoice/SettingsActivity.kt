@@ -391,18 +391,18 @@ class SettingsActivity(private val act: SectionActivity) {
         addHint(getString(R.string.tight_pauses_hint))
         addCheck(R.string.tight_pauses_title, MainActivity.KEY_TIGHT_PAUSES, true)
 
-        // Портянка (msg4372): тройка про прокрутку — что она делает с местом и с
+        // Портянка (msg4372): пара про прокрутку — что она делает с местом и с
         // голосом. Переехала сюда из «Интерфейса»: «Интерфейс» — что видно на
         // экране чтения, «Чтение» — как ведут себя голос и место.
         // 1) место едет за лентой, пока голос молчит (msg4338);
         // 2) во время чтения отпущенная прокрутка перекидывает голос на верхнюю
-        //    строку (вариант А);
-        // 3) то же, но не дожидаясь отпускания — голос перескакивает на ходу
-        //    (вариант Б), работает поверх второй.
+        //    строку.
+        // Третьей галочки («прыгать на ходу») больше нет: голос дёргался на
+        // каждом движении пальца и не успевал договорить слово (msg4450/4452 —
+        // Сергей попросил убрать, вариант «по отпусканию» остаётся).
         addHint(getString(R.string.scroll_group_hint))
         addCheck(R.string.scroll_place_title, MainActivity.KEY_SCROLL_PLACE, true)
         addCheck(R.string.scroll_follow_title, MainActivity.KEY_SCROLL_FOLLOW, true)
-        addCheck(R.string.scroll_jump_live_title, MainActivity.KEY_SCROLL_JUMP_LIVE, true)
     }
 
     /** Ползунок скорости/тона по списку значений [values] (RateSteps): свайп
