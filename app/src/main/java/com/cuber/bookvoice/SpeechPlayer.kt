@@ -88,6 +88,15 @@ class SpeechPlayer(context: Context) {
      *  остаётся прежним, и Сергей сравнивает оба варианта на слух одной
      *  галочкой. */
     var gapless: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            // msg4611: галочку снимают на ходу, а заготовка уже прицеплена к
+            // играющему плееру. Если оставить её, платформа начнёт звук сама на
+            // ближайшем стыке, а старый путь ту же фразу посчитает ещё не
+            // сыгранной и запустит второй раз. Отпускаем прицепку заранее.
+            if (!value) unhookChain()
+        }
 
     /** Текст фразы, которая звучит прямо сейчас. */
     private var playingText: String? = null
@@ -1009,6 +1018,23 @@ class SpeechPlayer(context: Context) {
         chainedText = null
         chainedFile?.delete()
         chainedFile = null
+    }
+
+    /** Снять прицепку, вернув заготовку в очередь (галочка встык снята на ходу,
+     *  msg4611). Файл ещё не звучал — он пригодится следующей фразе, поэтому
+     *  его не удаляем, а кладём обратно в голову очереди. */
+    private fun unhookChain() {
+        chainSeq++
+        chainInFlight = false
+        val p = chainedPlayer ?: return
+        val text = chainedText
+        val file = chainedFile
+        chainedPlayer = null
+        chainedText = null
+        chainedFile = null
+        runCatching { p.release() }
+        if (text != null && file != null && file.exists()) readyQueue.addFirst(text to file)
+        else file?.delete()
     }
 
     /** Собственный аудиоплеер не смог сыграть файл (редкий случай) — чтобы
