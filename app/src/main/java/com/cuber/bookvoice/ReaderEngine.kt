@@ -713,6 +713,11 @@ internal object ReaderEngine {
         var n = 1
         var len = cur.getOrNull(s)?.text?.length ?: return 1
         while (n < TIGHT_CHUNK_MAX_UNITS && s + n < cur.size) {
+            // Абзац — смысловая граница (в дневниках это новая запись, новая
+            // дата): через неё не склеиваем. Так пауза на границе абзаца
+            // остаётся настоящей и слышимой, а укорачивается только то, что
+            // внутри абзаца.
+            if (cur[s + n].paragraphStart) break
             val next = cur[s + n].text.length
             if (len + next > TIGHT_CHUNK_MAX) break
             len += next
