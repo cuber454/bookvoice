@@ -3272,6 +3272,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // умолчанию выкл: Сергей сравнивает на слух два варианта стыка
         // предложений (обычный перезапуск плеера против платформенного перехода).
         internal const val KEY_GAPLESS = "gapless_handoff"
+        // msg4721: тихий поток на время чтения — не давать засыпать звуковому каналу
+        // (Bluetooth-гарнитура не уходит в сон и не откусывает начало фразы). Эксперимент,
+        // поэтому по умолчанию выкл; галочка живёт на экране «Не засыпать».
+        internal const val KEY_SILENT_KEEPALIVE = "silent_keepalive"
         internal const val KEY_TAP_TO_PLAY = "tap_to_play"
         internal const val KEY_TOC_PLAY = "toc_play"
         internal const val KEY_BM_PLAY = "bm_play"

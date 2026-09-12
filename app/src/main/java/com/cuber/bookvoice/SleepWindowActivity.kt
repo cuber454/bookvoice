@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.view.ViewCompat
@@ -159,6 +160,15 @@ class SleepWindowActivity : SectionActivity() {
             getString(R.string.sleep_engine_hint),
         ) { openEngineSettings() }
 
+        // msg4721: единственная галочка окна — тихий звуковой поток. Стоит последней
+        // из «рабочих» строк: она не действие, а настройка, и включается на время чтения.
+        addCheck(
+            getString(R.string.sleep_silent_title),
+            getString(R.string.sleep_silent_hint),
+            MainActivity.KEY_SILENT_KEEPALIVE,
+            def = false,
+        ) { on -> KeepAwake.syncSilence(); logSilence(on) }
+
         addHint(getString(R.string.sleep_lock_hint))
         addHint(getString(R.string.sleep_log_hint))
     }
@@ -252,16 +262,7 @@ class SleepWindowActivity : SectionActivity() {
         onClick: (() -> Unit)? = null,
     ): TextView {
         val v = TextView(this).apply {
-            text = SpannableStringBuilder().apply {
-                append(title)
-                if (hint != null) {
-                    append("\n")
-                    val start = length
-                    append(hint)
-                    setSpan(RelativeSizeSpan(0.76f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    setSpan(ForegroundColorSpan(0xFF9AA0A6.toInt()), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                }
-            }
+            text = withHint(title, hint)
             textSize = 17f
             if (strong) setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -292,5 +293,71 @@ class SleepWindowActivity : SectionActivity() {
         return v
     }
 
+    /** Галочка-настройка (msg4721). Флажок сам говорит скринридеру «включено» или
+     *  «выключено» — для переключателя это роднее, чем переписывать состояние в
+     *  текст строки. Значение ложится в те же prefs «reader», что и прочие
+     *  настройки чтения, и применяется на месте ([KeepAwake.syncSilence]):
+     *  включили во время чтения — поток встаёт сразу, без перезапуска книги. */
+    private fun addCheck(
+        title: String,
+        hint: String,
+        key: String,
+        def: Boolean,
+        onChange: (Boolean) -> Unit,
+    ) {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val v = CheckBox(this).apply {
+            text = withHint(title, hint)
+            textSize = 17f
+            isChecked = prefs.getBoolean(key, def)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(key, checked).apply()
+                onChange(checked)
+            }
+        }
+        binding.content.addView(
+            v,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = dp(2)
+                bottomMargin = dp(2)
+            },
+        )
+    }
+
+    /** Строка с подсказкой второй строкой: название обычным, пояснение — мельче и
+     *  серым. Общее для строк-действий и галочки, поэтому вынесено сюда. */
+    private fun withHint(title: String, hint: String?): CharSequence =
+        SpannableStringBuilder().apply {
+            append(title)
+            if (hint != null) {
+                append("\n")
+                val start = length
+                append(hint)
+                setSpan(RelativeSizeSpan(0.76f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(ForegroundColorSpan(0xFF9AA0A6.toInt()), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+
+    /** В журнал — и что выбрано, и что вышло на самом деле: если чтение сейчас не
+     *  идёт, поток остаётся выключенным до его начала, и это видно из строки. */
+    private fun logSilence(on: Boolean) {
+        Diag.log(
+            this, "power",
+            "«Не засыпать»: тихий поток ${if (on) "включён" else "выключен"} галочкой; " +
+                "сейчас ${if (SilentKeepAlive.isOn) "идёт" else "не идёт"} " +
+                "(не идёт — значит чтение стоит)"
+        )
+    }
+
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    companion object {
+        /** Те же настройки чтения, что и у читалки: `MainActivity.prefs` и
+         *  [KeepAwake] читают этот же файл. */
+        private const val PREFS = "reader"
+    }
 }

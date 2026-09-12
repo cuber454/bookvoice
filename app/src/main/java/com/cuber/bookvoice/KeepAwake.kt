@@ -75,6 +75,9 @@ object KeepAwake {
             beats = 0
             main.removeCallbacks(beat)
             main.postDelayed(beat, BEAT_MS)
+            // msg4721: тихий поток живёт ровно там же, где блокировка, — пока идёт
+            // чтение. Галочка выключена (по умолчанию) — не включаем ничего.
+            if (silentPref(c)) SilentKeepAlive.start(c)
         }
     }
 
@@ -90,5 +93,22 @@ object KeepAwake {
             // Отметки — только пока чтение идёт: в паузе журналу молчать.
             main.removeCallbacks(beat)
         }
+        SilentKeepAlive.stop(c)
     }
+
+    /** Перечитать галочку тихого потока — зовёт экран «Не засыпать» сразу после
+     *  переключения: включили на ходу — поток встаёт, сняли — гаснет. Состояние
+     *  «идёт ли чтение» знает только блокировка: она и есть признак чтения. */
+    fun syncSilence() {
+        val c = appCtx ?: return
+        if (lock?.isHeld == true && silentPref(c)) SilentKeepAlive.start(c)
+        else SilentKeepAlive.stop(c)
+    }
+
+    /** Включён ли тихий поток в настройках. Читаем сами prefs: экран «Не засыпать»
+     *  пишет туда же, а движку знать об этой настройке незачем. */
+    private fun silentPref(c: Context): Boolean = runCatching {
+        c.getSharedPreferences("reader", Context.MODE_PRIVATE)
+            .getBoolean(MainActivity.KEY_SILENT_KEEPALIVE, false)
+    }.getOrDefault(false)
 }
