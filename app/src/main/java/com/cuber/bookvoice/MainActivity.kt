@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
@@ -91,6 +92,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         get() = ReaderEngine.cumWords
         set(v) { ReaderEngine.cumWords = v }
     private var scrubbing = false
+    /** msg4673: последний процент, проговорённый во время драга по бегунку, и
+     *  время той проговаривки — чтобы не повторяться и не забивать очередь речи. */
+    private var lastScrubPct = -1
+    private var lastScrubAt = 0L
     /** Портянка (msg4330): пока применяем место с прокрутки, сами список не
      *  прокручиваем — рука уже там, а лишний scrollToPosition дёрнул бы ленту
      *  (и снёс бы с экрана заголовок главы, на котором остановился читатель). */
@@ -328,12 +333,22 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 // а чтение стартовало со старого места. Прыгаем сразу, как только
                 // значение на слайдере разошлось с текущей позицией. Реальный
                 // пальцевой драг по-прежнему обрабатываем на отпускании (scrubbing).
-                if (scrubbing) return
+                if (scrubbing) {
+                    // msg4673: пока палец на бегунке, syncSlider молчит (позицию
+                    // книги применяем на отпускании) — и о движении ползунок не
+                    // сообщал ничего: Сергей слышал процент только после
+                    // отпускания. Проговариваем процент сами, по ходу.
+                    if (fromUser) announceScrubPercent(progress)
+                    return
+                }
                 if (progress != currentGlobal()) jumpToGlobal(progress, announce = false)
             }
 
             override fun onStartTrackingTouch(sb: SeekBar?) {
                 scrubbing = true
+                // msg4673: новый драг — проговариваем с первого же процента.
+                lastScrubPct = -1
+                lastScrubAt = 0L
                 // Пока крутим слайдер, чтение не должно мешать — ставим паузу,
                 // но аудиофокус держим, чтобы вернуться в чтение одной кнопкой.
                 if (playing) pausePlayback(keepFocus = true)
@@ -1563,6 +1578,29 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // же, что видно в строке «(N%)» и что уезжает на полку. Приём тот же,
         // что у ползунков в диалогах ридера (addRateSliderTo/addVolumeSliderTo).
         if (Build.VERSION.SDK_INT >= 30) binding.seekProgress.stateDescription = "${readPercent()}%"
+    }
+
+    /** msg4673: процент перемотки во время пальцевого драга по бегунку — чтобы
+     *  он звучал ПО ХОДУ движения, а не только после отпускания. [progress] —
+     *  значение самого бегунка: во время драга оно опережает позицию книги (её
+     *  применяем на отпускании, scrubbing), поэтому считаем процент от бегунка —
+     *  той же арифметикой, что [readPercent] (позиция * 100 / максимум).
+     *
+     *  Говорим через [View.announceForAccessibility] (как [announcePosition] на
+     *  отпускании) — это канал, который скринридер Сергея уже слышит. Значение
+     *  молчим дважды: только когда меняется целый процент (иначе на каждый пиксель
+     *  драга) и не чаще, чем раз в [SCRUB_ANNOUNCE_MS] — быстрый проезд по всей
+     *  книге иначе забил бы очередь речи десятками чисел. */
+    private fun announceScrubPercent(progress: Int) {
+        val max = binding.seekProgress.max
+        if (max <= 0) return
+        val pct = progress * 100 / max
+        if (pct == lastScrubPct) return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastScrubAt < SCRUB_ANNOUNCE_MS) return
+        lastScrubPct = pct
+        lastScrubAt = now
+        binding.sentenceList.announceForAccessibility("$pct%")
     }
 
     /** Индексы для перемотки и статистики: начало каждой главы и слова по
@@ -3152,6 +3190,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
         // msg2567: набор времён таймера сна в диалоге выбора (минуты).
         internal val SLEEP_TIMER_CHOICES = intArrayOf(10, 20, 30, 45, 60)
+
+        /** msg4673: пауза между проговариванием процента при драге по бегунку.
+         *  Процент меняется быстро — без паузы быстрый проезд по книге забил бы
+         *  очередь речи скринридера десятками чисел. 150 мс на слух — «на ходу»,
+         *  но не поток. */
+        private const val SCRUB_ANNOUNCE_MS = 150L
 
         /** msg4665: расширения, которые BookVoice прочитать не может, но которые
          *  книга может получить из сетевой библиотеки (mobi/rtf/html/doc, а
