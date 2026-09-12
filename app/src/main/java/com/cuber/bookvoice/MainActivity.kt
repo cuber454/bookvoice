@@ -638,6 +638,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private val fromCatalog: Boolean
         get() = intent.getBooleanExtra(EXTRA_FROM_CATALOG, false)
 
+    /** msg4665: книга скачана из сетевой библиотеки в формате, который BookVoice
+     *  не читает. Говорим об этом прямо: «формат не поддерживается или файл
+     *  повреждён» читается как поломка, хотя файл цел — просто открыть его можно
+     *  другой программой. null — формат обычный, отвечает общая фраза. */
+    private fun unreadableFormatMessage(): String? {
+        val name = currentName?.lowercase(Locale.ROOT) ?: return null
+        val ext = UNREADABLE_EXTS.firstOrNull { name.endsWith(".$it") } ?: return null
+        return getString(R.string.book_format_unreadable, ext.uppercase(Locale.ROOT))
+    }
+
     private fun openBook(uri: Uri, chapter: Int, sentence: Int, rewindOnOpen: Boolean = false) {
         // msg2679: новое открытие снимает неисполненное «Читать» прошлого раза.
         playWantedWhileLoading = false
@@ -701,7 +711,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 // «ReaderEngine не подключён» на плеере.
                 if (isDestroyed || isFinishing || ReaderEngine.player == null) return@post
                 if (doc == null) {
-                    toast("Не удалось открыть: формат не поддерживается или файл повреждён")
+                    toast(unreadableFormatMessage()
+                        ?: "Не удалось открыть: формат не поддерживается или файл повреждён")
                     Vibra.error(this)
                     showEmpty()
                     return@post
@@ -722,7 +733,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     return@post
                 }
                 if (!doc.hasText) {
-                    toast("Не удалось открыть: формат не поддерживается или файл повреждён")
+                    toast(unreadableFormatMessage()
+                        ?: "Не удалось открыть: формат не поддерживается или файл повреждён")
                     Vibra.error(this)
                     showEmpty()
                     return@post
@@ -3140,6 +3152,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
         // msg2567: набор времён таймера сна в диалоге выбора (минуты).
         internal val SLEEP_TIMER_CHOICES = intArrayOf(10, 20, 30, 45, 60)
+
+        /** msg4665: расширения, которые BookVoice прочитать не может, но которые
+         *  книга может получить из сетевой библиотеки (mobi/rtf/html/doc, а
+         *  также .rar — это PDF внутри архива RAR). */
+        private val UNREADABLE_EXTS = listOf("mobi", "rtf", "html", "htm", "doc", "rar", "djvu")
 
         /** Короткий снимок живой читалки для строки о падении (пишет
          *  BookVoiceApp в diag.log): какая книга открыта, читает ли, скорость.

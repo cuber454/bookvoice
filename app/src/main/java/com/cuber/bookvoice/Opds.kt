@@ -32,15 +32,21 @@ open class OpdsException(message: String) : Exception(message)
  *  «ошибку», а спросил имя и пароль и повторил ту же страницу. */
 class OpdsNeedLogin(val url: String) : OpdsException("библиотека просит вход")
 
-/** Формат файла книги, который каталог отдаёт на скачивание. BookVoice умеет
- *  читать FB2/EPUB/TXT — остальные (rtf/mobi/html) в список не попадают. */
+/** Формат файла книги, который каталог отдаёт на скачивание. BookVoice читает
+ *  FB2/EPUB/TXT/PDF; остальные (mobi/rtf/html/doc, PDF внутри RAR) качаются
+ *  с пометкой «не читается» (msg4665) — [label] несёт её текстом. */
 data class OpdsFormat(val label: String, val ext: String, val url: String)
 
 /** Переход на другой OPDS-раздел: «Все книги автора…» / «Все книги серии…». */
 data class OpdsRelated(val label: String, val url: String)
 
-/** Читаемые форматы каталога: ключ (он же хранится в настройке формата) — название. */
-val OPDS_READABLE_FORMATS = listOf("fb2" to "FB2", "epub" to "EPUB", "txt" to "TXT")
+/** Читаемые форматы каталога: ключ (он же хранится в настройке формата) — название.
+ *  Из этого списка собирается выбор «формат для скачивания» в настройках, поэтому
+ *  нечитаемые форматы (mobi/rtf/html/doc) сюда не входят: по умолчанию качать
+ *  то, что потом не откроется, — плохая настройка. Скачать их всё равно можно —
+ *  они приходят в списке форматов книги (msg4665). */
+val OPDS_READABLE_FORMATS =
+    listOf("fb2" to "FB2", "epub" to "EPUB", "txt" to "TXT", "pdf" to "PDF")
 
 fun opdsFormatLabel(key: String): String =
     OPDS_READABLE_FORMATS.firstOrNull { it.first == key }?.second ?: key.uppercase()
@@ -57,8 +63,10 @@ sealed class OpdsItem {
         val note: String? = null,
     ) : OpdsItem()
 
-    /** Книга. [downloads] — все читаемые форматы, что отдаёт каталог; [url]/[ext] —
-     *  первый из них (запасной адрес). [annotation], [genres], [authors] приходят
+    /** Книга. [downloads] — все форматы, что отдаёт каталог: сначала читаемые,
+     *  потом помеченные «не читается» (msg4665); [url]/[ext] — первый читаемый
+     *  (или первый вообще, если читаемых нет) как запасной адрес.
+     *  [annotation], [genres], [authors] приходят
      *  в ленте целиком — для страницы книги. */
     data class Book(
         override val title: String,
@@ -381,10 +389,13 @@ object OpdsParser {
                 for (l in acq) {
                     val key = formatKey(l.type) ?: continue
                     if (!fmts.containsKey(key)) {
-                        fmts[key] = OpdsFormat(formatLabel(key), ".$key", resolve(l.href))
+                        fmts[key] = OpdsFormat(formatLabel(key), formatExt(key), resolve(l.href))
                     }
                 }
-                val ordered = READABLE_FORMATS.mapNotNull { fmts[it] }
+                // Читаемые форматы — первыми, следом нечитаемые (msg4665): первым
+                // в списке всегда стоит тот, который потом откроется.
+                val ordered = READABLE_FORMATS.mapNotNull { fmts[it] } +
+                    OTHER_FORMATS.mapNotNull { fmts[it] }
                 val first = acq[0]
                 items.add(OpdsItem.Book(
                     title = eTitle,
@@ -542,20 +553,51 @@ object OpdsParser {
         l.type?.contains("atom+xml") == true
 
     /** Форматы, которые BookVoice умеет читать; порядок = предпочтения списка. */
-    private val READABLE_FORMATS = listOf("fb2", "epub", "txt")
+    private val READABLE_FORMATS = listOf("fb2", "epub", "txt", "pdf")
 
-    /** Ключ читаемого формата по MIME acquisition-ссылки, либо null. */
+    /** Форматы flibusta, которые BookVoice читать не умеет (msg4665): скачать
+     *  можно, открыть — нет. Идут в списке после читаемых, чтобы первым всегда
+     *  стоял тот, который откроется. */
+    private val OTHER_FORMATS = listOf("mobi", "rtf", "html", "doc", "pdfrar")
+
+    /** Ключ формата по MIME acquisition-ссылки, либо null. Порядок проверок
+     *  важен: `pdf+rar` содержит и «pdf», и «rar» — это PDF внутри архива RAR,
+     *  распаковщика у нас нет, поэтому отдельный ключ и проверка раньше pdf. */
     private fun formatKey(type: String?): String? = when {
-        type?.contains("fb2") == true -> "fb2"
-        type?.contains("epub") == true -> "epub"
-        type?.contains("txt") == true -> "txt"
+        type == null -> null
+        type.contains("pdf+rar") -> "pdfrar"
+        // flibusta отдаёт «application/fb2+zip», но канонический тип FB2 —
+        // application/x-fictionbook+xml; txt бывает и как text/plain.
+        type.contains("fb2") || type.contains("fictionbook") -> "fb2"
+        type.contains("epub") -> "epub"
+        type.contains("txt") || type.contains("text/plain") -> "txt"
+        type.contains("pdf") -> "pdf"
+        type.contains("mobipocket") || type.contains("mobi") -> "mobi"
+        type.contains("rtf") -> "rtf"
+        type.contains("html") -> "html"
+        // «doc» без якоря поймал бы и opendocument/wordprocessingml — берём только
+        // старый бинарный Word (application/doc, application/msword).
+        type.endsWith("/doc") || type.contains("msword") -> "doc"
         else -> null
     }
 
+    /** Расширение скачиваемого файла по ключу формата: у «PDF в RAR» это .rar —
+     *  качается именно архив (PDF внутри, распаковать его нам нечем). */
+    private fun formatExt(key: String): String = if (key == "pdfrar") ".rar" else ".$key"
+
+    /** Подпись формата для списка. У нечитаемых в самой подписи стоит пометка:
+     *  для незрячего пользователя это единственный способ узнать до скачивания,
+     *  что книга потом не откроется (msg4665). */
     private fun formatLabel(key: String): String = when (key) {
         "fb2" -> "FB2"
         "epub" -> "EPUB"
         "txt" -> "TXT"
+        "pdf" -> "PDF"
+        "mobi" -> "MOBI — не читается"
+        "rtf" -> "RTF — не читается"
+        "html" -> "HTML — не читается"
+        "doc" -> "DOC — не читается"
+        "pdfrar" -> "PDF в RAR — не читается"
         else -> key.uppercase()
     }
 }

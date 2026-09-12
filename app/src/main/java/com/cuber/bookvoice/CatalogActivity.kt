@@ -1389,8 +1389,10 @@ class CatalogActivity(private val act: SectionActivity) {
             // Большая кнопка скачивания (формат из настроек), на всю ширину — единственная
             // на странице (msg1996: маленький выбор формата убран, живёт в ⋮-меню окна).
             val dlKey = dlFmtKey()
-            val fmt = b.downloads.firstOrNull { it.ext == ".$dlKey" }
-            val fmtLabel = opdsFormatLabel(dlKey)
+            // msg4665: у книги ровно один формат — выбирать не из чего, берём его.
+            // Иначе книга с одним PDF предлагала бы «Скачать FB2» и гнала в список.
+            val fmt = b.downloads.firstOrNull { it.ext == ".$dlKey" } ?: b.downloads.singleOrNull()
+            val fmtLabel = fmt?.label ?: opdsFormatLabel(dlKey)
             if (b.downloads.isEmpty()) {
                 addReadableText(getString(R.string.catalog_no_formats))
             } else {
@@ -1790,7 +1792,7 @@ class CatalogActivity(private val act: SectionActivity) {
 
     // ---------------- Скачивание книги ----------------
 
-    /** Формат по умолчанию из настроек ("fb2"/"epub"/"txt"). */
+    /** Формат по умолчанию из настроек ("fb2"/"epub"/"txt"/"pdf"). */
     private fun dlFmtKey(): String {
         val key = prefs.getString(OpdsPrefs.KEY_DL_FMT, OpdsPrefs.DEFAULT_DL_FMT)
             ?: OpdsPrefs.DEFAULT_DL_FMT
@@ -1862,7 +1864,8 @@ class CatalogActivity(private val act: SectionActivity) {
             return
         }
         val key = dlFmtKey()
-        val fmt = b.downloads.firstOrNull { it.ext == ".$key" }
+        // msg4665: единственный формат книги берём как есть, без выбора.
+        val fmt = b.downloads.firstOrNull { it.ext == ".$key" } ?: b.downloads.singleOrNull()
         if (fmt != null) {
             downloadFormat(b, fmt)
         } else {
@@ -2076,6 +2079,7 @@ class CatalogActivity(private val act: SectionActivity) {
         ".epub" -> "application/epub+zip"
         ".fb2" -> "application/x-fictionbook+xml"
         ".txt" -> "text/plain"
+        ".pdf" -> "application/pdf"
         else -> "application/octet-stream"
     }
 
