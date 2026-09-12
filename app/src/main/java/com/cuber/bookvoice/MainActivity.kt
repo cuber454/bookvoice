@@ -1506,7 +1506,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg4402: галочка коротких пауз могла переключиться в настройках —
         // подхватываем её для уже открытой книги (onStart зовёт нас на возврате
         // из «Настроек»), не заставляя переоткрывать книгу.
-        ReaderEngine.player?.tightPauses = prefs.getBoolean(KEY_TIGHT_PAUSES, false)
+        ReaderEngine.player?.tightPauses = prefs.getBoolean(KEY_TIGHT_PAUSES, true)
     }
 
     /** Кнопки «Медленнее/Быстрее» (#58): шаг 0.1 по всему диапазону 0.5–4.0

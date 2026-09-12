@@ -65,7 +65,7 @@ class SpeechPlayer(context: Context) {
      *  короткие предложения уходят в движок одной фразой. Здесь же остаётся
      *  только обрезка краёв: она работает не на всех движках (у DariyaNeural
      *  тишины по краям нет вовсе), но файл не портит. */
-    var tightPauses: Boolean = false
+    var tightPauses: Boolean = true
 
     /** Сколько раз за сессию журналируем пустой звук от движка (не спамить). */
     private var emptySoundLogged = 0

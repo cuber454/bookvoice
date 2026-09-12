@@ -389,7 +389,7 @@ class SettingsActivity(private val act: SectionActivity) {
         // звучит голос, а не про то, что видно на экране. Подсказка — перед
         // галочкой: без неё непонятно, откуда пауза вообще берётся.
         addHint(getString(R.string.tight_pauses_hint))
-        addCheck(R.string.tight_pauses_title, MainActivity.KEY_TIGHT_PAUSES, false)
+        addCheck(R.string.tight_pauses_title, MainActivity.KEY_TIGHT_PAUSES, true)
 
         // Портянка (msg4372): тройка про прокрутку — что она делает с местом и с
         // голосом. Переехала сюда из «Интерфейса»: «Интерфейс» — что видно на
