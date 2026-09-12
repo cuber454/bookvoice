@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -84,6 +85,16 @@ class MediaSessionService : Service() {
                 override fun onSkipToPrevious() {
                     Diag.log(this@MediaSessionService, "session", "onSkipToPrevious (-1)")
                     post { listener?.onMediaSkip(-1) }
+                }
+
+                /** «Выход» пришёл из системной карточки (msg4578): на Android 13+
+                 *  она строит кнопки не из addAction уведомления, а из состояния
+                 *  сессии — см. pushPlaybackState(). */
+                override fun onCustomAction(action: String?, extras: Bundle?) {
+                    if (action != CUSTOM_EXIT) return
+                    Diag.log(this@MediaSessionService, "service", "«выход» из карточки (слот сессии)")
+                    post { listener?.onMediaExit() }
+                    dropCardAndStop()
                 }
             })
             setMediaButtonReceiver(
@@ -211,9 +222,10 @@ class MediaSessionService : Service() {
             mediaButtonPendingIntent(3, KeyEvent.KEYCODE_MEDIA_NEXT),
         )
         // msg4073: «Выход» — как у чужой читалки (Сергей сравнил карточки):
-        // гасит чтение прямо из шторки, не открывая окно. В свёрнутом виде
-        // остаются три привычные кнопки, «Выход» — четвёртой, в развёрнутой
-        // карточке: случайным касанием чтение не оборвать.
+        // гасит чтение прямо из шторки, не открывая окно. На Android 13+ этот
+        // набор действий система игнорирует (карточка строится из состояния
+        // сессии, см. pushPlaybackState) — он остаётся ради Android 12 и ниже,
+        // где кнопки берутся именно отсюда.
         val exitAction = NotificationCompat.Action(
             android.R.drawable.ic_menu_close_clear_cancel,
             "Выход",
@@ -291,6 +303,10 @@ class MediaSessionService : Service() {
 
         /** Команда «Выход» из карточки в шторке (msg4073). */
         private const val ACTION_EXIT = "com.cuber.bookvoice.EXIT_READING"
+
+        /** «Выход» как пользовательское действие сессии (msg4578): по этой
+         *  строке система узнаёт кнопку в четвёртом слоте карточки Android 13+. */
+        private const val CUSTOM_EXIT = "com.cuber.bookvoice.CUSTOM_EXIT"
 
         private val main = Handler(Looper.getMainLooper())
 
@@ -394,9 +410,21 @@ class MediaSessionService : Service() {
         } else {
             PlaybackStateCompat.STATE_PAUSED
         }
+        // msg4578: «Выход» — не только четвёртым действием уведомления (см.
+        // buildNotification), но и пользовательским действием СЕССИИ. На Android 13+
+        // системная медиа-карточка берёт кнопки из состояния сессии: первые три
+        // слота — play/предыдущая/следующая, четвёртый и пятый — пользовательские
+        // действия (PlaybackStateCompat.CustomAction). Без этого «Выход» в шторке
+        // не появлялся вовсе (msg4562: на карточке нет кнопки выхода).
+        val exitCustom = PlaybackStateCompat.CustomAction.Builder(
+            CUSTOM_EXIT,
+            "Выход",
+            android.R.drawable.ic_menu_close_clear_cancel,
+        ).build()
         s.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setActions(actions)
+                .addCustomAction(exitCustom)
                 .setState(state, 0L, 1f)
                 .build()
         )
