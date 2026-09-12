@@ -378,9 +378,6 @@ class SettingsActivity(private val act: SectionActivity) {
         addCheck(R.string.bm_play_title, MainActivity.KEY_BM_PLAY, true)
         // Найденное по поиску слово — читать ли с него сразу (как с главы/закладки).
         addCheck(R.string.search_play_title, MainActivity.KEY_SEARCH_PLAY, true)
-        // «Показывать титульный лист» (#553): выключено = книга (FB2) начинается
-        // сразу с первой главы, титульный/копирайт-блок в начале пропускается.
-        addCheck(R.string.title_page_title, MainActivity.KEY_SHOW_TITLE_PAGE, false)
 
         // #98 «После звонка»: ряд-резюме + при «Продолжить» — ряд отката.
         // Оба про поведение при внешнем прерывании, поэтому рядом с #99 ниже.

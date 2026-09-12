@@ -16,21 +16,21 @@ import java.util.zip.ZipInputStream
  */
 object BookParser {
 
-    fun parse(fileName: String, data: ByteArray, showTitlePage: Boolean = false): BookDocument? {
+    fun parse(fileName: String, data: ByteArray): BookDocument? {
         if (data.isEmpty()) return null
         val lower = fileName.lowercase(Locale.ROOT)
         // EPUB — тоже zip; пробуем сначала его (быстро отвалится, если внутри
         // архива нет META-INF/container.xml), иначе ищем fb2/txt как раньше.
-        if (isZip(data)) return tryParse { parseEpub(data) ?: parseZip(data, showTitlePage) }
+        if (isZip(data)) return tryParse { parseEpub(data) ?: parseZip(data) }
         return when {
             lower.endsWith(".pdf") -> PdfParser.parse(data)
-            lower.endsWith(".fb2") -> parseFb2(data, showTitlePage)
-            lower.endsWith(".xml") -> parseFb2(data, showTitlePage) ?: parseTxt(decodeText(data))
+            lower.endsWith(".fb2") -> parseFb2(data)
+            lower.endsWith(".xml") -> parseFb2(data) ?: parseTxt(decodeText(data))
             lower.endsWith(".txt") -> parseTxt(decodeText(data))
-            lower.endsWith(".zip") -> parseZip(data, showTitlePage)
+            lower.endsWith(".zip") -> parseZip(data)
             else -> {
                 if (looksBinary(data)) null
-                else tryParse { parseFb2(data, showTitlePage) } ?: parseTxt(decodeText(data))
+                else tryParse { parseFb2(data) } ?: parseTxt(decodeText(data))
             }
         }
     }
@@ -223,7 +223,7 @@ object BookParser {
      * вложенный архив. Не обрывается на первом попавшемся битом файле —
      * предпочитает корректный FB2, иначе берёт первый любой удавшийся файл.
      */
-    private fun parseZip(data: ByteArray, showTitlePage: Boolean): BookDocument? {
+    private fun parseZip(data: ByteArray): BookDocument? {
         var fb2: BookDocument? = null
         var any: BookDocument? = null
         ZipInputStream(ByteArrayInputStream(data)).use { zis ->
@@ -238,7 +238,7 @@ object BookParser {
                     }
                     when {
                         en.endsWith(".fb2") || en.endsWith(".xml") -> {
-                            val d = parseFb2(bytes, showTitlePage) ?: if (en.endsWith(".xml")) {
+                            val d = parseFb2(bytes) ?: if (en.endsWith(".xml")) {
                                 parseTxt(decodeText(bytes))
                             } else {
                                 null
@@ -480,7 +480,7 @@ object BookParser {
 
     // ---------------- FB2 ----------------
 
-    private fun parseFb2(data: ByteArray, showTitlePage: Boolean): BookDocument? {
+    private fun parseFb2(data: ByteArray): BookDocument? {
         // Сначала декодируем байты в текст: многие FB2 лежат в windows-1251 или
         // UTF-16, и отдавать их XML-парсеру «как есть» ненадёжно.
         val text = decodeText(data).trimStart()
@@ -535,7 +535,7 @@ object BookParser {
         }
 
         // --- Главы из <body> ---
-        val chapters = if (bodyStarted) collectFb2Chapters(xp, showTitlePage) else emptyList()
+        val chapters = if (bodyStarted) collectFb2Chapters(xp) else emptyList()
         if (chapters.isEmpty()) return null
 
         val author = authorParts.joinToString(" ").trim().ifEmpty { null }
@@ -553,7 +553,7 @@ object BookParser {
      *  без текста (части I/II, под которыми лежат рассказы) прозрачны. Короткий
      *  неназванный текст в самом начале книги (титул, копирайт, «* * *») главами
      *  не становится — книга начинается с первой названной главы. */
-    private fun collectFb2Chapters(xp: XmlPullParser, showTitlePage: Boolean): List<Chapter> {
+    private fun collectFb2Chapters(xp: XmlPullParser): List<Chapter> {
         val roots = ArrayList<Fb2Sec>()
         var type = xp.next()               // входим внутрь <body>
         while (type != XmlPullParser.END_DOCUMENT) {
@@ -588,9 +588,8 @@ object BookParser {
 
         // Срезаем передний служебный текст: неназванные и очень короткие главы
         // до первой главы с названием (титульный лист, копирайт издательства).
-        // Настройка «Показывать титульный лист» (0.3.35): при включённой блок
-        // остаётся и читается вступлением перед первой главой.
-        if (showTitlePage) return raw
+        // Так всегда (msg4653): настройка «Показывать титульный лист» убрана —
+        // Сергей: «она ничего не меняет», книга начинается с первой главы.
         val firstTitled = raw.indexOfFirst { it.title != null }
         var from = 0
         while (from < firstTitled && raw[from].title == null && wordsIn(raw[from]) < FRONT_MATTER_MAX_WORDS) from++

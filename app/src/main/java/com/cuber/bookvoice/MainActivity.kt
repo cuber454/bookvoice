@@ -861,9 +861,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // нельзя — он разворачивался и валил приложение OOM ещё до разбора.
         if (name.lowercase(Locale.ROOT).endsWith(".pdf")) return readPdfDisk(uri)
         val bytes = openBytes(uri) ?: return null
-        // «Показывать титульный лист» (#553): короткий блок в начале FB2 (титул,
-        // копирайт) по умолчанию пропускается — книга начинается с первой главы.
-        return BookParser.parse(name, bytes, prefs.getBoolean(KEY_SHOW_TITLE_PAGE, false))
+        // Короткий блок в начале FB2 (титул, копирайт) пропускается всегда:
+        // книга начинается с первой главы. Настройка убрана (msg4653).
+        return BookParser.parse(name, bytes)
     }
 
     /** PDF с диска (msg2619): файл не читаем в память целиком. Для content:// —
@@ -3207,7 +3207,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_TOC_PLAY = "toc_play"
         internal const val KEY_BM_PLAY = "bm_play"
         internal const val KEY_SEARCH_PLAY = "search_play"
-        internal const val KEY_SHOW_TITLE_PAGE = "show_title_page"
         internal const val KEY_START = "start"
 
         // Конструктор экрана чтения (#58): какие элементы читалки показывать.
