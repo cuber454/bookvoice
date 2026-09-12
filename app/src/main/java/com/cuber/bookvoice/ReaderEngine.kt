@@ -71,6 +71,15 @@ internal object ReaderEngine {
     // ---------------- Контекст и каналы ----------------
 
     private lateinit var ctx: Context
+
+    /** Версия приложения строкой — её пишем в журнал при каждом старте чтения.
+     *  В шапке журнала [Diag.header] версия есть, но она одна на запуск и при
+     *  длинном логе уезжает за обрезку: по присланному куску не видно, какая
+     *  сборка тестируется (вопрос Сергея, msg4424). */
+    private val versionLabel: String by lazy {
+        runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?" }
+            .getOrDefault("?")
+    }
     private val main = Handler(Looper.getMainLooper())
 
     private val prefs get() = ctx.getSharedPreferences("reader", Context.MODE_PRIVATE)
@@ -638,7 +647,8 @@ internal object ReaderEngine {
         ensureMediaService()
         Diag.log(
             ctx, "activity",
-            "старт чтения (глава $chapterIdx, предл. $sentenceIdx); движок=${p.enginePackage}, голос=$voiceName"
+            "старт чтения (глава $chapterIdx, предл. $sentenceIdx); движок=${p.enginePackage}, " +
+                "голос=$voiceName, версия $versionLabel"
         )
         requestAudioFocus()
         host?.onShowCurrent()
@@ -661,7 +671,22 @@ internal object ReaderEngine {
 
     private fun speakCurrent() {
         spokenUnits = chunkSpan(chapterIdx, sentenceIdx)
-        val t = chunkText(chapterIdx, sentenceIdx, spokenUnits) ?: return
+        var t = chunkText(chapterIdx, sentenceIdx, spokenUnits)
+        // msg4426: фраза из одних знаков (в книге «‹…›» — маркер пропуска) — для
+        // движка пустой звук: он отдаёт файл в 44 байта, а мы всё равно тратим
+        // цикл плеера и слышим паузу в четверть секунды. Пропускаем такие
+        // фразы, не отдавая их движку вовсе. Ограничитель — чтобы битый текст
+        // или дыра в разборе не гоняли нас по кругу.
+        var guard = 0
+        while (t == null && guard++ < 8) {
+            if (!advanceUnits(spokenUnits.coerceAtLeast(1))) {
+                stopAtEnd()
+                return
+            }
+            spokenUnits = chunkSpan(chapterIdx, sentenceIdx)
+            t = chunkText(chapterIdx, sentenceIdx, spokenUnits)
+        }
+        if (t == null) return
         player?.speak(t)
     }
 
@@ -702,18 +727,19 @@ internal object ReaderEngine {
     }
 
     /** Текст фразы из [n] предложений с позиции (ch, s). Название главы
-     *  добавляет только первое предложение — как и в [spokenText]. */
+     *  добавляет только первое предложение — как и в [spokenText]. null — если
+     *  произносить нечего (одни знаки: маркеры пропуска «‹…›», линейки и т.п.). */
     private fun chunkText(ch: Int, s: Int, n: Int): String? {
         val cur = book?.chapters?.getOrNull(ch)?.sentences ?: return null
         val head = spokenText(ch, s) ?: return null
-        if (n <= 1) return head
         val sb = StringBuilder(head)
         for (i in 1 until n) {
             val t = cur.getOrNull(s + i)?.text?.trim() ?: break
             if (t.isEmpty()) continue
             sb.append(' ').append(t)
         }
-        return sb.toString()
+        val out = sb.toString()
+        return if (out.any { it.isLetterOrDigit() }) out else null
     }
 
     /** Текст следующей фразы — без побочных эффектов (не двигает позицию).
