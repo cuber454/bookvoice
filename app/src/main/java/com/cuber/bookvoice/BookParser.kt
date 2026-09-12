@@ -560,28 +560,40 @@ object BookParser {
 
     /** Секция <body> FB2 → главы. Главы берём по секциям С СОБСТВЕННЫМ текстом
      *  любой глубины (msg460/#72 — «названия глав из текста»): секции-обёртки
-     *  без текста (части I/II, под которыми лежат рассказы) прозрачны. Короткий
-     *  неназванный текст в самом начале книги (титул, копирайт, «* * *») главами
-     *  не становится — книга начинается с первой названной главы. */
+     *  без текста (части I/II, под которыми лежат рассказы) прозрачны, но своё
+     *  название отдают первой вложенной главе — иначе часть с одними главами
+     *  внутри молчит (msg4797: у книги тестера так пропадали «1. Пламя и сталь»
+     *  и «2. Древо и сталь», а «3. Камень и пламя» с «4. Лед и сталь» звучали).
+     *  Короткий неназванный текст в самом начале книги (титул, копирайт, «* * *»)
+     *  главами не становится — книга начинается с первой названной главы.
+     *  FB2, где абзацы лежат прямо в <body> без секций, читаем одной главой,
+     *  а не «форматом не поддерживается» (msg4797). */
     private fun collectFb2Chapters(xp: XmlPullParser): List<Chapter> {
         val roots = ArrayList<Fb2Sec>()
         val noteRoots = ArrayList<Fb2Sec>()
+        val flat = ArrayList<String>()     // абзацы прямо в <body>, без секций
         var type = xp.next()               // входим внутрь <body>
         var bodies = 0                     // 0 — основной текст, дальше — примечания
         while (type != XmlPullParser.END_DOCUMENT) {
             if (type == XmlPullParser.START_TAG) {
-                when (xp.name) {
-                    "section" -> if (bodies == 0) roots.add(readFb2Section(xp))
-                                 else noteRoots.add(readFb2Section(xp))
+                val name = xp.name
+                if (name == "section") {
+                    if (bodies == 0) roots.add(readFb2Section(xp))
+                    else noteRoots.add(readFb2Section(xp))
+                } else if (name == "binary") {
                     // За телами идут картинки <binary> (base64, мегабайты текста) —
                     // дальше в документе нам делать нечего.
-                    "binary" -> break
+                    break
+                } else if (bodies == 0 && name in fb2ParagraphTags) {
+                    val t = readFb2FlatParagraph(xp, name).trim()
+                    if (t.isNotEmpty()) flat.add(t)
                 }
             } else if (type == XmlPullParser.END_TAG && xp.name == "body") {
                 bodies++
             }
             type = xp.next()
         }
+        if (roots.isEmpty() && flat.isNotEmpty()) roots.add(Fb2Sec(null, flat, emptyList()))
 
         val notes = fb2NoteMap(noteRoots)
 
@@ -592,18 +604,26 @@ object BookParser {
         // сбрасывался на каждом крупном разделе.
         for (r in roots) {
             var opened = false
-            fun walk(sec: Fb2Sec, underChapter: Boolean) {
+            // Возвращает неистраченный заголовок-обёртку: его получает первая
+            // глава под прозрачной секцией, а если такой главы не нашлось —
+            // следующий сосед на том же уровне.
+            fun walk(sec: Fb2Sec, underChapter: Boolean, prefix: String?): String? {
+                var pending = prefix
                 val hasOwn = sec.own.isNotEmpty()
                 if (hasOwn) {
                     val s = fb2Sentences(sec, notes)
                     if (s.isNotEmpty()) {
-                        raw.add(Chapter(sec.title, s, major = !opened, nested = underChapter))
+                        raw.add(Chapter(fb2Title(pending, sec.title), s, major = !opened, nested = underChapter))
                         opened = true
+                        pending = null
                     }
+                } else if (!sec.title.isNullOrEmpty()) {
+                    pending = fb2Title(pending, sec.title)
                 }
-                for (sub in sec.subs) walk(sub, underChapter || hasOwn)
+                for (sub in sec.subs) pending = walk(sub, underChapter || hasOwn, pending)
+                return pending
             }
-            walk(r, false)
+            walk(r, false, null)
         }
 
         // Срезаем передний служебный текст: неназванные и очень короткие главы
@@ -614,6 +634,27 @@ object BookParser {
         var from = 0
         while (from < firstTitled && raw[from].title == null && wordsIn(raw[from]) < FRONT_MATTER_MAX_WORDS) from++
         return if (from == 0) raw else ArrayList(raw.subList(from, raw.size))
+    }
+
+    /** Название главы с учётом заголовка обёртки-части: «1. Пламя и сталь. Глава 1». */
+    private fun fb2Title(prefix: String?, title: String?): String? = when {
+        prefix.isNullOrEmpty() -> title
+        title.isNullOrEmpty() -> prefix
+        else -> "$prefix. $title"
+    }
+
+    /** Абзац FB2, лежащий прямо в <body> (книга без секций): собираем его текст
+     *  до закрывающего тега и оставляем парсер на этом событии — внешний цикл
+     *  продолжит с него. */
+    private fun readFb2FlatParagraph(xp: XmlPullParser, tag: String): String {
+        val buf = StringBuilder()
+        var type = xp.next()
+        while (type != XmlPullParser.END_DOCUMENT) {
+            if (type == XmlPullParser.TEXT) buf.append(xp.text)
+            else if (type == XmlPullParser.END_TAG && xp.name == tag) break
+            type = xp.next()
+        }
+        return buf.toString()
     }
 
     /** Сноски книги: id заметки → её текст. В FB2 сноски живут отдельными
@@ -696,23 +737,34 @@ object BookParser {
         var noteId: String? = null
         val noteBuf = StringBuilder()
         var paraRefs = ArrayList<Fb2NoteRef>()
+        var inner = 0                      // глубина внутри секции (без вложенных секций)
         var type = xp.next()               // входим внутрь <section>
         while (type != XmlPullParser.END_DOCUMENT) {
             when (type) {
-                XmlPullParser.START_TAG -> when (xp.name) {
-                    "title" -> { collectingTitle = true; titleBuf.setLength(0) }
-                    "section" -> subs.add(readFb2Section(xp))
-                    "a" -> {
-                        // Ссылка-сноска: её текст — метка ([1K1]), а ведёт она в тело
-                        // notes. Не сноска (обычная ссылка) — остаётся как была.
-                        val href = fb2Attr(xp, "href")
-                        if (inP && fb2Attr(xp, "type") == "note" && href?.startsWith("#") == true) {
-                            inNote = true
-                            noteId = href.substring(1)
-                            noteBuf.setLength(0)
+                XmlPullParser.START_TAG -> {
+                    val name = xp.name
+                    if (name == "section") {
+                        subs.add(readFb2Section(xp))
+                    } else {
+                        inner++
+                        when (name) {
+                            // Название главы — только собственный <title> секции:
+                            // заголовок стиха или эпиграфа внутри главы не должен
+                            // подменять её имя (msg4797, проверено пробой).
+                            "title" -> if (inner == 1) { collectingTitle = true; titleBuf.setLength(0) }
+                            "a" -> {
+                                // Ссылка-сноска: её текст — метка ([1K1]), а ведёт она в
+                                // тело notes. Не сноска (обычная ссылка) — остаётся как была.
+                                val href = fb2Attr(xp, "href")
+                                if (inP && fb2Attr(xp, "type") == "note" && href?.startsWith("#") == true) {
+                                    inNote = true
+                                    noteId = href.substring(1)
+                                    noteBuf.setLength(0)
+                                }
+                            }
+                            in fb2ParagraphTags -> if (!collectingTitle) { inP = true; pBuf.setLength(0) }
                         }
                     }
-                    in fb2ParagraphTags -> if (!collectingTitle) { inP = true; pBuf.setLength(0) }
                 }
                 XmlPullParser.TEXT -> {
                     val tx = xp.text
@@ -724,27 +776,31 @@ object BookParser {
                         inP -> pBuf.append(tx)
                     }
                 }
-                XmlPullParser.END_TAG -> when (xp.name) {
-                    "title" -> {
-                        title = titleBuf.toString().trim().takeIf { it.isNotEmpty() }
-                        collectingTitle = false
-                    }
-                    "a" -> if (inNote) {
-                        val nid = noteId
-                        if (nid != null) paraRefs.add(Fb2NoteRef(nid, noteBuf.toString().trim()))
-                        inNote = false
-                        noteId = null
-                    }
-                    in fb2ParagraphTags -> if (inP) {
-                        val t = pBuf.toString().trim()
-                        if (t.isNotEmpty()) {
-                            own.add(t)
-                            refs.add(paraRefs)
+                XmlPullParser.END_TAG -> {
+                    val name = xp.name
+                    if (name == "section") return Fb2Sec(title, own, subs, id, refs)
+                    inner--
+                    when (name) {
+                        "title" -> if (collectingTitle) {
+                            title = titleBuf.toString().trim().takeIf { it.isNotEmpty() }
+                            collectingTitle = false
                         }
-                        paraRefs = ArrayList()
-                        inP = false
+                        "a" -> if (inNote) {
+                            val nid = noteId
+                            if (nid != null) paraRefs.add(Fb2NoteRef(nid, noteBuf.toString().trim()))
+                            inNote = false
+                            noteId = null
+                        }
+                        in fb2ParagraphTags -> if (inP) {
+                            val t = pBuf.toString().trim()
+                            if (t.isNotEmpty()) {
+                                own.add(t)
+                                refs.add(paraRefs)
+                            }
+                            paraRefs = ArrayList()
+                            inP = false
+                        }
                     }
-                    "section" -> return Fb2Sec(title, own, subs, id, refs)
                 }
             }
             type = xp.next()
