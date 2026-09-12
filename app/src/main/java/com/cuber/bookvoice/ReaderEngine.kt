@@ -136,6 +136,13 @@ internal object ReaderEngine {
     var startRewindPending = 0
     private var rewindFloor: Place? = null
 
+    // msg4377: когда запись книги (readPct для полки) писалась в последний раз,
+    // и стоит ли уже отложенный досыл. Ползунок шлёт переход на каждый сдвиг —
+    // писать JSON книги на каждое движение нельзя.
+    private var lastRecordWriteAt = 0L
+    private var recordSyncScheduled = false
+    private const val RECORD_WRITE_MS = 1000L
+
     // msg2679: движок синтеза грузится (особенно при смене на голос книги) — чтобы
     // одно нажатие «Читать» не терялось, старт откладывается и повторяется сам.
     // startQueued не даёт наслоить несколько параллельных цепочек ожидания.
@@ -888,12 +895,30 @@ internal object ReaderEngine {
         writePlaceToRecord(p)
     }
 
+    /** Отложенная запись места в книгу (msg4377): не чаще раза в секунду, но
+     *  последнее значение терять нельзя — если throttle съел бы последний сдвиг
+     *  ползунка, ставим досыл на [RECORD_WRITE_MS]. */
+    private fun syncRecordSoon() {
+        val now = System.currentTimeMillis()
+        if (now - lastRecordWriteAt >= RECORD_WRITE_MS) {
+            writePlaceToRecord(Place(chapterIdx, sentenceIdx))
+            return
+        }
+        if (recordSyncScheduled) return
+        recordSyncScheduled = true
+        main.postDelayed({
+            recordSyncScheduled = false
+            writePlaceToRecord(Place(chapterIdx, sentenceIdx))
+        }, RECORD_WRITE_MS)
+    }
+
     /** Полная запись места в книгу (реестр библиотеки): по ней полка показывает
-     *  строку «прочитано N%». msg4377: раньше это делалось только здесь и в
-     *  savePosition, а смена места прокруткой писала одни prefs — если прокрутка
-     *  срабатывала уже после сохранения при выходе, книга открывалась на новом
-     *  месте, а полка показывала старое число (Сергей: «в полке 2%, в книжке 3%»). */
+     *  строку «прочитано N%». msg4377: раньше это делалось только в savePosition,
+     *  а смена места прокруткой или ползунком писала одни prefs — книга
+     *  открывалась на новом месте, а полка показывала старое число (Сергей:
+     *  «в полке 2%, а в книжке 3%»). */
     private fun writePlaceToRecord(p: Place) {
+        lastRecordWriteAt = System.currentTimeMillis()
         val u = currentUri ?: return
         val ex = BookStore.byUri(ctx, u) ?: return
         BookStore.upsert(ctx, ex.copy(
@@ -1294,6 +1319,12 @@ internal object ReaderEngine {
         userMoved = true
         Diag.log(ctx, "activity", "переход: глава $chClamped, предл. $sClamped")
         persistPosition()
+        // msg4377: ручной переход (ползунок, оглавление, закладка, поиск) — это
+        // выбор читателя; пишем его и в запись книги, чтобы полка показывала то же
+        // место, что книга, не дожидаясь выхода. Сергей: «в полке 2%, а в книжке 3%»
+        // — как раз ползунок. Ползунок шлёт переход на каждый сдвиг, поэтому
+        // запись отложенная и не чаще раза в секунду.
+        syncRecordSoon()
         if (changedChapter) {
             host?.onChapterLoaded()
         } else {
