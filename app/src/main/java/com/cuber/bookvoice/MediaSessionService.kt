@@ -40,6 +40,10 @@ class MediaSessionService : Service() {
     private var bookTitle: String? = null
     private var playing = false
 
+    /** Книга, которую держит движок: цель касания карточки (msg4629). Карточка
+     *  на паузе живёт без окна — без этого из шторки в книгу было бы не вернуться. */
+    private var bookUri: String? = null
+
     /** Первое уведомление уже опубликовано: повторные start() (пауза → снова
      *  читать) не должны пересоздавать его (msg1636+, 0.3.67). */
     private var foregroundStarted = false
@@ -123,6 +127,14 @@ class MediaSessionService : Service() {
         // первом: состояние обязано отражать реальность, а не первое попавшееся.
         var changed = false
         intent?.getStringExtra(EXTRA_TITLE)?.let { bookTitle = it }
+        // msg4629: касание карточки возвращает в книгу, которую держит движок.
+        intent?.getStringExtra(MainActivity.EXTRA_URI)?.let {
+            if (it != bookUri) {
+                bookUri = it
+                applySessionActivity()
+                changed = true
+            }
+        }
         if (intent?.hasExtra(EXTRA_PLAYING) == true) {
             val wantPlaying = intent.getBooleanExtra(EXTRA_PLAYING, false)
             changed = wantPlaying != playing
@@ -178,6 +190,32 @@ class MediaSessionService : Service() {
             PendingIntent.FLAG_IMMUTABLE,
         )
 
+    /** Намерение «вернуться в книгу» — цель касания карточки и активность сессии
+     *  (msg4629). Ведёт в окно читалки к той же книге: движок узнаёт её по uri и
+     *  переподключает окно к живому состоянию ([MainActivity] → rejoinLiveReading).
+     *  Нужно именно потому, что карточка теперь висит и без окна — иначе из
+     *  шторки в книгу было бы не вернуться. */
+    private fun bookOpenIntent(): PendingIntent =
+        PendingIntent.getActivity(
+            this,
+            5,
+            Intent(this, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_URI, bookUri)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                ),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+
+    /** Активность сессии: система использует её для «вернуться к плееру» (в т.ч.
+     *  из карточки шторки). Переставляем, когда движок открыл другую книгу. */
+    private fun applySessionActivity() {
+        if (bookUri == null) return
+        runCatching { session?.setSessionActivity(bookOpenIntent()) }
+    }
+
     /** Убрать карточку и погасить службу — без убийства процесса: место чтения
      *  и настройки дописываются на диск асинхронно (prefs.apply). */
     private fun dropCardAndStop() {
@@ -231,7 +269,7 @@ class MediaSessionService : Service() {
             "Выход",
             exitPendingIntent(),
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(bookTitle ?: "BookVoice")
             .setContentText(getString(if (playing) R.string.media_reading else R.string.media_paused))
@@ -248,7 +286,10 @@ class MediaSessionService : Service() {
                     .setMediaSession(session?.sessionToken)
                     .setShowActionsInCompactView(0, 1, 2)
             )
-            .build()
+        // msg4629: касание карточки возвращает в книгу — путь знает движок,
+        // он и передал uri (см. ReaderEngine.ensureMediaService).
+        if (bookUri != null) builder.setContentIntent(bookOpenIntent())
+        return builder.build()
     }
 
     private fun startForegroundCompat(notification: Notification) {
@@ -319,10 +360,17 @@ class MediaSessionService : Service() {
         /** Запустить/поднять сервис в переднем плане (идемпотентно).
          *  [title]/[playing] — состояние для ПЕРВОГО уведомления (msg1636+,
          *  0.3.67). Вызывать с UI-потока, пока приложение на экране. */
-        fun start(context: Context, title: String? = null, playing: Boolean = false) {
+        fun start(
+            context: Context,
+            title: String? = null,
+            playing: Boolean = false,
+            uri: String? = null,
+        ) {
             val intent = Intent(context, MediaSessionService::class.java)
             intent.putExtra(EXTRA_TITLE, title)
             intent.putExtra(EXTRA_PLAYING, playing)
+            // тот же ключ, что у окна читалки: MainActivity.EXTRA_URI
+            intent.putExtra(MainActivity.EXTRA_URI, uri)
             runCatching {
                 if (Build.VERSION.SDK_INT >= 26) {
                     context.startForegroundService(intent)

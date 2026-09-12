@@ -96,6 +96,11 @@ internal object ReaderEngine {
     var sentenceIdx = 0
     var playing = false
 
+    /** msg4629: владелец нажал «Выход» в карточке шторки. Пока флаг стоит, окно
+     *  читалки, закрываясь на паузе, карточку НЕ держит — иначе вышел бы и снова
+     *  получил её. Снимается при возврате окна в движок ([attach]). */
+    private var cardDroppedByUser = false
+
     // msg4416: сколько предложений ушло в движок одной фразой при коротких
     // паузах (см. [chunkSpan]). Обычно 1; при склейке — до [TIGHT_CHUNK_MAX_UNITS].
     // Нужно, чтобы после озвученной фразы переставить позицию ровно на столько
@@ -245,6 +250,9 @@ internal object ReaderEngine {
         ctx = activityContext.applicationContext
         if (wasFresh) initPlayer()
         MediaSessionService.listener = mediaCommands
+        // msg4629: окно снова с нами — «выход» из карточки больше не в силе,
+        // карточка (её поднимет ensureMediaService при старте) снова наша.
+        cardDroppedByUser = false
     }
 
     private fun initPlayer() {
@@ -314,6 +322,28 @@ internal object ReaderEngine {
         Diag.log(ctx, "activity", "окно закрыто, чтение без окна продолжается")
     }
 
+    /** Окно читалки закрылось, а книга стоит на паузе (msg4629: «пусть карточка
+     *  висит, пока я не выйду сам»). Карточку в шторке НЕ гасим: служба остаётся
+     *  в переднем плане, кнопка «играть» в ней поднимет чтение без окна
+     *  ([startSpeakingCurrent] сам просит фокус и добивает службу). Движок держит
+     *  книгу и плеер, но звука нет и процессор не занят: фокус отдаём, будильник
+     *  снимаем, место фиксируем. Гасит всё это только «Выход» в карточке
+     *  ([onMediaExit]) — или [close], если книги уже нет. */
+    @Synchronized
+    fun windowGoneWhilePaused(window: Host?) {
+        // Уже другое окно у руля — чужое закрытие нам не указ (гонка переоткрытия).
+        if (host != null && host !== window) return
+        host = null
+        dropAudioFocus() // стоим — чужой плеер приглушать не за чем
+        KeepAwake.release()
+        savePosition()
+        Diag.log(ctx, "activity", "окно закрыто, книга на паузе — карточка остаётся")
+    }
+
+    /** Держать ли карточку, когда окно закроется на паузе (msg4629). Не держим,
+     *  если книги нет вовсе или владелец только что вышел «Выходом» из карточки. */
+    fun keepCardWhenWindowGone(): Boolean = book != null && player != null && !cardDroppedByUser
+
     /** Живёт ли чтение без окна? Возвращает uri книги, которую движок держит,
      *  когда UI-хоста нет. Окно читалки решает по нему, переподключиться к живой
      *  книге или открывать холодно. null — окно было закрыто на паузе ([close])
@@ -351,6 +381,9 @@ internal object ReaderEngine {
         override fun onMediaExit() {
             main.post {
                 if (book == null) return@post
+                // msg4629: вышел — карточку больше не держим (окно, если ещё
+                // открыто, закрываясь на паузе, погасит всё как раньше).
+                cardDroppedByUser = true
                 Diag.log(ctx, "activity", "«выход» из карточки: чтение встало")
                 if (playing) {
                     pausePlayback(keepFocus = false)
@@ -572,7 +605,9 @@ internal object ReaderEngine {
      *  паузы (0.3.88, msg1840). [playing] — состояние ПЕРВОГО уведомления. */
     fun ensureMediaService(playing: Boolean = true) {
         val bk = book ?: return
-        MediaSessionService.start(ctx, bk.title ?: currentName, playing = playing)
+        // msg4629: вместе с книгой передаём её uri — по нему карточка шторки
+        // возвращает окно читалки к живой книге (касание карточки).
+        MediaSessionService.start(ctx, bk.title ?: currentName, playing = playing, uri = currentUri)
     }
 
     /** msg2093: одноразовый откат при первом старте чтения. Срабатывает только
@@ -643,6 +678,9 @@ internal object ReaderEngine {
         // Пользователь запускает чтение явно — прерванность чужим плеером
         // больше не актуальна, сами не «оживём» не вовремя.
         pausedByFocusLoss = false
+        // msg4629: чтение снова пошло (окно, гарнитура) — «выход» из карточки
+        // отменён: закрываясь на паузе, окно снова оставит карточку владельцу.
+        cardDroppedByUser = false
         playing = true
         // msg4211 (#19): чтение начинается — держим процессор, чтобы телефон,
         // лежащий экраном вниз, не заснул между фразами (лог тестера: сторож

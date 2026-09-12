@@ -609,7 +609,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  (книга открыта из каталога) — уходим на корень CLEAR_TOP, чтобы снять
      *  всё, что поверх полки. Место сохранено (onPause). Если голос звучит —
      *  #38 шаг 2: он продолжает читать без окна, на полке (onDestroy зовёт
-     *  windowGoneWhilePlaying); если молчит — чтение гаснет как раньше (close). */
+     *  windowGoneWhilePlaying); если книга на паузе — карточка в шторке остаётся
+     *  и ждёт владельца (msg4629, windowGoneWhilePaused); гаснет всё как раньше
+     *  (close) только когда книги нет или он сам вышел «Выходом». */
     private fun startLibrary() {
         // Полка показывается не «с рабочего стола» — авто-открытие книги гасим.
         LibraryActivity.suppressNextAutoOpen = true
@@ -939,13 +941,19 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     override fun onDestroy() {
         // Ридер закрыт. Если голос ЗВУЧИТ — #38 шаг 2: чтение остаётся жить без
         // окна (движок держит книгу, плеер и медиа-сервис; управление дальше —
-        // гарнитура, «волшебное касание», кнопка в шторке). Если молчит — как
-        // раньше: движок сам гасит сессию, отдаёт фокус и глушит
-        // авто-продолжение (см. ReaderEngine.close): медиа-кнопки не должны
-        // остаться у нас, а чтение не должно «ожить» без окна.
+        // гарнитура, «волшебное касание», кнопка в шторке). Если книга на паузе —
+        // msg4629: карточка в шторке остаётся (владелец слушает с неё: «пусть
+        // висит, пока я не выйду сам»), движок держит книгу без звука. И только
+        // если книги нет вовсе (или он сам вышел «Выходом») — как раньше: движок
+        // гасит сессию, отдаёт фокус и глушит авто-продолжение (см.
+        // ReaderEngine.close): медиа-кнопки не должны остаться у нас, а чтение не
+        // должно «ожить» без окна.
         if (active === this) active = null
-        if (ReaderEngine.playing) ReaderEngine.windowGoneWhilePlaying()
-        else ReaderEngine.close()
+        when {
+            ReaderEngine.playing -> ReaderEngine.windowGoneWhilePlaying()
+            ReaderEngine.keepCardWhenWindowGone() -> ReaderEngine.windowGoneWhilePaused(this)
+            else -> ReaderEngine.close()
+        }
         super.onDestroy()
     }
 
