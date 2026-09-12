@@ -27,9 +27,12 @@ import java.io.File
  * проигрывает наш MediaPlayer. Раз звук физически играет из нашего процесса,
  * система видит BookVoice как настоящий плеер и отдаёт кнопки нам.
  *
- * Чтобы между предложениями не было пауз на синтез, следующее предложение
- * синтезируется заранее: пока играет текущее, MainActivity подсказывает
- * текст следующего через [onNeedNext], и мы готовим его впрок.
+ * Чтобы между предложениями не было пауз на синтез, фразы готовятся заранее:
+ * пока играет текущая, читалка подсказывает через [onNeedNext] текст следующей,
+ * и мы синтезируем её в файл. С msg4472 впрок держится не одна фраза, а
+ * очередь из [prefetchDepth]: у тестеров на Poco и realme движок синтеза
+ * замирал на 12–15 с (экран заблокирован), и с одной заготовкой это слышалось
+ * как пауза, а с тремя — проходит незаметно.
  */
 class SpeechPlayer(context: Context) {
 
@@ -84,9 +87,16 @@ class SpeechPlayer(context: Context) {
     /** Вызывается на главном потоке, когда предложение дочитано до конца. */
     var onDone: (() -> Unit)? = null
 
-    /** Возвращает текст следующего предложения для предзагрузки (или null —
-     *  книга кончилась). Зовётся на главном потоке, без побочных эффектов. */
-    var onNeedNext: (() -> String?)? = null
+    /** Возвращает текст фразы, которая прозвучит через [offset] фраз вперёд
+     *  (1 — следующая), или null, если книга кончилась. Зовётся на главном
+     *  потоке, без побочных эффектов.
+     *
+     *  msg4472: параметр появился вместе с очередью заготовок. Раньше мы
+     *  синтезировали ровно одну фразу вперёд, и каждая заминка движка (в логе
+     *  тестера — 12–15 с раз в минуту-полторы, экран заблокирован) слышалась
+     *  как пауза: играть было нечего. Теперь держим [PREFETCH_DEPTH] фраз
+     *  готовыми, и заминка проходит незаметно — звук идёт из заготовок. */
+    var onNeedNext: ((Int) -> String?)? = null
 
     val isReady: Boolean get() = ready
 
@@ -138,9 +148,16 @@ class SpeechPlayer(context: Context) {
     /** Текст, который синтезируется впрок (пока играет другое предложение). */
     private var prefetchInFlightText: String? = null
 
-    /** Уже синтезированный файл следующего предложения — готов к мгновенному старту. */
-    private var prefetchText: String? = null
-    private var prefetchFile: File? = null
+    /** Очередь уже синтезированных фраз — готовы к мгновенному старту, в том
+     *  порядке, в каком прозвучат (msg4472). Раньше здесь лежала ровно одна
+     *  заготовка: её хватало на паузу между фразами, но не на заминку движка,
+     *  которая длится дольше самой фразы. */
+    private val readyQueue = ArrayDeque<Pair<String, File>>()
+
+    /** Сколько фраз держим готовыми. Три — это 8–15 с звука при фразе в 4–6 с,
+     *  то есть ровно длина заминок из лога тестера (12–15 с). Больше не нужно:
+     *  растёт только задержка реакции на прыжок по тексту. */
+    private val prefetchDepth = 3
 
     private var reqSeq = 0L
     private val pending = HashMap<Long, Pending>()
@@ -265,16 +282,17 @@ class SpeechPlayer(context: Context) {
         currentText = text
         releaseMedia()
 
-        // Готовый заранее файл этого же предложения — играем без задержки.
-        // ВАЖНО: забираем файл, НЕ вызывая clearPrefetch() — она удаляет его,
-        // и playFile падает с ENOENT (каждая вторая фраза уходила в запасной
-        // путь движкового произнесения). Файл удалит сам playFile по завершении.
-        if (prefetchText == text && prefetchFile != null) {
-            val f = prefetchFile!!
-            prefetchFile = null
-            prefetchText = null
+        // Готовая заранее заготовка этой же фразы — играем без задержки.
+        // ВАЖНО: забираем файл из очереди, НЕ вызывая clearPrefetch() — она
+        // удаляет файлы, и playFile падает с ENOENT (каждая вторая фраза уходила
+        // в запасной путь движкового произнесения). Файл удалит сам playFile по
+        // завершении. Очередь читаем с головы: заготовки копятся в том порядке,
+        // в каком прозвучат, и голова — как раз следующая фраза.
+        val head = readyQueue.firstOrNull()
+        if (head != null && head.first == text) {
+            readyQueue.removeFirst()
             awaitingPlayText = null
-            playFile(f)
+            playFile(head.second)
             return
         }
 
@@ -525,10 +543,21 @@ class SpeechPlayer(context: Context) {
                     // Упреждающий синтез завершился, пока его ещё не просили.
                     // msg4077: засечка в лог — без неё по логу не видно, доспела
                     // заготовка или синтез молча повис.
-                    Diag.log(appContext, "sound", "заготовка готова: ${f.name} (${f.length()} байт)")
                     prefetchInFlightText = null
-                    prefetchText = p.text
-                    prefetchFile = f
+                    if (readyQueue.size >= prefetchDepth) {
+                        // Очередь переполнена (прыжок назад или смена позиции) —
+                        // лишнее не копим.
+                        f.delete()
+                    } else {
+                        readyQueue.addLast(p.text to f)
+                        Diag.log(
+                            appContext, "sound",
+                            "заготовка готова: ${f.name} (${f.length()} байт), в очереди ${readyQueue.size}/$prefetchDepth"
+                        )
+                        // msg4472: заготовка доспела — сразу просим следующую,
+                        // пока играет текущая. Так очередь наполняется сама.
+                        requestPrefetch()
+                    }
                 } else {
                     // Осиротевший синтез (устаревшая заготовка) — просто удаляем.
                     f.delete()
@@ -834,14 +863,21 @@ class SpeechPlayer(context: Context) {
         media = null
     }
 
-    /** Пока играет текущее — спросить MainActivity, какое предложение следующее,
-     *  и синтезировать его заранее, чтобы между предложениями не было паузы. */
+    /** Пока играет текущее — спросить читалку, какая фраза будет следующей, и
+     *  синтезировать её заранее, чтобы между фразами не было паузы.
+     *
+     *  msg4472: держим [prefetchDepth] фраз готовыми. Синтез по-прежнему идёт
+     *  ПО ОДНОЙ заявке за раз — так сторож молчания продолжает надзирать за
+     *  каждой фразой ровно как раньше, а очередь наполняется цепочкой: доспела
+     *  заготовка — просим следующую (см. [synthFinished]). */
     private fun requestPrefetch() {
-        if (awaitingPlayText != null) return // текущее предложение ещё не сыграно
-        val next = onNeedNext?.invoke() ?: return
+        if (awaitingPlayText != null) return // текущая фраза ещё не сыграна
+        val inFlight = if (prefetchInFlightText != null) 1 else 0
+        if (readyQueue.size + inFlight >= prefetchDepth) return
+        val offset = readyQueue.size + inFlight + 1
+        val next = onNeedNext?.invoke(offset) ?: return
         if (next.isBlank() || next == currentText) return
-        if (next == prefetchText && prefetchFile != null) return
-        if (next == prefetchInFlightText) return
+        if (readyQueue.any { it.first == next }) return
         prefetchInFlightText = next
         synthToFile(next)
     }
@@ -860,9 +896,8 @@ class SpeechPlayer(context: Context) {
     }
 
     private fun clearPrefetch() {
-        prefetchFile?.let { runCatching { it.delete() } }
-        prefetchText = null
-        prefetchFile = null
+        readyQueue.forEach { (_, f) -> runCatching { f.delete() } }
+        readyQueue.clear()
     }
 
     fun shutdown() {

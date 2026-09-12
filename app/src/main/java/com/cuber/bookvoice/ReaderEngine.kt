@@ -250,7 +250,9 @@ internal object ReaderEngine {
     private fun initPlayer() {
         val sp = SpeechPlayer(ctx)
         sp.onDone = { main.post { if (playing) onUtteranceDone() } }
-        sp.onNeedNext = { peekNextText() }
+        // msg4472: плеер держит очередь заготовок и спрашивает фразу не только
+        // «следующую», но и через одну-две вперёд — отсюда параметр offset.
+        sp.onNeedNext = { offset -> peekNextText(offset) }
         sp.speed = prefs.getFloat(MainActivity.KEY_SPEED, 1f)
         sp.pitch = prefs.getFloat(MainActivity.KEY_PITCH, 1f)
         sp.volume = prefs.getFloat(MainActivity.KEY_VOLUME, 1f)
@@ -755,17 +757,45 @@ internal object ReaderEngine {
         return if (out.any { it.isLetterOrDigit() }) out else null
     }
 
-    /** Текст следующей фразы — без побочных эффектов (не двигает позицию).
-     *  Для упреждающего синтеза плеера. */
-    private fun peekNextText(): String? {
+    /** Начало фразы, которая прозвучит через [offset] фраз вперёд (1 —
+     *  следующая). null — книга кончилась. Позицию не двигает. */
+    private fun phraseStartAhead(offset: Int): Pair<Int, Int>? {
         val bk = book ?: return null
-        val cur = bk.chapters.getOrNull(chapterIdx)?.sentences ?: return null
-        val next = sentenceIdx + chunkSpan(chapterIdx, sentenceIdx)
-        if (next < cur.size) return chunkText(chapterIdx, next, chunkSpan(chapterIdx, next))
-        if (chapterIdx + 1 < bk.chapters.size) {
-            return chunkText(chapterIdx + 1, 0, chunkSpan(chapterIdx + 1, 0))
+        var ch = chapterIdx
+        var s = sentenceIdx
+        var left = offset.coerceAtLeast(1)
+        // Ограничитель на случай битого разбора: лучше вернуть null, чем крутиться.
+        var guard = 0
+        while (guard++ < 64) {
+            val cur = bk.chapters.getOrNull(ch)?.sentences ?: return null
+            if (cur.isEmpty()) return null
+            s += chunkSpan(ch, s)
+            if (s >= cur.size) {
+                ch++
+                s = 0
+                if (ch >= bk.chapters.size) return null
+            }
+            if (--left <= 0) {
+                // Куда идти дальше, решает чтение, а не заготовка: за границу
+                // выделенного куска (#106) и за главу с таймером сна «до конца
+                // главы» фразы впрок не готовим — их всё равно не сыграют.
+                val re = rangeEnd
+                if (re != null &&
+                    (ch > re.chapter || (ch == re.chapter && s >= re.sentence))
+                ) return null
+                if (sleepMode == SLEEP_CHAPTER && ch != chapterIdx) return null
+                return ch to s
+            }
         }
         return null
+    }
+
+    /** Текст фразы через [offset] вперёд — без побочных эффектов (не двигает
+     *  позицию). Для упреждающего синтеза плеера (msg4472: он держит очередь
+     *  заготовок и спрашивает не только следующую фразу). */
+    private fun peekNextText(offset: Int): String? {
+        val p = phraseStartAhead(offset) ?: return null
+        return chunkText(p.first, p.second, chunkSpan(p.first, p.second))
     }
 
     private fun onUtteranceDone() {
