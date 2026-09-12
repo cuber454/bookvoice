@@ -543,8 +543,18 @@ object BookParser {
         return BookDocument(tt, author, chapters)
     }
 
-    /** Одна секция FB2: заголовок, собственный текст и вложенные секции. */
-    private class Fb2Sec(val title: String?, val own: List<String>, val subs: List<Fb2Sec>) {
+    /** Ссылка-сноска в абзаце: id заметки и текст метки, как он стоит в книге. */
+    private class Fb2NoteRef(val id: String, val mark: String)
+
+    /** Одна секция FB2: заголовок, собственный текст и вложенные секции.
+     *  `refs[i]` — сноски абзаца `own[i]` (тексты — в fb2NoteMap). */
+    private class Fb2Sec(
+        val title: String?,
+        val own: List<String>,
+        val subs: List<Fb2Sec>,
+        val id: String? = null,
+        val refs: List<List<Fb2NoteRef>> = emptyList(),
+    ) {
         val words: Int get() = own.sumOf { it.split(Regex("\\s+")).size }
     }
 
@@ -573,6 +583,8 @@ object BookParser {
             type = xp.next()
         }
 
+        val notes = fb2NoteMap(noteRoots)
+
         val raw = ArrayList<Chapter>()
         // Для настройки «Кнопки глав шагают» (0.3.37): major = первая текстовая
         // глава корневой секции (начало крупного раздела/части), nested = глава
@@ -583,7 +595,7 @@ object BookParser {
             fun walk(sec: Fb2Sec, underChapter: Boolean) {
                 val hasOwn = sec.own.isNotEmpty()
                 if (hasOwn) {
-                    val s = TextSplit.fromParagraphs(sec.own)
+                    val s = fb2Sentences(sec, notes)
                     if (s.isNotEmpty()) {
                         raw.add(Chapter(sec.title, s, major = !opened, nested = underChapter))
                         opened = true
@@ -601,37 +613,61 @@ object BookParser {
         val firstTitled = raw.indexOfFirst { it.title != null }
         var from = 0
         while (from < firstTitled && raw[from].title == null && wordsIn(raw[from]) < FRONT_MATTER_MAX_WORDS) from++
-        val out = if (from == 0) raw else ArrayList(raw.subList(from, raw.size))
-
-        // Примечания (msg4777 «первый вариант»): в FB2 это отдельные <body> после
-        // основного текста, ссылки на них в тексте — метки вида [1K1]. Читаем их
-        // одной главой «Примечания» в конце книги, каждая заметка — со своей меткой,
-        // чтобы услышанную ссылку можно было найти на слух (книга тестера
-        // @Spartach72 — 40 заметок / 580 слов, без этого пропадали целиком).
-        val notes = fb2NoteParagraphs(noteRoots)
-        if (notes.isNotEmpty()) {
-            val s = TextSplit.fromParagraphs(notes)
-            if (s.isNotEmpty()) out.add(Chapter("Примечания", s))
-        }
-        return out
+        return if (from == 0) raw else ArrayList(raw.subList(from, raw.size))
     }
 
-    /** Заметки из дополнительных <body> FB2 плоским списком абзацев: заголовок
-     *  заметки («1K1») и её текст — одной строкой, вложенные секции — по порядку. */
-    private fun fb2NoteParagraphs(roots: List<Fb2Sec>): List<String> {
-        val out = ArrayList<String>()
+    /** Сноски книги: id заметки → её текст. В FB2 сноски живут отдельными
+     *  <body> после основного текста (msg4771/4789, книга тестера @Spartach72 —
+     *  40 заметок), а в самом тексте на них ведут ссылки <a type="note">.
+     *  Заголовок заметки («1K1») — это метка ссылки, в речь он не идёт. */
+    private fun fb2NoteMap(roots: List<Fb2Sec>): Map<String, String> {
+        val out = HashMap<String, String>()
         fun walk(sec: Fb2Sec) {
             val body = sec.own.joinToString(" ").trim()
-            val line = when {
-                sec.title == null -> body
-                body.isEmpty() -> sec.title
-                else -> "${sec.title}. $body"
-            }
-            if (line.isNotEmpty()) out.add(line)
+            if (body.isNotEmpty() && sec.id != null) out[sec.id] = body
             for (sub in sec.subs) walk(sub)
         }
         for (r in roots) walk(r)
         return out
+    }
+
+    /** Предложения секции с подстановкой сносок: заметка читается сразу после
+     *  того абзаца, где стоит ссылка на неё (msg4789 — «переставляй»: в бумаге
+     *  сноска стоит на той же странице, а не в конце тома; до конца книги на
+     *  слух никто не дойдёт). Метку `[1K1]` из речи убираем, только если заметка
+     *  нашлась: битая ссылка остаётся в тексте как есть, ни слова не теряем. */
+    private fun fb2Sentences(sec: Fb2Sec, notes: Map<String, String>): List<Sentence> {
+        val res = ArrayList<Sentence>()
+        for ((i, para) in sec.own.withIndex()) {
+            val refs = sec.refs.getOrNull(i).orEmpty()
+            val found = refs.filter { notes.containsKey(it.id) }
+            val text = if (found.isEmpty()) para else fb2WithoutMarks(para, found)
+            res.addAll(TextSplit.fromParagraphs(listOf(text)))
+            for (ref in found) {
+                val note = notes[ref.id] ?: continue
+                res.addAll(TextSplit.fromParagraphs(listOf("$FB2_NOTE_CUE$note")))
+            }
+        }
+        return res
+    }
+
+    /** Текст абзаца без найденных меток сносок. Идём по тексту курсором, чтобы
+     *  две одинаковые метки в одном абзаце снялись по своим местам. */
+    private fun fb2WithoutMarks(para: String, refs: List<Fb2NoteRef>): String {
+        val sb = StringBuilder(para)
+        var from = 0
+        for (ref in refs) {
+            if (ref.mark.isEmpty()) continue
+            val idx = sb.indexOf(ref.mark, from)
+            if (idx < 0) continue
+            sb.delete(idx, idx + ref.mark.length)
+            from = idx
+        }
+        // На месте метки остаются лишние пробелы («метку  в тексте») — подчищаем.
+        return sb.toString()
+            .replace(Regex("\\s+"), " ")
+            .replace(Regex("\\s+([,.;:!?…])"), "$1")
+            .trim()
     }
 
     /** Теги FB2, текст которых становится абзацами книги. `text-author` —
@@ -641,44 +677,90 @@ object BookParser {
      *  (msg4771, книга тестера @Spartach72 — 144 такие строки). */
     private val fb2ParagraphTags = setOf("p", "v", "subtitle", "text-author")
 
+    /** Слово-подсказка перед заметкой: без него сноска посреди абзаца звучит как
+     *  продолжение рассказа, и слушатель теряет нить (msg4789). */
+    private const val FB2_NOTE_CUE = "Сноска. "
+
     /** Рекурсивно читает один <section> до его закрытия (включая вложенные). */
     private fun readFb2Section(xp: XmlPullParser): Fb2Sec {
+        val id = fb2Attr(xp, "id")
         var title: String? = null
         val own = ArrayList<String>()
+        val refs = ArrayList<List<Fb2NoteRef>>()
         val subs = ArrayList<Fb2Sec>()
         var collectingTitle = false
         val titleBuf = StringBuilder()
         var inP = false
         val pBuf = StringBuilder()
+        var inNote = false                 // внутри <a type="note"> — метки сноски
+        var noteId: String? = null
+        val noteBuf = StringBuilder()
+        var paraRefs = ArrayList<Fb2NoteRef>()
         var type = xp.next()               // входим внутрь <section>
         while (type != XmlPullParser.END_DOCUMENT) {
             when (type) {
                 XmlPullParser.START_TAG -> when (xp.name) {
                     "title" -> { collectingTitle = true; titleBuf.setLength(0) }
                     "section" -> subs.add(readFb2Section(xp))
+                    "a" -> {
+                        // Ссылка-сноска: её текст — метка ([1K1]), а ведёт она в тело
+                        // notes. Не сноска (обычная ссылка) — остаётся как была.
+                        val href = fb2Attr(xp, "href")
+                        if (inP && fb2Attr(xp, "type") == "note" && href?.startsWith("#") == true) {
+                            inNote = true
+                            noteId = href.substring(1)
+                            noteBuf.setLength(0)
+                        }
+                    }
                     in fb2ParagraphTags -> if (!collectingTitle) { inP = true; pBuf.setLength(0) }
                 }
                 XmlPullParser.TEXT -> {
                     val tx = xp.text
-                    if (collectingTitle) titleBuf.append(tx)
-                    else if (inP) pBuf.append(tx)
+                    when {
+                        collectingTitle -> titleBuf.append(tx)
+                        // Метку кладём и в абзац, и в сноску: абзац без метки
+                        // собирается уже потом, когда известно, нашлась ли заметка.
+                        inNote -> { noteBuf.append(tx); pBuf.append(tx) }
+                        inP -> pBuf.append(tx)
+                    }
                 }
                 XmlPullParser.END_TAG -> when (xp.name) {
                     "title" -> {
                         title = titleBuf.toString().trim().takeIf { it.isNotEmpty() }
                         collectingTitle = false
                     }
+                    "a" -> if (inNote) {
+                        val nid = noteId
+                        if (nid != null) paraRefs.add(Fb2NoteRef(nid, noteBuf.toString().trim()))
+                        inNote = false
+                        noteId = null
+                    }
                     in fb2ParagraphTags -> if (inP) {
                         val t = pBuf.toString().trim()
-                        if (t.isNotEmpty()) own.add(t)
+                        if (t.isNotEmpty()) {
+                            own.add(t)
+                            refs.add(paraRefs)
+                        }
+                        paraRefs = ArrayList()
                         inP = false
                     }
-                    "section" -> return Fb2Sec(title, own, subs)
+                    "section" -> return Fb2Sec(title, own, subs, id, refs)
                 }
             }
             type = xp.next()
         }
-        return Fb2Sec(title, own, subs)    // документ оборвался — отдаём что собрали
+        return Fb2Sec(title, own, subs, id, refs)   // документ оборвался — отдаём что собрали
+    }
+
+    /** Значение атрибута FB2 по локальному имени. Пространства имён разбираем
+     *  руками: атрибут ссылки зовётся `l:href` (xlink), но парсер может отдавать
+     *  имя и как `href`, и как `l:href` — зависит от режима разбора. */
+    private fun fb2Attr(xp: XmlPullParser, name: String): String? {
+        for (i in 0 until xp.attributeCount) {
+            val n = xp.getAttributeName(i)
+            if (n == name || n.endsWith(":$name")) return xp.getAttributeValue(i)
+        }
+        return null
     }
 
     private fun wordsIn(ch: Chapter): Int =
