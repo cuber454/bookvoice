@@ -8,7 +8,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
@@ -286,6 +288,12 @@ class SettingsActivity(private val act: SectionActivity) {
         binding.tvTitle.text = getString(R.string.settings_title)
         content().removeAllViews()
         Group.values().forEach { g -> addGroupButton(g) }
+        // msg4476: работа в фоне — первой из «не разделов». Тестеры на Poco и
+        // realme жаловались, что с заблокированным экраном чтение замирает:
+        // система душит приложение, а разрешение «не ограничивать батарею»
+        // вынимает его из Doze. Строка стоит в корне, а не в разделе: это не
+        // настройка чтения, а разовая просьба к системе.
+        addMenuRow(getString(R.string.settings_bg_title), bgHint()) { askBackground() }
         // msg3921: группа обсуждения — отдельной строкой корня, в один шаг от
         // входа в настройки. Раньше вход был кнопкой внутри «О программы»
         // (msg3903); вынесен сюда по просьбе Сергея — до группы надо было
@@ -815,6 +823,49 @@ class SettingsActivity(private val act: SectionActivity) {
         val idx = Group.values().indexOf(g)
         val row = if (idx in 0 until content().childCount) content().getChildAt(idx) else null
         TabNav.refocusAfterRebuild(content(), row)
+    }
+
+    // ---------------- Работа в фоне (msg4476) ----------------
+
+    /** Разрешено ли приложению игнорировать оптимизацию батареи. Спрашиваем
+     *  систему каждый раз — состояние меняется в её окне, а не у нас. */
+    private fun ignoringBattery(): Boolean = runCatching {
+        (act.getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .isIgnoringBatteryOptimizations(act.packageName)
+    }.getOrDefault(false)
+
+    /** Подсказка строки корня: состояние на момент открытия настроек. */
+    private fun bgHint(): String = getString(
+        if (ignoringBattery()) R.string.settings_bg_hint_on else R.string.settings_bg_hint_off
+    )
+
+    /** Показать системное окно «не ограничивать батарею». Уже разрешено —
+     *  говорим об этом вслух и никуда не уходим: окна запроса система в этом
+     *  случае не показывает, и нажатие выглядело бы немым.
+     *
+     *  Запасной путь: часть прошивок окно запроса не поддерживает — тогда
+     *  открываем общий список «Оптимизация батареи», там BookVoice надо найти
+     *  руками (об этом и говорит подсказка строки). Явный запрос выбран потому,
+     *  что он один: одно нажатие и одно подтверждение. */
+    private fun askBackground() {
+        if (ignoringBattery()) {
+            toast(getString(R.string.settings_bg_already))
+            return
+        }
+        val pkg = Uri.parse("package:${act.packageName}")
+        val asked = runCatching {
+            act.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, pkg))
+            true
+        }.getOrDefault(false)
+        if (!asked) {
+            runCatching {
+                act.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        }
+        Diag.log(
+            act, "power",
+            "запрошено разрешение работать в фоне (${if (asked) "окно запроса" else "общий список"})"
+        )
     }
 
     /** Подсказка-пояснение в начале раздела. Обычный текст без роли кнопки:

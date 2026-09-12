@@ -15,6 +15,12 @@
          чтения (см. KeepAwake). -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- «Работа в фоне» (msg4476): разрешение не ограничивать расход батареи —
+         оно вынимает приложение из Doze. Тестеры на Poco и realme: с
+         заблокированным экраном движок синтеза молчал по 12–15 с, и чтение
+         вставало. Спрашиваем ровно один раз, кнопкой в настройках. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Foreground-медиа-сервис: без этого набора прав Android уронит
          сервис на старте (SecurityException на startForeground). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

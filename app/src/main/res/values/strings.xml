@@ -295,6 +295,10 @@
     <string name="settings_group_library_hint">Папка с книгами, куда и в каком формате качать</string>
     <string name="settings_group_diag_hint">Проверка обновлений и журнал приложения</string>
     <string name="settings_about_hint">Что это за программа и её фишки</string>
+    <string name="settings_bg_title">Работа в фоне при заблокированном экране</string>
+    <string name="settings_bg_hint_on">Разрешена: система не останавливает чтение</string>
+    <string name="settings_bg_hint_off">Не разрешена — на Poco и realme чтение может замолкать. Нажмите, чтобы разрешить</string>
+    <string name="settings_bg_already">Работа в фоне уже разрешена</string>
     <string name="settings_chat">Группа BookVoice в Telegram</string>
     <string name="settings_chat_hint">Вопросы, идеи, сообщения об ошибках. При сбое удобно сначала отправить лог</string>
     <!-- Настраиваемые свайпы вправо/влево в читалке (#77) -->
