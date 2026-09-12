@@ -567,11 +567,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // метаданных, метаданные — важнее имени файла. Для записи оно есть
         // всегда, так что окно не остаётся с label приложения даже у книг без
         // встроенного названия (например PDF).
-        val recAuthor = rec?.author
         if (rec != null) {
-            val line = if (recAuthor.isNullOrBlank()) rec.displayTitle
-            else "${rec.displayTitle} — $recAuthor"
-            binding.tvHeader.text = line
+            // msg4809/4811: в шапке название книги — заголовком, автор — второй
+            // строкой ОТДЕЛЬНЫМ элементом (свайп вправо от названия). Имя окна —
+            // только название: при входе объявляется книга.
+            val line = rec.displayTitle
+            setReaderHeader(line, rec.author)
             // msg1736/1739: название книги = window title окна читалки. Ставим ДО
             // показа окна — при появлении объявится книга, а не label приложения.
             setTitle(line)
@@ -1429,19 +1430,26 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             ?: currentName?.takeIf { it.isNotBlank() }
     }
 
+    /** msg4809/4811: шапка читалки — ДВА элемента: название (заголовок окна, первая
+     *  остановка) и под ним автор (вторая строка, своя остановка — свайп вправо от
+     *  названия). Автора нет — вторая строка прячется целиком, пустого элемента
+     *  обход не получает. */
+    private fun setReaderHeader(title: String, author: String?) {
+        binding.tvHeader.text = title
+        val a = author?.takeIf { it.isNotBlank() }
+        binding.tvHeaderAuthor.text = a.orEmpty()
+        binding.tvHeaderAuthor.visibility = if (a == null) View.GONE else View.VISIBLE
+    }
+
     private fun refreshChrome() {
         val bk = book
         // displayTitle (msg2559): ручное название из «Переименовать» > метаданные
         // > имя файла; для открытой книги непусто, no_book остаётся только без
         // книги и без имени.
         val t = docDisplayTitle()
-        val author = bk?.author?.takeIf { it.isNotBlank() }
-        val headerText = when {
-            t == null -> getString(R.string.no_book)
-            author == null -> t
-            else -> "$t — $author"
-        }
-        binding.tvHeader.text = headerText
+        // msg4809/4811: автор — второй строкой под названием, своим элементом.
+        val headerText = t ?: getString(R.string.no_book)
+        setReaderHeader(headerText, bk?.author)
         // msg1736/1739: window title окна — по фактическому названию книги (для
         // файлов вне записи оно известно только после разбора).
         if (bk != null) setTitle(headerText)

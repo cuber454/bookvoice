@@ -7,34 +7,60 @@
     android:orientation="vertical"
     android:padding="6dp">
 
-    <!-- Шапка читалки (msg2090): название книги — заголовком окна, а справа в том
-         же ряду кнопка ⋮ «Ещё» — как в окнах Библиотеки/Каталога/Настроек (там ⋮
-         в правом верхнем углу шапки). Раньше в читалке ⋮ жила во втором ряду,
-         вместе с оглавлением/поиском/закладкой. Название книги читается полностью
-         скринридером при входе (window title = книга, см. restoreSession). -->
+    <!-- Шапка читалки (msg2090): название книги — заголовком окна, под ним автор
+         (msg4809/4811), а справа в том же ряду кнопка ⋮ «Ещё» — как в окнах
+         Библиотеки/Каталога/Настроек (там ⋮ в правом верхнем углу шапки). Раньше
+         в читалке ⋮ жила во втором ряду, вместе с оглавлением/поиском/закладкой.
+         Название книги читается полностью скринридером при входе (window title =
+         книга, см. restoreSession). -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <TextView
-            android:id="@+id/tvHeader"
+        <!-- msg4809/4811: название и автор — двумя строками ДВУМЯ элементами:
+             название заголовком (первая остановка), под ним автор (вторая
+             остановка, свайп вправо от названия). Автора нет — вторая строка
+             прячется (GONE), обход её не видит. -->
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:accessibilityHeading="true"
-            android:ellipsize="end"
-            android:focusable="true"
-            android:screenReaderFocusable="true"
-            android:maxLines="2"
-            android:paddingStart="4dp"
-            android:paddingTop="2dp"
-            android:paddingEnd="4dp"
-            android:paddingBottom="2dp"
-            android:text="@string/no_book"
-            android:textAppearance="?attr/textAppearanceTitleLarge"
-            android:textColor="#E8EAED" />
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityHeading="true"
+                android:ellipsize="end"
+                android:focusable="true"
+                android:screenReaderFocusable="true"
+                android:maxLines="2"
+                android:paddingStart="4dp"
+                android:paddingTop="2dp"
+                android:paddingEnd="4dp"
+                android:paddingBottom="2dp"
+                android:text="@string/no_book"
+                android:textAppearance="?attr/textAppearanceTitleLarge"
+                android:textColor="#E8EAED" />
+
+            <TextView
+                android:id="@+id/tvHeaderAuthor"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:focusable="true"
+                android:screenReaderFocusable="true"
+                android:maxLines="2"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:paddingBottom="2dp"
+                android:textAppearance="?attr/textAppearanceLabelLarge"
+                android:textColor="#9AA0A6"
+                android:visibility="gone" />
+        </LinearLayout>
 
         <!-- #101: «⋮ Ещё» — действия читалки (Библиотека, Настройки, Вернуться на
              место, Цитаты, Голос чтения, Выход). В правом верхнем углу, как в
