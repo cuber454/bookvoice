@@ -37,6 +37,10 @@ import android.telephony.TelephonyManager
  * окна нет — вызовы просто не доходят никуда, чтение продолжается.
  */
 
+/** Сколько знаков названия главы пускаем во вторую строку медиа-карточки
+ *  (msg4725): в шторке длинный заголовок не читается ни глазами, ни на слух. */
+private const val CARD_TITLE_LIMIT = 40
+
 /** Место в книге: глава + предложение. Общий тип окна и движка — на нём
  *  история переходов (#101), выделение (#105), «прочитать кусок» (#106) и
  *  охрана места от тихого сброса (msg1139). */
@@ -605,9 +609,19 @@ internal object ReaderEngine {
      *  паузы (0.3.88, msg1840). [playing] — состояние ПЕРВОГО уведомления. */
     fun ensureMediaService(playing: Boolean = true) {
         val bk = book ?: return
+        // msg4725: место в книге (глава) передаём сразу в extras — служба
+        // поднимается асинхронно, и первое уведомление должно родиться уже с ним,
+        // а не с «Пауза» до следующей публикации.
+        cardLine = cardLineText()
         // msg4629: вместе с книгой передаём её uri — по нему карточка шторки
         // возвращает окно читалки к живой книге (касание карточки).
-        MediaSessionService.start(ctx, bk.title ?: currentName, playing = playing, uri = currentUri)
+        MediaSessionService.start(
+            ctx,
+            bk.title ?: currentName,
+            playing = playing,
+            uri = currentUri,
+            card = cardLine,
+        )
     }
 
     /** msg2093: одноразовый откат при первом старте чтения. Срабатывает только
@@ -649,6 +663,7 @@ internal object ReaderEngine {
         chapterIdx = ch
         sentenceIdx = s
         if (ch != rp.chapter) host?.onChapterLoaded() else host?.onMovedInChapter(s)
+        pushCardLine()
         return true
     }
 
@@ -892,6 +907,7 @@ internal object ReaderEngine {
             chapterIdx++
             sentenceIdx = 0
             host?.onChapterLoaded()
+            pushCardLine()
         } else {
             return false
         }
@@ -933,10 +949,52 @@ internal object ReaderEngine {
         pushPlayState()
     }
 
-    /** Сообщить UI и системе новое состояние play/pause. */
+    /** Сообщить UI и системе новое состояние play/pause. Зовётся на каждой фразе
+     *  (см. startSpeakingCurrent), поэтому здесь же обновляем и место в книге —
+     *  сравнение с прежней строкой внутри не даёт лишних публикаций. */
     private fun pushPlayState() {
         host?.onPlayStateChanged()
         MediaSessionService.setPlaying(playing)
+        pushCardLine()
+    }
+
+    // ---------------- Вторая строка медиа-карточки (msg4725) ----------------
+
+    /** Место в книге для карточки шторки — как у чужой читалки: «Глава 6 из 20 ·
+     *  ПЛЕН». Название главы у нас может быть пустым (безымянные главы) — тогда
+     *  только номер. По предложениям («K из S») карточку НАМЕРЕННО не дробим:
+     *  строка менялась бы каждые несколько секунд, а TalkBack объявляет
+     *  обновления карточки, которая у него в фокусе — слушать это невозможно. */
+    private var cardLine: String? = null
+
+    /** Отдать строку в сервис, если она изменилась. */
+    private fun pushCardLine() {
+        val line = cardLineText()
+        if (line == cardLine) return
+        cardLine = line
+        MediaSessionService.setCardLine(line)
+    }
+
+    private fun cardLineText(): String? {
+        val bk = book
+        return if (bk == null) {
+            null
+        } else {
+            val size = bk.chapters.size
+            val base = if (size > 0) "Глава ${chapterIdx + 1} из $size" else ""
+            val title = bk.chapters.getOrNull(chapterIdx)?.title?.trim().orEmpty()
+            // Длинный заголовок в шторке не поместится и на слух тянется долго.
+            val short = if (title.length > CARD_TITLE_LIMIT) {
+                title.take(CARD_TITLE_LIMIT).trimEnd() + "…"
+            } else {
+                title
+            }
+            when {
+                short.isEmpty() -> base
+                base.isEmpty() -> short
+                else -> "$base · $short"
+            }.ifEmpty { null }
+        }
     }
 
     // ---------------- Таймер сна (msg2567) ----------------

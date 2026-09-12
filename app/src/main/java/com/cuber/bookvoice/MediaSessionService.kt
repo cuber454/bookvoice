@@ -40,6 +40,9 @@ class MediaSessionService : Service() {
     private var bookTitle: String? = null
     private var playing = false
 
+    /** Место в книге — вторая строка карточки (msg4725), приходит от движка. */
+    private var cardLine: String? = null
+
     /** Книга, которую держит движок: цель касания карточки (msg4629). Карточка
      *  на паузе живёт без окна — без этого из шторки в книгу было бы не вернуться. */
     private var bookUri: String? = null
@@ -127,6 +130,16 @@ class MediaSessionService : Service() {
         // первом: состояние обязано отражать реальность, а не первое попавшееся.
         var changed = false
         intent?.getStringExtra(EXTRA_TITLE)?.let { bookTitle = it }
+        // msg4725: место в книге тем же путём, что и название, — в extras. Через
+        // setCardLine() его передать нельзя: служба поднимается асинхронно, и
+        // первый пост пришёл бы в ещё не созданный instance (карточка родилась бы
+        // с «Пауза» вместо главы).
+        intent?.getStringExtra(EXTRA_CARD)?.let {
+            if (it != cardLine) {
+                cardLine = it
+                changed = true
+            }
+        }
         // msg4629: касание карточки возвращает в книгу, которую держит движок.
         intent?.getStringExtra(MainActivity.EXTRA_URI)?.let {
             if (it != bookUri) {
@@ -272,7 +285,7 @@ class MediaSessionService : Service() {
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(bookTitle ?: "BookVoice")
-            .setContentText(getString(if (playing) R.string.media_reading else R.string.media_paused))
+            .setContentText(cardText())
             .setOngoing(true)
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
@@ -342,6 +355,9 @@ class MediaSessionService : Service() {
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_PLAYING = "playing"
 
+        /** Место в книге для второй строки карточки (msg4725). */
+        private const val EXTRA_CARD = "card"
+
         /** Команда «Выход» из карточки в шторке (msg4073). */
         private const val ACTION_EXIT = "com.cuber.bookvoice.EXIT_READING"
 
@@ -365,10 +381,12 @@ class MediaSessionService : Service() {
             title: String? = null,
             playing: Boolean = false,
             uri: String? = null,
+            card: String? = null,
         ) {
             val intent = Intent(context, MediaSessionService::class.java)
             intent.putExtra(EXTRA_TITLE, title)
             intent.putExtra(EXTRA_PLAYING, playing)
+            intent.putExtra(EXTRA_CARD, card)
             // тот же ключ, что у окна читалки: MainActivity.EXTRA_URI
             intent.putExtra(MainActivity.EXTRA_URI, uri)
             runCatching {
@@ -393,6 +411,12 @@ class MediaSessionService : Service() {
          *  что пошлёт кнопка — play или pause. */
         fun setPlaying(playing: Boolean) {
             main.post { instance?.applyPlaying(playing) }
+        }
+
+        /** Вторая строка карточки — место в книге (msg4725). Приходит от движка:
+         *  только он знает главу. null — вернуть обычное «Читает…»/«Пауза». */
+        fun setCardLine(line: String?) {
+            main.post { instance?.applyCardLine(line) }
         }
 
         /** Тихая пауза чтения из другого экрана (голосовой поиск каталога,
@@ -442,6 +466,31 @@ class MediaSessionService : Service() {
         // сработал раньше onStartCommand) — уведомление НЕ дублируем; начальное
         // опубликует onStartCommand по extras, и оно уже будет правильным.
         if (changed && foregroundStarted) notifyNow()
+    }
+
+    /** Место в книге для второй строки карточки (msg4725). Пересобираем
+     *  уведомление только когда строка реально сменилась — движок зовёт это на
+     *  каждой фразе, а публикация стоит денег: TalkBack объявляет обновления
+     *  карточки, которая у него в фокусе (тем же правилом живёт applyPlaying). */
+    private fun applyCardLine(line: String?) {
+        if (line == cardLine) return
+        cardLine = line
+        Diag.log(this, "service", "карточка: место «${line ?: "—"}»")
+        if (foregroundStarted) notifyNow()
+    }
+
+    /** Вторая строка уведомления. Есть место в книге — показываем его (как у
+     *  чужой читалки: «Глава 6 ПЛЕН»); пауза остаётся словом впереди, чтобы
+     *  состояние читалось и по тексту, а не только по кнопке. Места нет
+     *  (карточка родилась раньше книги) — прежнее «Читает…»/«Пауза». */
+    private fun cardText(): String {
+        val pos = cardLine
+        val state = getString(if (playing) R.string.media_reading else R.string.media_paused)
+        return when {
+            pos.isNullOrEmpty() -> state
+            playing -> pos
+            else -> "$state · $pos"
+        }
     }
 
     /** Каждый раз заново подтверждаем, что сессия активна и хочет
