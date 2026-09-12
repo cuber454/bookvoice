@@ -563,18 +563,35 @@ class SpeechPlayer(context: Context) {
     private fun leInt(b: ByteArray, i: Int): Int =
         leShort(b, i) or (leShort(b, i + 2) shl 16)
 
+    /** Коды причин, по которым обрезка файл не тронула. Пишем в журнал по
+     *  одному разу на код за сессию: если галочка «ничего не меняет», по этой
+     *  строке видно, ЧТО именно ей помешало (msg4409 — Сергей: «на мой слух
+     *  эта галочка ничего не меняет», а причина молчала).
+     *  1 — это не WAV; 2 — формат не PCM; 3 — не тот звук (каналы/биты/частота);
+     *  4 — нет блока data; 5 — файл подозрительного размера; 7 — сплошная
+     *  тишина; 8 — после обрезки осталась бы десятая часть; 9 — тишины по краям
+     *  нет вовсе (значит пауза не в тишине, а в интонации синтезатора). */
+    private val trimBailLogged = HashSet<Int>()
+
+    private fun trimBail(code: Int, what: String, f: File) {
+        if (!trimBailLogged.add(code)) return
+        Diag.log(appContext, "sound", "паузы: ${f.name} не тронул — $what (причина $code; дальше не повторяю)")
+    }
+
     /** Обрезать тишину по краям синтезированного файла (msg4402). Разбираем
-     *  только обычный 16-битный PCM-WAV — если внутри что-то другое (движок
-     *  вправе писать свой формат) или файл не разобрался, оставляем как есть:
-     *  пауза останется прежней, но чтение не сломается. Голову подрезаем
-     *  сильнее хвоста — в начале тишина почти всегда «пустая», в конце в неё
-     *  уходит затухание последнего слова. */
+     *  только обычный 16-битный PCM-WAV (в том числе в «расширенном» заголовке) —
+     *  если внутри что-то другое или файл не разобрался, оставляем как есть:
+     *  пауза останется прежней, но чтение не сломается, а причина уйдёт в
+     *  журнал через [trimBail]. Голову подрезаем сильнее хвоста — в начале
+     *  тишина почти всегда «пустая», в конце в неё уходит затухание последнего
+     *  слова. */
     private fun trimSilence(f: File) {
         val b = runCatching { f.readBytes() }.getOrNull() ?: return
         val n = b.size
-        if (n < 128 || n > 8_000_000) return
-        if (String(b, 0, 4, Charsets.US_ASCII) != "RIFF") return
-        if (String(b, 8, 4, Charsets.US_ASCII) != "WAVE") return
+        if (n < 128 || n > 8_000_000) { trimBail(5, "размер не тот ($n байт)", f); return }
+        if (String(b, 0, 4, Charsets.US_ASCII) != "RIFF" ||
+            String(b, 8, 4, Charsets.US_ASCII) != "WAVE"
+        ) { trimBail(1, "это не WAV", f); return }
 
         var off = 12
         var channels = 0
@@ -590,7 +607,15 @@ class SpeechPlayer(context: Context) {
                 break
             }
             if (id == "fmt " && sz >= 16) {
-                if (leShort(b, off + 8) != 1) return // не PCM
+                // msg4409: движки пишут и «расширенный» заголовок
+                // (WAVE_FORMAT_EXTENSIBLE, тег 0xFFFE): подформат там лежит
+                // GUID'ом, и для обычного PCM он тоже начинается единицей.
+                // Раньше принимали только тег 1 — на таком файле обрезка молча
+                // ничего не делала.
+                val tag = leShort(b, off + 8)
+                val pcm = tag == 1 ||
+                    (tag == 0xFFFE && sz >= 40 && leInt(b, off + 32) == 1)
+                if (!pcm) { trimBail(2, "формат не PCM (тег $tag)", f); return }
                 channels = leShort(b, off + 10)
                 sampleRate = leInt(b, off + 12)
                 bits = leShort(b, off + 22)
@@ -600,12 +625,15 @@ class SpeechPlayer(context: Context) {
             }
             off += 8 + sz + (sz and 1)
         }
-        if (channels !in 1..2 || bits != 16 || sampleRate !in 8000..48000) return
-        if (dataOff < 0 || dataLen < 3200) return
+        if (channels !in 1..2 || bits != 16 || sampleRate !in 8000..48000) {
+            trimBail(3, "не тот звук (каналов $channels, бит $bits, Гц $sampleRate)", f)
+            return
+        }
+        if (dataOff < 0 || dataLen < 3200) { trimBail(4, "нет блока data", f); return }
 
         val frame = channels * 2
         val frames = dataLen / frame
-        if (frames < 400) return // короче ~20 мс — не трогаем
+        if (frames < 400) { trimBail(5, "слишком короткий ($frames кадров)", f); return }
 
         fun ampOf(frameIdx: Int): Int {
             var m = 0
@@ -627,24 +655,33 @@ class SpeechPlayer(context: Context) {
             if (ampOf(i) > thresh) { first = i; break }
             i++
         }
-        if (first < 0) return // сплошная тишина — не трогаем
+        if (first < 0) { trimBail(7, "сплошная тишина", f); return }
         var last = -1
         var j = frames - 1
         while (j > first) {
             if (ampOf(j) > thresh) { last = j; break }
             j--
         }
-        if (last < 0) return
+        if (last < 0) { trimBail(7, "сплошная тишина", f); return }
 
         val headKeep = sampleRate / 20 // 50 мс
         val tailKeep = sampleRate / 12 // ~83 мс
         val startF = (first - headKeep).coerceAtLeast(0)
         val endF = (last + 1 + tailKeep).coerceAtMost(frames)
-        if (endF - startF < frames / 10) return // осталось бы меньше десятой части — не режем
+        if (endF - startF < frames / 10) {
+            trimBail(8, "после обрезки осталась бы десятая часть", f)
+            return
+        }
 
         val cutHead = startF * 1000 / sampleRate
         val cutTail = (frames - endF) * 1000 / sampleRate
-        if (cutHead < 40 && cutTail < 60) return // резать нечего
+        if (cutHead < 40 && cutTail < 60) {
+            // Самое важное для жалобы на паузы: движок тишины по краям не
+            // дописывает — значит пауза не в тишине, а в интонации синтезатора,
+            // и обрезкой её не взять.
+            trimBail(9, "тишины по краям нет (голова $cutHead мс, хвост $cutTail мс)", f)
+            return
+        }
 
         val outLen = (endF - startF) * frame
         val out = ByteArray(44 + outLen)
@@ -674,9 +711,15 @@ class SpeechPlayer(context: Context) {
         System.arraycopy(b, dataOff + startF * frame, out, 44, outLen)
 
         if (!runCatching { f.writeBytes(out) }.isSuccess) return
+        // В журнал — сколько тишины движок дописал ВСЕГО и сколько из неё
+        // срезано: по этой строке видно, из чего состояла пауза между
+        // предложениями (msg4409: «на слух ничего не меняет» — вот цифры).
+        val silHead = first * 1000 / sampleRate
+        val silTail = (frames - 1 - last) * 1000 / sampleRate
         Diag.log(
             appContext, "sound",
-            "паузы: у ${f.name} срезано ${cutHead} мс в начале и ${cutTail} мс в конце"
+            "паузы: у ${f.name} тишины было ${silHead} мс в начале и ${silTail} мс в конце; " +
+                "срезано ${cutHead} и ${cutTail} мс"
         )
     }
 
