@@ -202,6 +202,10 @@
     <!-- Настройки ридера -->
     <string name="settings_title">Настройки</string>
     <string name="settings_btn">Настройки</string>
+    <!-- msg4657: пункт «⋮» в окне сетевых библиотек. Ярлык длиннее соседних
+         «Настройки»/«Настройки скачивания» намеренно: на слух пункты различаются
+         с первого слова. -->
+    <string name="settings_program">Настройки программы</string>
     <string name="auto_start_title">Автоматически читать при открытии книги</string>
     <string name="auto_start_on">Авто-чтение включено</string>
     <string name="auto_start_off">Авто-чтение выключено</string>
