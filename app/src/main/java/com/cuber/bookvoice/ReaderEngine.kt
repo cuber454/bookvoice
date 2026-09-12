@@ -87,6 +87,12 @@ internal object ReaderEngine {
     var sentenceIdx = 0
     var playing = false
 
+    // msg4416: сколько предложений ушло в движок одной фразой при коротких
+    // паузах (см. [chunkSpan]). Обычно 1; при склейке — до [TIGHT_CHUNK_MAX_UNITS].
+    // Нужно, чтобы после озвученной фразы переставить позицию ровно на столько
+    // же предложений вперёд.
+    private var spokenUnits = 1
+
     // ——— Таймер сна (msg2567) ———
     // Живёт в движке, а не в окне: чтение «без окна» продолжается в фоне, и
     // таймер должен досчитать и поставить на паузу независимо от того, есть ли
@@ -654,17 +660,72 @@ internal object ReaderEngine {
     }
 
     private fun speakCurrent() {
-        val t = spokenText(chapterIdx, sentenceIdx) ?: return
+        spokenUnits = chunkSpan(chapterIdx, sentenceIdx)
+        val t = chunkText(chapterIdx, sentenceIdx, spokenUnits) ?: return
         player?.speak(t)
     }
 
-    /** Текст предложения, которое пойдёт следующим за текущим — без побочных
-     *  эффектов (не двигает позицию). Для упреждающего синтеза плеера. */
+    // ——— Короткие паузы: склейка соседних предложений (msg4416) ———
+    // Просьба тестера @Spartach72: паузы между предложениями. Обрезка тишины по
+    // краям файла не помогла — движок отдаёт файл впритык (лог Сергея 08:59:32:
+    // «тишины по краям нет (голова 23 мс, хвост 0 мс)»). Значит пауза сидит в
+    // самой речи: синтезатор делает её в конце КАЖДОЙ фразы, потому что каждая
+    // фраза для него — отдельный кусок текста. Отдаём соседние предложения одной
+    // строкой: точка оказывается внутри фразы, а не в конце, и пауза на ней
+    // короче — плюс пропадает наш перезапуск плеера (90–120 мс, измерено по тому
+    // же логу).
+
+    /** Потолок длины склеенной фразы в символах и в предложениях. Длинную фразу
+     *  синтезатор читает хуже, а пауза и прыжок посреди неё откатывают её целиком. */
+    private const val TIGHT_CHUNK_MAX = 220
+    private const val TIGHT_CHUNK_MAX_UNITS = 4
+
+    /** Сколько предложений с [s] уйдёт в движок одной фразой (1 — если склейка
+     *  выключена). Без побочных эффектов: позицию не двигает. */
+    private fun chunkSpan(ch: Int, s: Int): Int {
+        if (player?.tightPauses != true) return 1
+        val cur = book?.chapters?.getOrNull(ch)?.sentences ?: return 1
+        var n = 1
+        var len = cur.getOrNull(s)?.text?.length ?: return 1
+        while (n < TIGHT_CHUNK_MAX_UNITS && s + n < cur.size) {
+            val next = cur[s + n].text.length
+            if (len + next > TIGHT_CHUNK_MAX) break
+            len += next
+            n++
+        }
+        // #106: выделенный кусок не читаем дальше его конца — движок в
+        // [advanceOneUnit] останавливается, дойдя до rangeEnd, значит дальше
+        // него в фразу не заглядываем.
+        val re = rangeEnd
+        if (re != null && re.chapter == ch && re.sentence > s) n = minOf(n, re.sentence - s)
+        return n.coerceAtLeast(1)
+    }
+
+    /** Текст фразы из [n] предложений с позиции (ch, s). Название главы
+     *  добавляет только первое предложение — как и в [spokenText]. */
+    private fun chunkText(ch: Int, s: Int, n: Int): String? {
+        val cur = book?.chapters?.getOrNull(ch)?.sentences ?: return null
+        val head = spokenText(ch, s) ?: return null
+        if (n <= 1) return head
+        val sb = StringBuilder(head)
+        for (i in 1 until n) {
+            val t = cur.getOrNull(s + i)?.text?.trim() ?: break
+            if (t.isEmpty()) continue
+            sb.append(' ').append(t)
+        }
+        return sb.toString()
+    }
+
+    /** Текст следующей фразы — без побочных эффектов (не двигает позицию).
+     *  Для упреждающего синтеза плеера. */
     private fun peekNextText(): String? {
         val bk = book ?: return null
         val cur = bk.chapters.getOrNull(chapterIdx)?.sentences ?: return null
-        if (sentenceIdx + 1 < cur.size) return spokenText(chapterIdx, sentenceIdx + 1)
-        if (chapterIdx + 1 < bk.chapters.size) return spokenText(chapterIdx + 1, 0)
+        val next = sentenceIdx + chunkSpan(chapterIdx, sentenceIdx)
+        if (next < cur.size) return chunkText(chapterIdx, next, chunkSpan(chapterIdx, next))
+        if (chapterIdx + 1 < bk.chapters.size) {
+            return chunkText(chapterIdx + 1, 0, chunkSpan(chapterIdx + 1, 0))
+        }
         return null
     }
 
@@ -674,11 +735,22 @@ internal object ReaderEngine {
             stopAtEnd()
             return
         }
-        if (!advanceOneUnit()) {
+        if (!advanceUnits(spokenUnits)) {
             stopAtEnd()
             return
         }
         startSpeakingCurrent()
+    }
+
+    /** Промотать вперёд ровно столько предложений, сколько было в озвученной
+     *  фразе (при склейке — не одно). */
+    private fun advanceUnits(n: Int): Boolean {
+        var ok = true
+        for (i in 0 until n.coerceAtLeast(1)) {
+            ok = advanceOneUnit()
+            if (!ok) break
+        }
+        return ok
     }
 
     /** Чтение дошло до конца книги (или было одноразовым) — отпускаем фокус. */
