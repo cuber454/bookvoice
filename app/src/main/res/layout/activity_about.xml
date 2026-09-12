@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Окно «О программе» (msg2879-2934). Тот же каркас, что у окна Настроек:
-     шапка «Назад» + заголовок, под ней скролл-контент. «⋮» не нужен — это
-     справка без действий. Контент строится кодом из about_strings.xml. -->
+     шапка «Назад» + заголовок, под ней скролл-контент. «⋮» добавлен msg4669 —
+     справка без собственных действий, но настроек программы отсюда не было.
+     Контент строится кодом из about_strings.xml. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -41,6 +42,18 @@
             android:text="@string/about_title"
             android:textAppearance="?attr/textAppearanceTitleLarge"
             android:textColor="#E8EAED" />
+
+        <!-- msg4669: «⋮» как в остальных окнах — настроек программы отсюда не
+             было, а справка открывается из «⋮» полки. -->
+        <Button
+            android:id="@+id/btnMore"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:contentDescription="@string/lib_more"
+            android:text="⋮"
+            android:textSize="26sp" />
     </LinearLayout>
 
     <ScrollView

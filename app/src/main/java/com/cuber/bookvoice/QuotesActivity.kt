@@ -72,6 +72,7 @@ class QuotesActivity : AppCompatActivity() {
         // msg1111/1114: если открыта полная цитата — «Назад» возвращает к списку.
         binding.btnBack.setOnClickListener { goBack() }
         binding.btnExport.setOnClickListener { onExportClick() }
+        binding.btnMore.setOnClickListener { showMoreMenu() }
 
         quotes = QuoteStore.all(this)
         rebuild()
@@ -249,6 +250,25 @@ class QuotesActivity : AppCompatActivity() {
     }
 
     // ---------------- Действия с цитатой ----------------
+
+    /** «⋮» окна «Цитаты» (msg4669): настроек программы здесь не было, а окно
+     *  открывается из «⋮» полки и из «⋮» читалки — за настройками приходилось
+     *  сначала его закрывать. Пункты как у остальных окон: «Настройки программы»
+     *  окном поверх цитат (закрытие возвращает сюда) и «Выход из приложения» —
+     *  глобальный, всегда последним (msg1278). */
+    private fun showMoreMenu() {
+        MaterialAlertDialogBuilder(this)
+            .setItems(arrayOf(
+                getString(R.string.settings_program),
+                getString(R.string.app_exit),
+            )) { _, which ->
+                when (which) {
+                    0 -> startActivity(Intent(this, SettingsWindowActivity::class.java))
+                    1 -> TabNav.exitApp(this)
+                }
+            }
+            .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».
+    }
 
     private fun quoteMenu(q: Quote) {
         MaterialAlertDialogBuilder(this)

@@ -4,6 +4,7 @@ import android.content.Intent
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.cuber.bookvoice.databinding.ActivityAboutBinding
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import android.view.ViewGroup
 
 /** Окно «О программе» (msg2879-2934): короткая справка для всех — концепция,
@@ -36,6 +37,7 @@ class AboutWindowActivity : SectionActivity() {
         )
         binding.tvTitle.text = getString(R.string.about_title)
         binding.btnBack.setOnClickListener { rootBack() }
+        binding.btnMore.setOnClickListener { showMoreMenu() }
         buildContent(binding.content)
     }
 
@@ -62,6 +64,26 @@ class AboutWindowActivity : SectionActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (isFinishing) LibraryActivity.suppressNextAutoOpen = true
+    }
+
+    // ---------------- Меню «⋮» (msg4669) ----------------
+
+    /** «⋮» окна «О программе»: у самой справки действий нет, но настроек
+     *  программы отсюда не было — а окно открывается из «⋮» полки, и за
+     *  настройками приходилось его закрывать. Пункты как у остальных окон;
+     *  «Выход из приложения» — всегда последним (msg1278). */
+    private fun showMoreMenu() {
+        MaterialAlertDialogBuilder(this)
+            .setItems(arrayOf(
+                getString(R.string.settings_program),
+                getString(R.string.app_exit),
+            )) { _, which ->
+                when (which) {
+                    0 -> startActivity(Intent(this, SettingsWindowActivity::class.java))
+                    1 -> TabNav.exitApp(this)
+                }
+            }
+            .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».
     }
 
     // ---------------- Сборка справки ----------------

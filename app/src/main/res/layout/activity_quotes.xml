@@ -44,6 +44,18 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:text="@string/quotes_expo" />
+
+        <!-- msg4669: «⋮» как в остальных окнах — настроек программы здесь не
+             было, а окно открывается и с полки, и из читалки. -->
+        <Button
+            android:id="@+id/btnMore"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:contentDescription="@string/lib_more"
+            android:text="⋮"
+            android:textSize="26sp" />
     </LinearLayout>
 
     <ScrollView
