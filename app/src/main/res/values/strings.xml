@@ -520,6 +520,7 @@
     <string name="book_info_annotation_loading">Аннотация: читаю…</string>
     <string name="book_info_annotation_none">Аннотации в файле нет</string>
     <string name="book_share_missing">Файла книги больше нет на устройстве</string>
+    <string name="book_share_failed">Не удалось отправить файл — книга лежит в недоступном месте</string>
     <string name="book_delete_title">Удалить из библиотеки</string>
     <string name="book_delete_msg">Удалить „%1$s“ из библиотеки и сам файл с устройства? Это необратимо.</string>
     <string name="book_delete_yes">Удалить</string>

@@ -1,7 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Пути, доступные через FileProvider (для отправки лога в чат). -->
+<!-- Пути, доступные через FileProvider: отправка журнала в чат и «Поделиться
+     файлом» из библиотеки.
+     msg4743: раньше здесь был только внутренний каталог, а книги полки лежат
+     в /storage/emulated/0/Books и на картах памяти — getUriForFile падал
+     «Failed to find configured root» и ронял приложение. Наружу уходит только
+     то, что владелец выбрал сам в меню книги, поэтому корни объявлены широко. -->
 <paths>
     <files-path
         name="internal"
+        path="." />
+    <!-- Копия для файлов, до которых объявленные корни всё равно не дотянулись. -->
+    <cache-path
+        name="cache"
+        path="." />
+    <!-- Основное хранилище: /storage/emulated/0 (там папка Books). -->
+    <external-path
+        name="external"
+        path="." />
+    <!-- Карта памяти и прочие тома: /storage/XXXX-XXXX. -->
+    <root-path
+        name="root"
         path="." />
 </paths>

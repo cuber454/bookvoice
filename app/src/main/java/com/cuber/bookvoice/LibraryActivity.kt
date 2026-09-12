@@ -1267,20 +1267,34 @@ class LibraryActivity(private val act: SectionActivity) {
     }
 
     /** Файл наружу: content:// из SAF отдаём как есть с грантом на чтение,
-     *  file:// (наши скачанные) — через FileProvider. */
+     *  file:// (наши скачанные) — через FileProvider.
+     *
+     *  msg4743: FileProvider отдаёт наружу только то, что объявлено в
+     *  file_paths.xml. Там был один внутренний каталог, а книги полки лежат в
+     *  /storage/emulated/0/Books (и на картах памяти) — getUriForFile бросал
+     *  IllegalArgumentException и ронял приложение прямо из меню книги. Корни
+     *  провайдера расширены, а на путь, которого в них всё равно нет, есть
+     *  запасной ход: копия в свой кэш. Падать тут больше нечем. */
     private fun shareBook(rec: BookRecord) {
         val uri = runCatching { Uri.parse(rec.uri) }.getOrNull() ?: return
         val shareUri = if (uri.scheme == "content") {
             uri
         } else {
-            val f = uri.path?.let { java.io.File(it) }
+            val f = uri.path?.let { File(it) }
             if (f == null || !f.exists()) {
                 toast(getString(R.string.book_share_missing))
                 return
             }
-            androidx.core.content.FileProvider.getUriForFile(
-                act, "$packageName.fileprovider", f
-            )
+            val provider = "$packageName.fileprovider"
+            val out = runCatching {
+                androidx.core.content.FileProvider.getUriForFile(act, provider, f)
+            }.getOrNull() ?: shareCopy(f, provider)
+            if (out == null) {
+                Diag.log(act, "share", "поделиться не вышло: ${f.absolutePath}")
+                toast(getString(R.string.book_share_failed))
+                return
+            }
+            out
         }
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = mimeFor(rec.name)
@@ -1289,6 +1303,17 @@ class LibraryActivity(private val act: SectionActivity) {
         }
         startActivity(Intent.createChooser(intent, getString(R.string.library_menu_share)))
     }
+
+    /** Запасной путь для файла вне объявленных корней: копия в кэш приложения.
+     *  Кэш чистит система, но прежние копии убираем сами — иначе книги копились
+     *  бы там до перезагрузки. Не вышло — вернём null, наверху скажем словами. */
+    private fun shareCopy(src: File, provider: String): Uri? = runCatching {
+        val dir = File(act.cacheDir, "share").apply { mkdirs() }
+        dir.listFiles()?.forEach { it.delete() }
+        val dst = File(dir, src.name)
+        src.inputStream().use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
+        androidx.core.content.FileProvider.getUriForFile(act, provider, dst)
+    }.getOrNull()
 
     private fun mimeFor(name: String): String = when {
         name.endsWith(".epub", true) -> "application/epub+zip"
