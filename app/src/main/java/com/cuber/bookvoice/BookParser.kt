@@ -555,12 +555,20 @@ object BookParser {
      *  не становится — книга начинается с первой названной главы. */
     private fun collectFb2Chapters(xp: XmlPullParser): List<Chapter> {
         val roots = ArrayList<Fb2Sec>()
+        val noteRoots = ArrayList<Fb2Sec>()
         var type = xp.next()               // входим внутрь <body>
+        var bodies = 0                     // 0 — основной текст, дальше — примечания
         while (type != XmlPullParser.END_DOCUMENT) {
-            if (type == XmlPullParser.START_TAG && xp.name == "section") {
-                roots.add(readFb2Section(xp))
+            if (type == XmlPullParser.START_TAG) {
+                when (xp.name) {
+                    "section" -> if (bodies == 0) roots.add(readFb2Section(xp))
+                                 else noteRoots.add(readFb2Section(xp))
+                    // За телами идут картинки <binary> (base64, мегабайты текста) —
+                    // дальше в документе нам делать нечего.
+                    "binary" -> break
+                }
             } else if (type == XmlPullParser.END_TAG && xp.name == "body") {
-                break
+                bodies++
             }
             type = xp.next()
         }
@@ -593,7 +601,37 @@ object BookParser {
         val firstTitled = raw.indexOfFirst { it.title != null }
         var from = 0
         while (from < firstTitled && raw[from].title == null && wordsIn(raw[from]) < FRONT_MATTER_MAX_WORDS) from++
-        return if (from == 0) raw else ArrayList(raw.subList(from, raw.size))
+        val out = if (from == 0) raw else ArrayList(raw.subList(from, raw.size))
+
+        // Примечания (msg4777 «первый вариант»): в FB2 это отдельные <body> после
+        // основного текста, ссылки на них в тексте — метки вида [1K1]. Читаем их
+        // одной главой «Примечания» в конце книги, каждая заметка — со своей меткой,
+        // чтобы услышанную ссылку можно было найти на слух (книга тестера
+        // @Spartach72 — 40 заметок / 580 слов, без этого пропадали целиком).
+        val notes = fb2NoteParagraphs(noteRoots)
+        if (notes.isNotEmpty()) {
+            val s = TextSplit.fromParagraphs(notes)
+            if (s.isNotEmpty()) out.add(Chapter("Примечания", s))
+        }
+        return out
+    }
+
+    /** Заметки из дополнительных <body> FB2 плоским списком абзацев: заголовок
+     *  заметки («1K1») и её текст — одной строкой, вложенные секции — по порядку. */
+    private fun fb2NoteParagraphs(roots: List<Fb2Sec>): List<String> {
+        val out = ArrayList<String>()
+        fun walk(sec: Fb2Sec) {
+            val body = sec.own.joinToString(" ").trim()
+            val line = when {
+                sec.title == null -> body
+                body.isEmpty() -> sec.title
+                else -> "${sec.title}. $body"
+            }
+            if (line.isNotEmpty()) out.add(line)
+            for (sub in sec.subs) walk(sub)
+        }
+        for (r in roots) walk(r)
+        return out
     }
 
     /** Теги FB2, текст которых становится абзацами книги. `text-author` —
