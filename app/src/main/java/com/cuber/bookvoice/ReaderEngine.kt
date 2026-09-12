@@ -239,6 +239,8 @@ internal object ReaderEngine {
         sp.speed = prefs.getFloat(MainActivity.KEY_SPEED, 1f)
         sp.pitch = prefs.getFloat(MainActivity.KEY_PITCH, 1f)
         sp.volume = prefs.getFloat(MainActivity.KEY_VOLUME, 1f)
+        // msg4402: короткие паузы между предложениями (просьба тестера).
+        sp.tightPauses = prefs.getBoolean(MainActivity.KEY_TIGHT_PAUSES, false)
         // Чтение всегда непрерывное: кнопка «по одному предложению» убрана.
         continuous = true
         voiceName = prefs.getString(MainActivity.KEY_VOICE, null)

@@ -57,6 +57,12 @@ class SpeechPlayer(context: Context) {
             tts?.setPitch(value)
         }
 
+    /** Короткие паузы между предложениями (msg4402, просьба тестера
+     *  @Spartach72). Мы озвучиваем каждое предложение отдельным файлом, и по
+     *  краям движок оставляет тишину — в чтении по предложениям она слышна как
+     *  пауза. Включено — обрезаем эту тишину, оставляя короткие хвосты. */
+    var tightPauses: Boolean = false
+
     /** Громкость собственного звука (0..1, 1 = полная, как у системы).
      *  Умножается на системную громкость медиа. Применяется сразу к играющему
      *  предложению и к каждому следующему при старте. */
@@ -491,6 +497,7 @@ class SpeechPlayer(context: Context) {
                     return
                 }
                 softRetriedText = null // синтез доспел — движок отзывается, обрывов нет
+                if (tightPauses) trimSilence(f)
                 if (p.text == awaitingPlayText) {
                     // Это тот текст, который уже попросили говорить.
                     awaitingPlayText = null
@@ -548,6 +555,131 @@ class SpeechPlayer(context: Context) {
 
     // ---------- Проигрывание ----------
 
+    /** Младшие байты WAV: 16-битное число с прямым порядком (little endian). */
+    private fun leShort(b: ByteArray, i: Int): Int =
+        (b[i].toInt() and 0xFF) or ((b[i + 1].toInt() and 0xFF) shl 8)
+
+    /** 32-битное число WAV (little endian). */
+    private fun leInt(b: ByteArray, i: Int): Int =
+        leShort(b, i) or (leShort(b, i + 2) shl 16)
+
+    /** Обрезать тишину по краям синтезированного файла (msg4402). Разбираем
+     *  только обычный 16-битный PCM-WAV — если внутри что-то другое (движок
+     *  вправе писать свой формат) или файл не разобрался, оставляем как есть:
+     *  пауза останется прежней, но чтение не сломается. Голову подрезаем
+     *  сильнее хвоста — в начале тишина почти всегда «пустая», в конце в неё
+     *  уходит затухание последнего слова. */
+    private fun trimSilence(f: File) {
+        val b = runCatching { f.readBytes() }.getOrNull() ?: return
+        val n = b.size
+        if (n < 128 || n > 8_000_000) return
+        if (String(b, 0, 4, Charsets.US_ASCII) != "RIFF") return
+        if (String(b, 8, 4, Charsets.US_ASCII) != "WAVE") return
+
+        var off = 12
+        var channels = 0
+        var sampleRate = 0
+        var bits = 0
+        var dataOff = -1
+        var dataLen = 0
+        while (off + 8 <= n) {
+            val id = String(b, off, 4, Charsets.US_ASCII)
+            val sz = leInt(b, off + 4)
+            if (sz < 0 || off + 8 + sz > n) {
+                if (id == "data") { dataOff = off + 8; dataLen = n - dataOff }
+                break
+            }
+            if (id == "fmt " && sz >= 16) {
+                if (leShort(b, off + 8) != 1) return // не PCM
+                channels = leShort(b, off + 10)
+                sampleRate = leInt(b, off + 12)
+                bits = leShort(b, off + 22)
+            } else if (id == "data") {
+                dataOff = off + 8
+                dataLen = minOf(sz, n - dataOff)
+            }
+            off += 8 + sz + (sz and 1)
+        }
+        if (channels !in 1..2 || bits != 16 || sampleRate !in 8000..48000) return
+        if (dataOff < 0 || dataLen < 3200) return
+
+        val frame = channels * 2
+        val frames = dataLen / frame
+        if (frames < 400) return // короче ~20 мс — не трогаем
+
+        fun ampOf(frameIdx: Int): Int {
+            var m = 0
+            var i = dataOff + frameIdx * frame
+            repeat(channels) {
+                val v = ((b[i + 1].toInt() shl 8) or (b[i].toInt() and 0xFF)).toShort().toInt()
+                val a = if (v < 0) -v else v
+                if (a > m) m = a
+                i += 2
+            }
+            return m
+        }
+
+        val thresh = 300 // ≈ −40 dBFS: тише этого считаем тишиной
+        val scanCap = minOf(frames, sampleRate * 2)
+        var first = -1
+        var i = 0
+        while (i < scanCap) {
+            if (ampOf(i) > thresh) { first = i; break }
+            i++
+        }
+        if (first < 0) return // сплошная тишина — не трогаем
+        var last = -1
+        var j = frames - 1
+        while (j > first) {
+            if (ampOf(j) > thresh) { last = j; break }
+            j--
+        }
+        if (last < 0) return
+
+        val headKeep = sampleRate / 20 // 50 мс
+        val tailKeep = sampleRate / 12 // ~83 мс
+        val startF = (first - headKeep).coerceAtLeast(0)
+        val endF = (last + 1 + tailKeep).coerceAtMost(frames)
+        if (endF - startF < frames / 10) return // осталось бы меньше десятой части — не режем
+
+        val cutHead = startF * 1000 / sampleRate
+        val cutTail = (frames - endF) * 1000 / sampleRate
+        if (cutHead < 40 && cutTail < 60) return // резать нечего
+
+        val outLen = (endF - startF) * frame
+        val out = ByteArray(44 + outLen)
+        System.arraycopy("RIFF".toByteArray(Charsets.US_ASCII), 0, out, 0, 4)
+        System.arraycopy("WAVE".toByteArray(Charsets.US_ASCII), 0, out, 8, 4)
+        System.arraycopy("fmt ".toByteArray(Charsets.US_ASCII), 0, out, 12, 4)
+        System.arraycopy("data".toByteArray(Charsets.US_ASCII), 0, out, 36, 4)
+        val putInt = { at: Int, v: Int ->
+            out[at] = (v and 0xFF).toByte()
+            out[at + 1] = ((v shr 8) and 0xFF).toByte()
+            out[at + 2] = ((v shr 16) and 0xFF).toByte()
+            out[at + 3] = ((v shr 24) and 0xFF).toByte()
+        }
+        val putShort = { at: Int, v: Int ->
+            out[at] = (v and 0xFF).toByte()
+            out[at + 1] = ((v shr 8) and 0xFF).toByte()
+        }
+        putInt(4, 36 + outLen)
+        putInt(16, 16)
+        putShort(20, 1)
+        putShort(22, channels)
+        putInt(24, sampleRate)
+        putInt(28, sampleRate * frame)
+        putShort(32, frame)
+        putShort(34, 16)
+        putInt(40, outLen)
+        System.arraycopy(b, dataOff + startF * frame, out, 44, outLen)
+
+        if (!runCatching { f.writeBytes(out) }.isSuccess) return
+        Diag.log(
+            appContext, "sound",
+            "паузы: у ${f.name} срезано ${cutHead} мс в начале и ${cutTail} мс в конце"
+        )
+    }
+
     private fun playFile(f: File) {
         val gen = ++playGen
         val text = currentText
@@ -573,6 +705,10 @@ class SpeechPlayer(context: Context) {
                 requestPrefetch()
             }
             mp.setOnCompletionListener {
+                // msg4402 (диагностика пауз): конец фразы. Разница отметок
+                // «фраза доиграла» → следующее «играю свой звук» — это и есть
+                // пауза между предложениями; по ней видно, помогла ли обрезка.
+                Diag.log(appContext, "sound", "фраза доиграла: ${f.name}")
                 runCatching { it.release() }
                 if (media === it) media = null
                 f.delete()

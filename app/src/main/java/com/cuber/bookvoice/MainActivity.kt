@@ -1503,6 +1503,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun refreshSpeedValue() {
         binding.tvSpeed.text = speedText(currentSpeed())
+        // msg4402: галочка коротких пауз могла переключиться в настройках —
+        // подхватываем её для уже открытой книги (onStart зовёт нас на возврате
+        // из «Настроек»), не заставляя переоткрывать книгу.
+        ReaderEngine.player?.tightPauses = prefs.getBoolean(KEY_TIGHT_PAUSES, false)
     }
 
     /** Кнопки «Медленнее/Быстрее» (#58): шаг 0.1 по всему диапазону 0.5–4.0
@@ -3210,6 +3214,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         /** Не чаще этого перезапускаем речь на прыжке «на ходу» (мс): TTS не
          *  успевает договорить слово, если дёргать его каждый сдвиг пальца. */
         private const val LIVE_JUMP_MS = 700L
+        // msg4402: короткие паузы между предложениями — обрезать тишину по краям
+        // синтезированных файлов. По умолчанию выкл: поведение чтения не меняем
+        // никому без спроса, просьбу тестера включают галочкой.
+        internal const val KEY_TIGHT_PAUSES = "tight_sentence_pauses"
         internal const val KEY_TAP_TO_PLAY = "tap_to_play"
         internal const val KEY_TOC_PLAY = "toc_play"
         internal const val KEY_BM_PLAY = "bm_play"

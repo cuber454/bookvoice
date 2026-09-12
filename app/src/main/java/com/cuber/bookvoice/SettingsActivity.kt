@@ -384,6 +384,12 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         // #99: останавливать чтение, когда отключаются наушники.
         addCheck(R.string.headphones_pause_title, MainActivity.KEY_PAUSE_HEADSET, true)
+        // msg4402 (просьба тестера @Spartach72 через Сергея): короткие паузы
+        // между предложениями. Живёт рядом с «Чтением», потому что про то, как
+        // звучит голос, а не про то, что видно на экране. Подсказка — перед
+        // галочкой: без неё непонятно, откуда пауза вообще берётся.
+        addHint(getString(R.string.tight_pauses_hint))
+        addCheck(R.string.tight_pauses_title, MainActivity.KEY_TIGHT_PAUSES, false)
 
         // Портянка (msg4372): тройка про прокрутку — что она делает с местом и с
         // голосом. Переехала сюда из «Интерфейса»: «Интерфейс» — что видно на
