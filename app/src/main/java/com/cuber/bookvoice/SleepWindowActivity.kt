@@ -1,20 +1,8 @@
 package com.cuber.bookvoice
 
 import android.content.Intent
-import android.graphics.Typeface
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
-import android.view.Gravity
-import android.view.View
 import android.view.ViewGroup
-import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.Button
-import android.widget.CheckBox
-import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.view.ViewCompat
 import com.cuber.bookvoice.databinding.ActivitySleepBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
@@ -35,9 +23,13 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
  *  возврата из системного окна фокус встаёт на неё, и скринридер её читает —
  *  тост для незрячего слишком легко пропустить.
  */
-class SleepWindowActivity : SectionActivity() {
+class SleepWindowActivity : RowsActivity() {
 
     private lateinit var binding: ActivitySleepBinding
+
+    /** Строки окна строятся в [ActivitySleepBinding.content] — общий каркас
+     *  строк живёт в [RowsActivity]. */
+    override val contentRoot: ViewGroup get() = binding.content
 
     /** Ответ последнего действия — строкой вверху, чтобы после возврата из
      *  системного окна было слышно, что произошло и что делать дальше. */
@@ -235,112 +227,8 @@ class SleepWindowActivity : SectionActivity() {
     }
 
     // ---------------- Строки экрана ----------------
-
-    /** Подсказка-пояснение: обычный текст без роли кнопки — скринридер читает его
-     *  целиком, когда фокус встаёт на строку. */
-    private fun addHint(text: String) {
-        val tv = TextView(this).apply {
-            this.text = text
-            textSize = 15f
-            setTextColor(0xFF9AA0A6.toInt())
-            setLineSpacing(0f, 1.1f)
-            setPadding(dp(4), dp(2), dp(4), dp(10))
-        }
-        binding.content.addView(tv)
-    }
-
-    /** Строка экрана: название, второй строкой — подсказка или состояние. Как
-     *  строки Настроек (title + приглушённый hint). [onClick] = null — строка
-     *  только сообщает (состояние, ответ действия), нажимать её нечего.
-     *
-     *  Класс узла подменяем на TextView: роль «кнопка» на каждой строке не нужна,
-     *  двойной тап и фокус при этом сохраняются (тот же приём в Настройках). */
-    private fun addRow(
-        title: String,
-        hint: String?,
-        strong: Boolean = false,
-        onClick: (() -> Unit)? = null,
-    ): TextView {
-        val v = TextView(this).apply {
-            text = withHint(title, hint)
-            textSize = 17f
-            if (strong) setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            isFocusable = true
-            ViewCompat.setScreenReaderFocusable(this, true)
-            if (onClick != null) {
-                isClickable = true
-                setOnClickListener { onClick() }
-            }
-            accessibilityDelegate = object : View.AccessibilityDelegate() {
-                override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
-                    super.onInitializeAccessibilityNodeInfo(host, info)
-                    info.className = "android.widget.TextView"
-                }
-            }
-        }
-        binding.content.addView(
-            v,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                topMargin = dp(2)
-                bottomMargin = dp(2)
-            },
-        )
-        return v
-    }
-
-    /** Галочка-настройка (msg4721). Флажок сам говорит скринридеру «включено» или
-     *  «выключено» — для переключателя это роднее, чем переписывать состояние в
-     *  текст строки. Значение ложится в те же prefs «reader», что и прочие
-     *  настройки чтения, и применяется на месте ([KeepAwake.syncSilence]):
-     *  включили во время чтения — поток встаёт сразу, без перезапуска книги. */
-    private fun addCheck(
-        title: String,
-        hint: String,
-        key: String,
-        def: Boolean,
-        onChange: (Boolean) -> Unit,
-    ) {
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val v = CheckBox(this).apply {
-            text = withHint(title, hint)
-            textSize = 17f
-            isChecked = prefs.getBoolean(key, def)
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            setOnCheckedChangeListener { _, checked ->
-                prefs.edit().putBoolean(key, checked).apply()
-                onChange(checked)
-            }
-        }
-        binding.content.addView(
-            v,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                topMargin = dp(2)
-                bottomMargin = dp(2)
-            },
-        )
-    }
-
-    /** Строка с подсказкой второй строкой: название обычным, пояснение — мельче и
-     *  серым. Общее для строк-действий и галочки, поэтому вынесено сюда. */
-    private fun withHint(title: String, hint: String?): CharSequence =
-        SpannableStringBuilder().apply {
-            append(title)
-            if (hint != null) {
-                append("\n")
-                val start = length
-                append(hint)
-                setSpan(RelativeSizeSpan(0.76f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                setSpan(ForegroundColorSpan(0xFF9AA0A6.toInt()), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
-        }
+    // addHint / addRow / addCheck / withHint / dp живут в RowsActivity — окна
+    // «Не засыпать», «Таймер сна» и «Настройки таймера» рисуют строки одинаково.
 
     /** В журнал — и что выбрано, и что вышло на самом деле: если чтение сейчас не
      *  идёт, поток остаётся выключенным до его начала, и это видно из строки. */
@@ -351,13 +239,5 @@ class SleepWindowActivity : SectionActivity() {
                 "сейчас ${if (SilentKeepAlive.isOn) "идёт" else "не идёт"} " +
                 "(не идёт — значит чтение стоит)"
         )
-    }
-
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
-
-    companion object {
-        /** Те же настройки чтения, что и у читалки: `MainActivity.prefs` и
-         *  [KeepAwake] читают этот же файл. */
-        private const val PREFS = "reader"
     }
 }

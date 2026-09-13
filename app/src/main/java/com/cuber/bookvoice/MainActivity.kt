@@ -2214,8 +2214,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             }
         }
         // msg2567: таймер сна — пункт-переключатель. Подпись показывает режим,
-        // клик открывает выбор времён/«выключить» (см. showSleepTimerDialog).
-        actions.add(sleepTimerMenuLabel() to { showSleepTimerDialog() })
+        // клик открывает окно таймера (см. openSleepTimerWindow).
+        actions.add(sleepTimerMenuLabel() to { openSleepTimerWindow() })
         // msg2762: «Голос чтения» убран из меню — дубль кнопки «Голос» нижнего ряда.
         // msg4693: «Настройки» — прямо перед «Выходом», как в остальных меню.
         actions.add(getString(R.string.settings_btn) to { startSettingsTab() })
@@ -2431,40 +2431,20 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  (раздел «Управление»): по умолчанию — таймер сна. */
     private fun onPlayPauseLongClick() {
         when (prefs.getString(KEY_PLAY_LONG, PLAY_LONG_SLEEP)) {
-            PLAY_LONG_SLEEP -> showSleepTimerDialog()
+            PLAY_LONG_SLEEP -> openSleepTimerWindow()
             // PLAY_LONG_OFF — ничего не делаем; событие уже съедено слушателем.
         }
     }
 
-    /** msg2567/2575: выбор таймера сна. Таймер живёт в движке — работает и при
-     *  погашенном экране, и «без окна» (см. ReaderEngine.setSleepTimerMinutes).
-     *  Активный режим первым пунктом снимается; затем времена и «До конца главы». */
-    private fun showSleepTimerDialog() {
-        val opts = ArrayList<Pair<String, () -> Unit>>()
-        if (ReaderEngine.sleepTimerActive) {
-            opts.add(getString(R.string.sleep_off) to {
-                ReaderEngine.cancelSleepTimer()
-                toast(getString(R.string.sleep_off_done))
-            })
-        }
-        for (m in SLEEP_TIMER_CHOICES) {
-            opts.add(getString(R.string.sleep_min, m) to {
-                ReaderEngine.setSleepTimerMinutes(m)
-                Vibra.confirm(this)
-                toast(getString(R.string.sleep_menu_active, getString(R.string.sleep_min, m)))
-            })
-        }
-        opts.add(getString(R.string.sleep_chapter) to {
-            ReaderEngine.setSleepTimerChapterEnd()
-            Vibra.confirm(this)
-            toast(getString(R.string.sleep_menu_chapter_active))
-        })
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.sleep_dialog_title))
-            .setItems(opts.map { it.first }.toTypedArray()) { _, which ->
-                opts[which].second()
-            }
-            .show()
+    /** msg4993: выбор таймера сна — теперь ОКНОМ, а не диалогом (msg4981).
+     *
+     *  Диалог умел только «выбрать время»: ни активного режима с остатком, ни
+     *  пути к настройкам жестов и сигнала он не показывал. В окне тот же выбор
+     *  плюс строка «Настройки таймера» — жесты, чувствительность, сигнал и
+     *  проверки без ожидания. Таймер по-прежнему живёт в движке и работает при
+     *  погашенном экране (см. ReaderEngine.setSleepTimerMinutes). */
+    private fun openSleepTimerWindow() {
+        startActivity(Intent(this, SleepTimerWindowActivity::class.java))
     }
 
     /** msg1278: «Выход из приложения». Если звучит чтение — гасим (сохраняет
@@ -3199,9 +3179,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // скорость/голос сразу, а не «на следующий запуск».
         @Volatile
         internal var active: MainActivity? = null
-
-        // msg2567: набор времён таймера сна в диалоге выбора (минуты).
-        internal val SLEEP_TIMER_CHOICES = intArrayOf(10, 20, 30, 45, 60)
 
         /** msg4673: пауза между проговариванием процента при драге по бегунку.
          *  Процент меняется быстро — без паузы быстрый проезд по книге забил бы

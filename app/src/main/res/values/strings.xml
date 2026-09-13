@@ -689,7 +689,60 @@
     <string name="sleep_menu_chapter_active">Таймер сна: до конца главы</string>
     <string name="sleep_off">Выключить таймер</string>
     <string name="sleep_off_done">Таймер сна выключен</string>
-    <string name="sleep_dialog_title">Таймер сна</string>
+
+    <!-- msg4993: таймер сна — два окна. Выбор времени и «до конца главы» -->
+    <string name="sleep_timer_title">Таймер сна</string>
+    <string name="sleep_timer_intro">Через сколько остановить чтение. Таймер работает и при погашенном экране, и когда окно книги закрыто.</string>
+    <string name="sleep_timer_now">Уже стоит</string>
+    <string name="sleep_timer_left">осталось %1$d мин</string>
+    <string name="sleep_timer_left_chapter">ждёт конца главы</string>
+    <string name="sleep_timer_hint">Как ведёт себя таймер — сколько ждать жест, чем продлевать, какой сигнал — настраивается строкой выше.</string>
+    <string name="sleep_settings_row">Настройки таймера</string>
+    <string name="sleep_settings_hint">Жесты, чувствительность, сигнал и проверки</string>
+
+    <!-- msg4993: окно «Настройки таймера» — жесты, ступени, сигнал, проверки -->
+    <string name="sleep_settings_title">Настройки таймера</string>
+    <string name="sleep_settings_intro">Таймер подходит к концу — BookVoice подаёт сигнал и ждёт минуту: тряхнули телефон или положили его экраном вниз — чтение идёт дальше. Здесь видно, как именно он это делает, и можно проверить каждую часть не дожидаясь конца таймера.</string>
+
+    <string name="sleep_wait_title">Подождать встряску в конце</string>
+    <string name="sleep_wait_hint">Включено: перед остановкой BookVoice подаёт сигнал и минуту ждёт жест. Выключите, если хотите, чтобы чтение просто вставало на паузу без сигнала и ожидания.</string>
+    <string name="sleep_flip_title">Продлевать переворотом</string>
+    <string name="sleep_flip_hint">Второй жест: положить телефон экраном вниз и подержать. Выручает, когда трясти неудобно — телефон лежит на столе или в чехле.</string>
+    <string name="sleep_extend_title">Продлевать на: %1$s</string>
+    <string name="sleep_extend_hint">На сколько продолжать чтение после жеста. Дальше таймер снова идёт с начала этого срока.</string>
+    <string name="sleep_sense_title">Чувствительность: %1$s</string>
+    <string name="sleep_sense_hint">Нажмите строку, чтобы сменить ступень. Не отзывается на встряску — поднимите ступень выше. Срабатывает от каждого движения — опустите ниже.</string>
+    <string name="sleep_sense_low">низкая</string>
+    <string name="sleep_sense_mid">средняя</string>
+    <string name="sleep_sense_high">высокая</string>
+    <string name="sleep_vibra_title">Сила вибрации: %1$s</string>
+    <string name="sleep_vibra_hint">Какой силы толчок подавать вместе с сигналом. При смене ступени толчок сразу даётся послушать.</string>
+    <string name="sleep_vibra_low">слабая</string>
+    <string name="sleep_vibra_mid">средняя</string>
+    <string name="sleep_vibra_high">сильная</string>
+    <string name="sleep_signal_title">Сигнал за минуту</string>
+    <string name="sleep_signal_hint">Звук и вибрация перед остановкой: по ним понятно, что пора тряхнуть телефон. Работает и при погашенном экране.</string>
+    <string name="sleep_voice_title">Объявлять голосом</string>
+    <string name="sleep_voice_hint">Проговаривать голосом чтения «последняя минута» и «продлил». Поверх книги лишняя речь мешает, поэтому по умолчанию выключено.</string>
+
+    <string name="sleep_check_none">Проверок ещё не было</string>
+    <string name="sleep_check_none_hint">Результат появится здесь после любой проверки ниже</string>
+    <string name="sleep_check_all_title">Проверить таймер целиком</string>
+    <string name="sleep_check_all_hint">Двадцать секунд чтения, потом сигнал и десять секунд ожидания — тряхните телефон или положите экраном вниз. Скажу словами, что поймал. Книга при проверке не останавливается, место чтения не сбивается.</string>
+    <string name="sleep_check_gesture_title">Проверить жест отдельно</string>
+    <string name="sleep_check_gesture_hint">Десять секунд слушаю сразу, без чтения и без сигнала. Этой проверкой удобно подбирать ступень чувствительности.</string>
+    <string name="sleep_check_signal_title">Проверить сигнал</string>
+    <string name="sleep_check_signal_hint">Проиграть сигнал сейчас</string>
+    <string name="sleep_check_vibra_title">Проверить вибрацию</string>
+    <string name="sleep_check_vibra_hint">Дать толчок выбранной силы сейчас</string>
+    <string name="sleep_check_signal_done">Проверка сигнала: подал сигнал. Если не слышно — проверьте громкость и беззвучный режим.</string>
+    <string name="sleep_check_vibra_done">Проверка вибрации: подал толчок выбранной силы. Если не чувствуется — поднимите силу вибрации.</string>
+
+    <string name="sleep_how_title">Как это работает</string>
+    <string name="sleep_how_hint">Короткое объяснение словами</string>
+    <string name="sleep_how_title_open">Как это работает: свернуть</string>
+    <string name="sleep_how_hint_open">Объяснение раскрыто ниже</string>
+    <string name="sleep_how_text">Таймер сна останавливает чтение, чтобы книга не читала всю ночь. Когда время подходит к концу, BookVoice подаёт сигнал — звук и толчок — и минуту ждёт. Если за эту минуту вы тряхнули телефон или положили его экраном вниз, чтение продолжается ещё на выбранный срок: так можно не просыпаться до конца, а просто повернуть телефон. Если не тронули — чтение встаёт на паузу и запоминает место. Сигнал работает при погашенном экране, а если экран выключен системой и звук молчит — проверьте, что BookVoice не ограничен в работе в фоне (окно «Не засыпать» в Настройках).</string>
 
     <!-- 0.3.42: свой голос для книги (#102) -->
     <string name="voice_remember_book">Запомнить для этой книги</string>

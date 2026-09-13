@@ -147,6 +147,19 @@
             android:name=".SleepWindowActivity"
             android:exported="false" />
 
+        <!-- Таймер сна (msg4993): выбор времени и «до конца главы» — из меню «⋮»
+             книги и по долгому нажатию «▶». Окно поверх читалки; своих
+             intent-filter нет. -->
+        <activity
+            android:name=".SleepTimerWindowActivity"
+            android:exported="false" />
+
+        <!-- Настройки таймера (msg4993): жесты, чувствительность, сигнал и
+             проверки без ожидания. Открывается строкой из окна таймера. -->
+        <activity
+            android:name=".SleepTimerSettingsActivity"
+            android:exported="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="false" />

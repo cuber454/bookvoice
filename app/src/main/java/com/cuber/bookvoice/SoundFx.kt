@@ -24,6 +24,14 @@ object SoundFx {
         play(ctx, R.raw.sound_listen)
     }
 
+    /** «Таймер входит в последнюю минуту» (msg4979). Свой звук, а не «готово»:
+     *  по нему владелец понимает, что сейчас надо тряхнуть телефон, и путать
+     *  его с сигналом готовности книги нельзя. Два коротких тона — выше и ниже,
+     *  слышно и в наушниках поверх чтения. */
+    fun sleepWarning(ctx: Context) {
+        play(ctx, R.raw.sound_sleep)
+    }
+
     private fun play(ctx: Context, res: Int) {
         try {
             val mp = MediaPlayer.create(ctx, res) ?: return

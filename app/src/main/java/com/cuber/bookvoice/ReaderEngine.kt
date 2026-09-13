@@ -129,7 +129,47 @@ internal object ReaderEngine {
     @Volatile
     private var sleepEndAt = 0L
 
+    /** Идёт окно ожидания: последняя минута перед остановкой, слушаем жесты. */
+    @Volatile
+    var sleepWaiting = false
+        private set
+
+    /** Длина окна ожидания — последняя минута перед остановкой (msg4941). */
+    private const val SLEEP_WINDOW_MS = 60_000L
+
+    /** Проверка таймера без ожидания (msg4987): прочитать 20 секунд, затем
+     *  сигнал и окно на 10 секунд — весь цикл укладывается в полминуты. */
+    private const val TEST_READ_MS = 20_000L
+    private const val TEST_WINDOW_MS = 10_000L
+
     private val sleepRunnable = Runnable { fireSleepTimer() }
+
+    /** Сигнал за минуту до остановки: чтение идёт, мы только предупреждаем. */
+    private val sleepWarnRunnable = Runnable { enterSleepWindow(test = false) }
+
+    /** Идёт проверка таймера: книгу НЕ останавливаем, только рассказываем. */
+    private var testMode = false
+
+    /** Конец проверки (жеста не было) — отдельный Runnable: [sleepRunnable]
+     *  в это время уже свободен от настоящего таймера. */
+    private var testEndRunnable: Runnable? = null
+
+    /** Номер текущей проверки: отложенные шаги сверяются с ним и молчат, если
+     *  проверку уже сменили (человек нажал вторую проверку, не дождавшись). */
+    private var testToken = 0
+
+    /** Кому доложить результат проверки — окно «Настройки таймера» ставит сюда
+     *  свой колбэк на время показа и снимает при закрытии. */
+    @Volatile
+    var sleepTestListener: ((String) -> Unit)? = null
+
+    /** Ожидание жеста после дочитанной главы (режим «до конца главы» + галочка
+     *  «подождать встряску»): чтение уже стоит на паузе, жест его возвращает. */
+    private var chapterWait = false
+
+    /** Слушатель жестов — живёт в движке, а не в окне: окно ожидания идёт и при
+     *  погашенном экране, и «без окна». */
+    private var sense: SleepSense? = null
 
     val sleepTimerActive: Boolean get() = sleepMode != SLEEP_OFF
     var continuous = false
@@ -881,6 +921,10 @@ internal object ReaderEngine {
     /** Чтение дошло до конца книги (или было одноразовым) — отпускаем фокус. */
     private fun stopAtEnd() {
         Diag.log(ctx, "activity", "чтение закончилось само (конец/остановка)")
+        // msg4993: глава была дочитана ПО ТАЙМЕРУ — режим надо запомнить до
+        // cancelSleepTimer(), который его гасит. Дальше либо окно ожидания
+        // жеста (галочка включена), либо тихая пауза, как в 0.4.25.
+        val chapterSleep = sleepMode == SLEEP_CHAPTER
         cancelSleepTimer() // таймер сна дальше не нужен — дочитали или встали на границе
         playing = false
         KeepAwake.release() // #19: чтение кончилось — процессор отпускаем
@@ -888,6 +932,20 @@ internal object ReaderEngine {
         // msg1119: дочитал до конца — фиксируем, чтобы повторно не начать с начала.
         savePosition()
         pushPlayState()
+        if (chapterSleep) armChapterWait()
+    }
+
+    /** Глава дочитана по таймеру: даём минуту на жест, как и в конце таймера по
+     *  времени. Чтение уже на паузе — жест его будит ([onSleepGesture]). */
+    private fun armChapterWait() {
+        if (!sleepWindowEnabled()) {
+            Diag.log(ctx, "sleep", "глава дочитана по таймеру — ожидание выключено")
+            return
+        }
+        chapterWait = true
+        Diag.log(ctx, "sleep", "глава дочитана по таймеру — минута на жест")
+        main.postDelayed(sleepRunnable, SLEEP_WINDOW_MS)
+        enterSleepWindow(test = false)
     }
 
     /** Перейти на следующее предложение (или главу) — для автопродолжения. */
@@ -899,11 +957,10 @@ internal object ReaderEngine {
         } else if (chapterIdx + 1 < bk.chapters.size) {
             // msg2567: «уснуть до конца главы» — глава дочитана, дальше не идём.
             // Позиция остаётся на её последнем предложении; повторный старт
-            // обычным путём перейдёт в следующую главу.
-            if (sleepMode == SLEEP_CHAPTER) {
-                sleepMode = SLEEP_OFF
-                return false
-            }
+            // обычным путём перейдёт в следующую главу. Режим таймера здесь НЕ
+            // сбрасываем: по нему [stopAtEnd] решает, открыть ли окно ожидания
+            // жеста (msg4993).
+            if (sleepMode == SLEEP_CHAPTER) return false
             chapterIdx++
             sentenceIdx = 0
             host?.onChapterLoaded()
@@ -997,7 +1054,12 @@ internal object ReaderEngine {
         }
     }
 
-    // ---------------- Таймер сна (msg2567) ----------------
+    // ---------------- Таймер сна (msg2567 → переделан в msg4993) ----------------
+    //
+    // Как это устроено для человека. Таймер подходит к концу — BookVoice подаёт
+    // сигнал (звук + вибрация) и ЖДЁТ минуту. Тряхнул телефон или положил его
+    // экраном вниз — чтение продолжилось ещё на N минут. Не тронул — чтение
+    // встаёт на паузу, как раньше. Минута ожидания и есть «окно».
 
     /** Поставить таймер «уснуть через [minutes] минут». Прежний режим снимается. */
     fun setSleepTimerMinutes(minutes: Int) {
@@ -1009,13 +1071,20 @@ internal object ReaderEngine {
         }
         sleepMode = SLEEP_MINUTES
         sleepMinutes = minutes
-        sleepEndAt = SystemClock.elapsedRealtime() + minutes * 60_000L
-        main.postDelayed(sleepRunnable, minutes * 60_000L)
+        val ms = minutes * 60_000L
+        sleepEndAt = SystemClock.elapsedRealtime() + ms
+        main.postDelayed(sleepRunnable, ms)
+        // Сигнал за минуту до конца. Если окно ожидания выключено и сигнал тоже,
+        // не будим человека зря — таймер просто тихо встанет на паузу, как раньше.
+        if (minutes > 1 && (sleepWindowEnabled() || SleepTimerPrefs.signal(ctx))) {
+            main.postDelayed(sleepWarnRunnable, ms - SLEEP_WINDOW_MS)
+        }
         Diag.log(ctx, "sleep", "таймер сна: через $minutes минут")
     }
 
     /** Поставить таймер «уснуть, когда закончится глава»: дочитываем текущую
-     *  главу и встаём на паузу на её последнем предложении (см. [advanceOneUnit]). */
+     *  главу и встаём на паузу на её последнем предложении (см. [advanceOneUnit]).
+     *  Окно ожидания при этом открывает [stopAtEnd] — глава уже дочитана. */
     fun setSleepTimerChapterEnd() {
         removeSleepRunnable()
         sleepMode = SLEEP_CHAPTER
@@ -1029,23 +1098,248 @@ internal object ReaderEngine {
         removeSleepRunnable()
         sleepMode = SLEEP_OFF
         sleepMinutes = 0
+        chapterWait = false
+        endSleepWindow()
+        stopSleepTest()
     }
 
     private fun removeSleepRunnable() {
         sleepEndAt = 0L
         main.removeCallbacks(sleepRunnable)
+        main.removeCallbacks(sleepWarnRunnable)
+    }
+
+    /** Включено ли ожидание жеста вообще: либо встряска, либо переворот. */
+    private fun sleepWindowEnabled(): Boolean =
+        SleepTimerPrefs.wait(ctx) || SleepTimerPrefs.flip(ctx)
+
+    /** Сколько минут осталось до остановки — для строки «Выключить таймер».
+     *  В режиме «до конца главы» остатка в минутах нет. */
+    fun sleepRemainingMinutes(): Int {
+        if (sleepMode != SLEEP_MINUTES || sleepEndAt == 0L) return 0
+        val left = sleepEndAt - SystemClock.elapsedRealtime()
+        return if (left <= 0) 0 else ((left + 59_999) / 60_000).toInt()
+    }
+
+    /** Последняя минута перед остановкой: сигнал, сенсор, объявление — и ждём.
+     *  [test] — проверка из окна настроек: книгу не останавливаем и не глохнем,
+     *  только рассказываем словами, что жест поймали (или что не поймали). */
+    private fun enterSleepWindow(test: Boolean) {
+        if (sleepWaiting) return
+        sleepWaiting = true
+        val signal = test || SleepTimerPrefs.signal(ctx)
+        if (signal) {
+            SoundFx.sleepWarning(ctx)
+            Vibra.timerSignal(ctx, SleepTimerPrefs.vibraLevel(ctx))
+        }
+        startSense(test)
+        if (test) {
+            // Проверку слушают словами всегда: ради этого её и запускают.
+            reportSleepTest("Проверка: " + sleepGesturePhrase(test = true) + " Десять секунд.")
+        } else if (SleepTimerPrefs.voice(ctx)) {
+            host?.onAnnounce(
+                (if (chapterWait) "Глава дочитана. " else "Таймер: последняя минута. ") +
+                    sleepGesturePhrase()
+            )
+        }
+        Diag.log(
+            ctx, "sleep",
+            if (test) "проверка: окно ожидания открыто"
+            else "таймер: последняя минута, жду жест"
+        )
+    }
+
+    /** Что именно предложить человеку — по включённым галочкам. Оба жеста
+     *  независимы, поэтому фраза собирается из того, что реально слушаем. В
+     *  проверке ([test]) слушаются оба, и звать надо тоже оба. */
+    private fun sleepGesturePhrase(test: Boolean = false): String {
+        val shake = test || SleepTimerPrefs.wait(ctx)
+        val flip = test || SleepTimerPrefs.flip(ctx)
+        return when {
+            shake && flip -> "Тряхните телефон или положите его экраном вниз."
+            shake -> "Тряхните телефон."
+            flip -> "Положите телефон экраном вниз."
+            else -> ""
+        }
+    }
+
+    /** Включить сенсор на время окна. В проверке слушаем ОБА жеста, независимо
+     *  от галочек: иначе «Проверить переворот» проверяла бы выключенный жест. */
+    private fun startSense(test: Boolean) {
+        val s = sleepSense()
+        if (!s.available) {
+            Diag.log(ctx, "sleep", "акселерометра нет — жест недоступен")
+            return
+        }
+        s.shakeEnabled = test || SleepTimerPrefs.wait(ctx)
+        s.flipEnabled = test || SleepTimerPrefs.flip(ctx)
+        s.sense = SleepTimerPrefs.sense(ctx)
+        s.onGesture = {
+            onSleepGesture(if (it == SleepSense.Gesture.FLIP) "переворот" else "встряска")
+        }
+        s.start()
+    }
+
+    /** Слушатель сенсора живёт в движке, а не в окне: окно ожидания идёт и при
+     *  погашенном экране, и «без окна» (чтение из шторки). Держим один экземпляр
+     *  и переиспользуем — регистрация слушателя дешёвая, а сборка мусора на
+     *  ночном чтении ни к чему. */
+    private fun sleepSense(): SleepSense = sense ?: SleepSense(ctx).also { sense = it }
+
+    /** Закрыть окно ожидания: сенсор выключаем, признак ожидания снимаем. */
+    private fun endSleepWindow() {
+        sleepWaiting = false
+        sense?.let {
+            it.onGesture = null
+            it.stop()
+        }
+    }
+
+    /** Жест пойман — продлеваем чтение (или, в проверке, просто рассказываем). */
+    private fun onSleepGesture(why: String) {
+        val wasTest = testMode
+        if (wasTest) {
+            // Гасим и окно, и конец проверки разом: иначе через десять секунд
+            // прилетело бы «жеста не было» уже после пойманного жеста.
+            stopSleepTest()
+        } else {
+            endSleepWindow()
+            main.removeCallbacks(sleepRunnable)
+            main.removeCallbacks(sleepWarnRunnable)
+        }
+        Vibra.confirm(ctx)
+        if (wasTest) {
+            reportSleepTest("Проверка: $why поймана. Таймер продлил бы чтение.")
+            return
+        }
+        val ext = SleepTimerPrefs.extendMinutes(ctx)
+        val afterChapter = chapterWait
+        chapterWait = false
+        Diag.log(ctx, "sleep", "жест «$why» — продлеваю на $ext минут")
+        // Ставим новый таймер: прежний уже не нужен, а окно ожидания откроется
+        // заново за минуту до нового конца.
+        setSleepTimerMinutes(ext)
+        if (afterChapter) {
+            // Глава была дочитана по таймеру и чтение стояло на паузе — будим.
+            requestStart()
+        }
+        if (SleepTimerPrefs.voice(ctx)) host?.onAnnounce("Продлил на $ext минут")
+    }
+
+    // ---------------- Проверка таймера без ожидания (msg4987) ----------------
+
+    /** Полная проверка за полминуты: читаем 20 секунд, затем сигнал и 10 секунд
+     *  окна ожидания. Книгу НЕ останавливаем — иначе проверка каждые пять минут
+     *  сбивала бы место чтения. */
+    fun startSleepTimerTest() {
+        if (!playing) {
+            reportSleepTest("Проверка таймера: сначала включите чтение.")
+            return
+        }
+        val token = startSleepTest("проверка таймера: начал")
+        reportSleepTest("Проверка таймера: читаю двадцать секунд, потом подам сигнал.")
+        main.postDelayed({
+            if (testMode && testToken == token) enterSleepWindow(test = true)
+        }, TEST_READ_MS)
+        val end = Runnable {
+            if (testMode && testToken == token) finishSleepTest()
+        }
+        testEndRunnable = end
+        main.postDelayed(end, TEST_READ_MS + TEST_WINDOW_MS)
+    }
+
+    /** Проверка одного жеста, без чтения и без сигнала: десять секунд слушаем оба
+     *  жеста и говорим словами, поймали или нет. Нужна для подбора ступени
+     *  чувствительности — гонять ради этого полминуты с ожиданием незачем. */
+    fun startSleepSenseTest() {
+        val token = startSleepTest("проверка жеста: начал")
+        reportSleepTest("Проверка жеста: " + sleepGesturePhrase(test = true) + " Десять секунд.")
+        startSense(test = true)
+        val end = Runnable {
+            if (testMode && testToken == token) {
+                stopSleepTest()
+                Vibra.error(ctx)
+                reportSleepTest("Проверка: жеста не было — поднимите ступень чувствительности.")
+            }
+        }
+        testEndRunnable = end
+        main.postDelayed(end, TEST_WINDOW_MS)
+    }
+
+    /** Начать проверку: прежняя (если шла) снимается, метка [testToken] делает
+     *  отложенные шаги прежней проверки недействительными — иначе проверки
+     *  наложились бы друг на друга и сказали не то. */
+    private fun startSleepTest(logLine: String): Int {
+        stopSleepTest()
+        testMode = true
+        testToken++
+        Diag.log(ctx, "sleep", logLine)
+        return testToken
+    }
+
+    /** Проверку довели до конца, жеста не было — это тоже результат: говорим,
+     *  что таймер поставил бы чтение на паузу. Двойной толчок «не получилось»,
+     *  чтобы отличать на ощупь от пойманного жеста. */
+    private fun finishSleepTest() {
+        stopSleepTest()
+        Vibra.error(ctx)
+        reportSleepTest("Проверка: жеста не было — таймер поставил бы чтение на паузу.")
+    }
+
+    /** Снять проверку (окно настроек закрылось, началась другая проверка, таймер
+     *  снят). Публично — окну: уйти из окна, не оставив проверку идти своим ходом. */
+    fun stopSleepTest() {
+        testMode = false
+        testToken++
+        testEndRunnable?.let { main.removeCallbacks(it) }
+        testEndRunnable = null
+        endSleepWindow()
+    }
+
+    /** Результат проверки — словами и в строку окна настроек.
+     *
+     *  Говорит ИМЕННО ОКНО, когда оно открыто, а не читалка: окно настроек
+     *  сейчас активно, окно книги под ним система может и не озвучить —
+     *  announceForAccessibility у невидимого окна пропадает. Слушателя нет
+     *  (проверка без окна) — зовём читалку, другого канала нет. */
+    private fun reportSleepTest(text: String) {
+        Diag.log(ctx, "sleep", "проверка: $text")
+        val listener = sleepTestListener
+        if (listener != null) listener.invoke(text) else host?.onAnnounce(text)
+    }
+
+    /** Отдельные короткие проверки (сигнал, вибрация) из окна настроек — им
+     *  движок не нужен, но пусть будут в одном месте с полной проверкой. */
+    fun sleepTestSignal() {
+        SoundFx.sleepWarning(ctx)
+    }
+
+    fun sleepTestVibra() {
+        Vibra.timerSignal(ctx, SleepTimerPrefs.vibraLevel(ctx))
     }
 
     private fun fireSleepTimer() {
         sleepEndAt = 0L
         val byTime = sleepMode == SLEEP_MINUTES
+        val wasChapterWait = chapterWait
         sleepMode = SLEEP_OFF
         sleepMinutes = 0
+        chapterWait = false
+        main.removeCallbacks(sleepWarnRunnable)
+        endSleepWindow()
+        if (testMode) {
+            // Страховка: проверка не имеет права глушить чтение.
+            stopSleepTest()
+            return
+        }
         // Играет — ставим на паузу (сохранит место и отдаст фокус). Уже стоит на
-        // паузе (например, прервали звонком) — просто сбрасываем режим.
+        // паузе (например, прервали звонком или глава дочитана) — просто
+        // сбрасываем режим.
         if (byTime && playing) {
             pausePlayback(keepFocus = false)
             Diag.log(ctx, "sleep", "таймер сна сработал — чтение на паузе")
+        } else if (wasChapterWait) {
+            Diag.log(ctx, "sleep", "ожидание после главы: жеста не было, остаётся пауза")
         }
     }
 
