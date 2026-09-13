@@ -16,7 +16,11 @@ import java.io.FileWriter
  * в скрытую служебную папку приложения. Повторное открытие той же книги не
  * разбирает файл заново, а читает готовую копию — почти мгновенно.
  *
- * Храним не больше [LIMIT] книг, вытесняя давно не открывавшиеся (LRU). Запись
+ * Храним не больше [MAX_BYTES] разобранного текста, вытесняя давно не
+ * открывавшиеся (LRU). Потолок по ОБЪЁМУ, а не по числу книг (msg4895): книги
+ * очень разные — тонкий FB2 даёт мегабайт, крупный PDF пять, и при счётном
+ * потолке мелочь впустую вытесняла тяжёлые PDF. [LIMIT] остаётся вторым
+ * предохранителем — чтобы тысячи мелких записей не раздували индекс. Запись
  * привязана к сигнатуре файла-оригинала (размер + время изменения): файл
  * заменили — кэш устарел, книга разберётся заново. Удаление/замена файла
  * книги рано или поздно убирает и её кэш (get на недоступном оригинале
@@ -31,8 +35,13 @@ import java.io.FileWriter
  */
 object BookCache {
 
-    /** Сколько разобранных книг держим (msg3101 — пять, msg3149 — пятьдесят). */
-    private const val LIMIT = 50
+    /** Сколько разобранного текста держим (msg4895 — 300 МБ). Основной потолок:
+     *  место на диске предсказуемо, а мелкие книги не вытесняют крупные. */
+    private const val MAX_BYTES = 300L * 1024L * 1024L
+
+    /** Второй предохранитель — предел числа записей (msg3101 — пять, msg3149 —
+     *  пятьдесят, msg4895 — триста). Держит индекс и число файлов в узде. */
+    private const val LIMIT = 300
 
     /** Разбор дольше этого порога считаем «дорогим» и сохраняем в кэш. */
     private const val SLOW_MS = 2000L
@@ -46,6 +55,8 @@ object BookCache {
         val size: Long,
         val mtime: Long,
         var used: Long,
+        /** Объём кэш-файла в байтах (0 у записей старых версий — считаем с диска). */
+        var bytes: Long,
     )
 
     private fun dir(context: Context): File =
@@ -68,6 +79,7 @@ object BookCache {
                         o.optLong("sz"),
                         o.optLong("mt"),
                         o.optLong("used"),
+                        o.optLong("b"),
                     )
                 )
             }
@@ -85,6 +97,7 @@ object BookCache {
                     put("sz", e.size)
                     put("mt", e.mtime)
                     put("used", e.used)
+                    put("b", e.bytes)
                 }
             )
         }
@@ -149,14 +162,54 @@ object BookCache {
             idx.remove(old)
         }
         val name = Integer.toHexString(u.hashCode()) + ".bv"
-        if (!writeDoc(File(dir(context), name), doc)) return
-        idx.add(Entry(u, name, sz, mt, System.currentTimeMillis()))
+        val f = File(dir(context), name)
+        if (!writeDoc(f, doc)) return
+        idx.add(Entry(u, name, sz, mt, System.currentTimeMillis(), f.length()))
         idx.sortByDescending { it.used }
-        while (idx.size > LIMIT) {
+        evict(context, idx)
+        saveIndex(context, idx)
+    }
+
+    /** Вытеснение по давности: пока не уложились в [MAX_BYTES] и [LIMIT].
+     *  Последнюю запись не трогаем — иначе только что разобранная книга, которая
+     *  одна больше потолка, не закэшируется вовсе. */
+    private fun evict(context: Context, idx: MutableList<Entry>) {
+        var total = idx.sumOf { entryBytes(context, it) }
+        while ((idx.size > LIMIT || total > MAX_BYTES) && idx.size > 1) {
             val victim = idx.removeAt(idx.lastIndex)
             runCatching { File(dir(context), victim.file).delete() }
+            total -= entryBytes(context, victim)
         }
-        saveIndex(context, idx)
+    }
+
+    /** Объём записи: из индекса, а у записей старых версий (без поля) — с диска. */
+    private fun entryBytes(context: Context, e: Entry): Long =
+        if (e.bytes > 0) e.bytes else runCatching { File(dir(context), e.file).length() }.getOrDefault(0L)
+
+    /** Сколько места занимает разобранный текст прямо сейчас. Считаем по факту
+     *  (в обход индекса): так в цифру попадают и файлы-сироты прошлых версий. */
+    fun usedBytes(context: Context): Long {
+        var total = 0L
+        dir(context).listFiles()?.forEach { f ->
+            if (f.isFile && f.name != "index.json") total += f.length()
+        }
+        return total
+    }
+
+    /** Потолок для показа пользователю (Настройки → «Разобранный текст»). */
+    fun budgetBytes(): Long = MAX_BYTES
+
+    /** Сколько разобранных книг лежит в кэше. */
+    fun count(context: Context): Int = loadIndex(context).size
+
+    /** Полная очистка разобранного текста (строка в Настройках, msg4895).
+     *  Файлы книг, настройки и места чтения не трогаются — книги просто
+     *  разберутся заново при следующем открытии. */
+    fun clearAll(context: Context) {
+        val d = dir(context)
+        var n = 0
+        d.listFiles()?.forEach { if (it.isFile && it.delete()) n++ }
+        Diag.log(context, "cache", "разобранный текст очищен вручную: файлов $n")
     }
 
     /** Книга удалена из библиотеки — убрать и её кэш сразу. */

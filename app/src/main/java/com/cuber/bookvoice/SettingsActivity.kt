@@ -102,6 +102,8 @@ class SettingsActivity(private val act: SectionActivity) {
     private var backupAutoRow: Button? = null
     // Режим авто-проверки обновлений (0.3.91): «Автоматически» / «Вручную».
     private var updateModeRow: Button? = null
+    // msg4895: строка «Разобранный текст» — занято из потолка (BookCache).
+    private var cacheRow: Button? = null
 
     // Открытый раздел (null = экран списка групп).
     private var group: Group? = null
@@ -780,6 +782,11 @@ class SettingsActivity(private val act: SectionActivity) {
                 .show()
         }
 
+        // msg4895: «Разобранный текст» — сколько места занял кэш разбора (BookCache)
+        // и кнопка очистки. Системная «Очистить кэш» до него не дотягивается:
+        // он лежит в filesDir, то есть в данных приложения, а не в кэше.
+        cacheRow = addValueButton { showCacheDialog() }
+
         // Резервная копия и восстановление (#100): создание → системный Share
         // (в Telegram «Избранное»), восстановление — выбор файла копии. Ниже —
         // папка автокопий и их частота.
@@ -789,6 +796,26 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         backupDirRow = addValueButton { pickBackupDirAction() }
         backupAutoRow = addValueButton { pickBackupAuto() }
+    }
+
+    /** msg4895: сколько занял разобранный текст и его очистка. */
+    private fun showCacheDialog() {
+        val used = sizeText(BookCache.usedBytes(act))
+        MaterialAlertDialogBuilder(act)
+            .setTitle(getString(R.string.cache_title) + ": " + used)
+            .setMessage(getString(R.string.cache_clear_hint, BookCache.count(act)))
+            .setPositiveButton(R.string.cache_clear) { _, _ ->
+                BookCache.clearAll(act)
+                toast(getString(R.string.cache_cleared))
+                refreshRows()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    private fun sizeText(bytes: Long): String {
+        val mb = bytes / (1024L * 1024L)
+        return if (mb >= 1) getString(R.string.cache_mb, mb) else getString(R.string.cache_less_mb)
     }
 
     private fun buildDiagGroup() {
@@ -1039,6 +1066,13 @@ class SettingsActivity(private val act: SectionActivity) {
             if (dir == null) getString(R.string.backup_dir_none) else folderLabel(dir)
         backupAutoRow?.text = getString(R.string.backup_auto_title) + ": " + backupAutoLabel()
         updateModeRow?.text = getString(R.string.update_mode_title) + ": " + updateModeLabel()
+
+        cacheRow?.text = getString(
+            R.string.cache_row,
+            getString(R.string.cache_title),
+            sizeText(BookCache.usedBytes(act)),
+            sizeText(BookCache.budgetBytes()),
+        )
 
     }
 

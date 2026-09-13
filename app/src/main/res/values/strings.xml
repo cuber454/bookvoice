@@ -499,6 +499,17 @@
     <string name="log_sent_hint">Выбери Telegram и отправь файл в этот чат</string>
     <string name="log_cleared">Лог очищен</string>
 
+    <!-- msg4895: разобранный текст (кэш разбора книг) — строка в «Библиотеке».
+         Потолок теперь по объёму: 300 МБ. Системная «Очистить кэш» сюда не
+         дотягивается, поэтому чистка живёт в настройках. -->
+    <string name="cache_title">Разобранный текст</string>
+    <string name="cache_row">%1$s: %2$s из %3$s</string>
+    <string name="cache_mb">%1$d МБ</string>
+    <string name="cache_less_mb">меньше 1 МБ</string>
+    <string name="cache_clear_hint">В кэше %1$d разобранных книг. Очистка их не удалит: книги останутся в библиотеке, просто при следующем открытии будут разбираться заново — как в первый раз.</string>
+    <string name="cache_clear">Очистить</string>
+    <string name="cache_cleared">Разобранный текст очищен</string>
+
     <!-- 0.3.27: меню книги в библиотеке, страница книги в каталоге, настройки -->
     <string name="dialog_close">Закрыть</string>
     <string name="dialog_cancel">Отмена</string>
