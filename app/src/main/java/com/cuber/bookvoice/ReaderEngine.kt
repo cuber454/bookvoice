@@ -126,6 +126,14 @@ internal object ReaderEngine {
     @Volatile
     var sleepMinutes = 0
 
+    /** Сколько минут человек ВЫСТАВИЛ таймеру в этот раз — для продления «столько
+     *  же» (msg5009). Отдельное поле, потому что [sleepMinutes] переписывается
+     *  каждым продлением и исходное число из него уже не достать. Ставится
+     *  только выбором из окна таймера, не жестом (иначе «столько же» съезжало бы
+     *  на предыдущее продление). */
+    @Volatile
+    private var sleepBaseMinutes = 0
+
     @Volatile
     private var sleepEndAt = 0L
 
@@ -1061,8 +1069,10 @@ internal object ReaderEngine {
     // экраном вниз — чтение продолжилось ещё на N минут. Не тронул — чтение
     // встаёт на паузу, как раньше. Минута ожидания и есть «окно».
 
-    /** Поставить таймер «уснуть через [minutes] минут». Прежний режим снимается. */
-    fun setSleepTimerMinutes(minutes: Int) {
+    /** Поставить таймер «уснуть через [minutes] минут». Прежний режим снимается.
+     *  [byGesture] — продление жестом: тогда [sleepBaseMinutes] (выставленное
+     *  человеком число) не трогаем, иначе «продлевать столько же» съезжало бы. */
+    fun setSleepTimerMinutes(minutes: Int, byGesture: Boolean = false) {
         removeSleepRunnable()
         if (minutes <= 0) {
             sleepMode = SLEEP_OFF
@@ -1071,6 +1081,7 @@ internal object ReaderEngine {
         }
         sleepMode = SLEEP_MINUTES
         sleepMinutes = minutes
+        if (!byGesture) sleepBaseMinutes = minutes
         val ms = minutes * 60_000L
         sleepEndAt = SystemClock.elapsedRealtime() + ms
         main.postDelayed(sleepRunnable, ms)
@@ -1215,15 +1226,31 @@ internal object ReaderEngine {
         val ext = SleepTimerPrefs.extendMinutes(ctx)
         val afterChapter = chapterWait
         chapterWait = false
-        Diag.log(ctx, "sleep", "жест «$why» — продлеваю на $ext минут")
+        // «Столько же» — продлить тем, чем был выставлен таймер (msg5009). Для
+        // режима «до конца главы» это значит дочитать СЛЕДУЮЩУЮ главу и снова
+        // встать на её последнем предложении: числа минут у него нет, а
+        // «столько же» для него — ровно та же остановка на конце главы.
+        if (ext == SleepTimerPrefs.EXTEND_SAME && afterChapter) {
+            Diag.log(ctx, "sleep", "жест «$why» — продлеваю до конца следующей главы")
+            setSleepTimerChapterEnd()
+            requestStart()
+            if (SleepTimerPrefs.voice(ctx)) host?.onAnnounce("Продлил до конца главы")
+            return
+        }
+        val minutes = if (ext == SleepTimerPrefs.EXTEND_SAME) {
+            if (sleepBaseMinutes > 0) sleepBaseMinutes else SleepTimerPrefs.DEF_EXTEND
+        } else {
+            ext
+        }
+        Diag.log(ctx, "sleep", "жест «$why» — продлеваю на $minutes минут")
         // Ставим новый таймер: прежний уже не нужен, а окно ожидания откроется
         // заново за минуту до нового конца.
-        setSleepTimerMinutes(ext)
+        setSleepTimerMinutes(minutes, byGesture = true)
         if (afterChapter) {
             // Глава была дочитана по таймеру и чтение стояло на паузе — будим.
             requestStart()
         }
-        if (SleepTimerPrefs.voice(ctx)) host?.onAnnounce("Продлил на $ext минут")
+        if (SleepTimerPrefs.voice(ctx)) host?.onAnnounce("Продлил на $minutes минут")
     }
 
     // ---------------- Проверка таймера без ожидания (msg4987) ----------------

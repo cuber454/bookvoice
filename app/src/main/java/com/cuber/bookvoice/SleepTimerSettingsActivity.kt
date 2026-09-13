@@ -166,7 +166,7 @@ class SleepTimerSettingsActivity : RowsActivity() {
         addRow(
             getString(
                 R.string.sleep_extend_title,
-                getString(R.string.sleep_min, SleepTimerPrefs.extendMinutes(this)),
+                extendWord(SleepTimerPrefs.extendMinutes(this)),
             ),
             getString(R.string.sleep_extend_hint),
             tag = TAG_EXTEND,
@@ -269,16 +269,21 @@ class SleepTimerSettingsActivity : RowsActivity() {
     // (msg5005). Для галочек пересборка остаётся — флажок объявляет своё
     // состояние сам.
 
+    /** Значение строки продления словами: число минут или «столько же» (msg5009). */
+    private fun extendWord(m: Int): String =
+        if (m == SleepTimerPrefs.EXTEND_SAME) getString(R.string.sleep_extend_same)
+        else getString(R.string.sleep_min, m)
+
     private fun cycleExtend() {
         val list = SleepTimerPrefs.EXTEND_CHOICES
         val cur = SleepTimerPrefs.extendMinutes(this)
         val next = list[(list.indexOf(cur) + 1) % list.size]
         SleepTimerPrefs.prefs(this).edit().putInt(SleepTimerPrefs.KEY_EXTEND, next).apply()
-        Diag.log(this, "sleep", "настройки таймера: продление $next минут")
+        Diag.log(this, "sleep", "настройки таймера: продление ${extendWord(next)}")
         rowWithTag(TAG_EXTEND)?.let {
             updateRow(
                 it,
-                getString(R.string.sleep_extend_title, getString(R.string.sleep_min, next)),
+                getString(R.string.sleep_extend_title, extendWord(next)),
                 getString(R.string.sleep_extend_hint),
             )
         }
