@@ -406,6 +406,17 @@ class SettingsActivity(private val act: SectionActivity) {
         // тестовая галочка для сравнения на слух, по умолчанию выключена.
         addHint(getString(R.string.gapless_hint))
         addCheck(R.string.gapless_title, MainActivity.KEY_GAPLESS, false)
+        // msg5067: тихий звуковой поток переехал сюда из окна «Не засыпать»
+        // (Сергей искал его как звуковую настройку и не нашёл: окно про батарею).
+        // Стоит третьим в звуковой троице — «Короткие паузы» и «Бесшовная
+        // передача» про стык предложений, этот — про то, чтобы звуковой тракт
+        // между стыками не закрывался. Ниже по разделу уже другое: прокрутка,
+        // она про место, а не про голос.
+        addHint(getString(R.string.sleep_silent_hint))
+        addCheck(R.string.sleep_silent_title, MainActivity.KEY_SILENT_KEEPALIVE, false) { on ->
+            KeepAwake.syncSilence()
+            logSilence(on)
+        }
 
         // Портянка (msg4372): пара про прокрутку — что она делает с местом и с
         // голосом. Переехала сюда из «Интерфейса»: «Интерфейс» — что видно на
@@ -890,7 +901,15 @@ class SettingsActivity(private val act: SectionActivity) {
         })
     }
 
-    private fun addCheck(titleRes: Int, key: String, def: Boolean) {
+    /** [onChange] — для галочек, которые надо не только запомнить, но и применить
+     *  сразу: тихий поток живёт в движке, а не в prefs (msg5067). Параметр
+     *  последний, поэтому трейлинг-лямбда попадает в него, а не в [def]. */
+    private fun addCheck(
+        titleRes: Int,
+        key: String,
+        def: Boolean,
+        onChange: ((Boolean) -> Unit)? = null,
+    ) {
         content().addView(CheckBox(act).apply {
             text = getString(titleRes)
             textSize = 17f
@@ -898,9 +917,22 @@ class SettingsActivity(private val act: SectionActivity) {
             isClickable = true
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(key, checked).apply()
+                onChange?.invoke(checked)
             }
             setPadding(dp(4), dp(2), dp(4), dp(2))
         })
+    }
+
+    /** В журнал — и что выбрано, и что вышло на самом деле: если чтение сейчас не
+     *  идёт, поток остаётся выключенным до его начала, и это видно из строки.
+     *  (Переехало из окна «Не засыпать» вместе с галочкой, msg5067.) */
+    private fun logSilence(on: Boolean) {
+        Diag.log(
+            act, "power",
+            "«Чтение»: тихий поток ${if (on) "включён" else "выключен"} галочкой; " +
+                "сейчас ${if (SilentKeepAlive.isOn) "идёт" else "не идёт"} " +
+                "(не идёт — значит чтение стоит)"
+        )
     }
 
     /** Кнопка-строка с резюме значения справа-снизу. Клик открывает диалог. */

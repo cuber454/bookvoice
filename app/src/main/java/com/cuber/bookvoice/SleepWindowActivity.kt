@@ -152,14 +152,11 @@ class SleepWindowActivity : RowsActivity() {
             getString(R.string.sleep_engine_hint),
         ) { openEngineSettings() }
 
-        // msg4721: единственная галочка окна — тихий звуковой поток. Стоит последней
-        // из «рабочих» строк: она не действие, а настройка, и включается на время чтения.
-        addCheck(
-            getString(R.string.sleep_silent_title),
-            getString(R.string.sleep_silent_hint),
-            MainActivity.KEY_SILENT_KEEPALIVE,
-            def = false,
-        ) { on -> KeepAwake.syncSilence(); logSilence(on) }
+        // msg4721: галочка тихого звукового потока жила здесь — последней из
+        // «рабочих» строк. msg5067: переехала в «Настройки → Чтение», к звуку
+        // чтения, где её и искал Сергей. Здесь остаётся только след — иначе
+        // человек, помнящий её в этом окне, решит, что её убрали.
+        addHint(getString(R.string.sleep_silent_moved))
 
         addHint(getString(R.string.sleep_lock_hint))
         addHint(getString(R.string.sleep_log_hint))
@@ -229,15 +226,5 @@ class SleepWindowActivity : RowsActivity() {
     // ---------------- Строки экрана ----------------
     // addHint / addRow / addCheck / withHint / dp живут в RowsActivity — окна
     // «Не засыпать», «Таймер сна» и «Настройки таймера» рисуют строки одинаково.
-
-    /** В журнал — и что выбрано, и что вышло на самом деле: если чтение сейчас не
-     *  идёт, поток остаётся выключенным до его начала, и это видно из строки. */
-    private fun logSilence(on: Boolean) {
-        Diag.log(
-            this, "power",
-            "«Не засыпать»: тихий поток ${if (on) "включён" else "выключен"} галочкой; " +
-                "сейчас ${if (SilentKeepAlive.isOn) "идёт" else "не идёт"} " +
-                "(не идёт — значит чтение стоит)"
-        )
-    }
+    // logSilence переехал вместе с галочкой в SettingsActivity (msg5067).
 }
