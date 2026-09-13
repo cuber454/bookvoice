@@ -182,7 +182,36 @@ class LibraryActivity(private val act: SectionActivity) {
         // как вернуть. Системного диалога для интернета нет, поэтому — кнопка
         // на страницу приложения в настройках.
         PermissionNudge.ensureInternet(act)
+
+        // msg4873: уборка папки книг от сирот — в фоне, чтобы не задерживать
+        // показ полки (файлов там десятки, но это чужой ввод-вывод).
+        Thread { sweepOrphanBooks() }.start()
     }
+
+    /** msg4873: убрать из папки книг файлы, на которые не ссылается ни одна
+     *  запись. Файл появляется РАНЬШЕ записи (сначала забираем копию, потом
+     *  заводим книгу), поэтому обрыв на середине — выгрузили из памяти, не
+     *  доехало сохранение — оставляет копию, которую больше никто не откроет.
+     *  Свежие файлы не трогаем: копия могла быть создана только что, а запись
+     *  ещё в пути. */
+    private fun sweepOrphanBooks() {
+        val dir = File(act.filesDir, "books")
+        if (!dir.isDirectory) return
+        val alive = HashSet<String>()
+        BookStore.all(act).forEach { r ->
+            val u = runCatching { Uri.parse(r.uri) }.getOrNull()
+            if (u?.scheme == "file") u.path?.let { alive.add(File(it).absolutePath) }
+        }
+        val now = System.currentTimeMillis()
+        var removed = 0
+        dir.listFiles()?.forEach { f ->
+            if (f.isFile && f.absolutePath !in alive && now - f.lastModified() > ORPHAN_AGE_MS) {
+                if (f.delete()) removed++
+            }
+        }
+        if (removed > 0) Diag.log(act, "lib", "убрано файлов-сирот в папке книг: $removed")
+    }
+
 
     /** Полка показана. Окно-дом зовёт это при каждом своём onResume: холодный
      *  старт, возврат из читалки/Каталога/Настроек/пикера. Внутри — бывший
@@ -1780,6 +1809,10 @@ class LibraryActivity(private val act: SectionActivity) {
     }
 
     companion object {
+        /** msg4873: файл в папке книг младше этого возраста не считаем сиротой —
+         *  копия могла быть создана только что, а запись о книге ещё в пути. */
+        private const val ORPHAN_AGE_MS = 60L * 60L * 1000L
+
         // internal — экран настроек читает/пишет сортировку и папку в те же prefs.
         internal const val KEY_SORT = "sort"
         internal const val KEY_TREE = "tree_uri"
