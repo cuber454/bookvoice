@@ -1433,9 +1433,14 @@ class LibraryActivity(private val act: SectionActivity) {
         androidx.core.content.FileProvider.getUriForFile(act, provider, dst)
     }.getOrNull()
 
+    /** Тип файла — и для «Поделиться», и для отдачи в чужие приложения. Список
+     *  обязан совпадать с тем, что мы объявили в манифесте (msg5013): чужая
+     *  читалка узнаёт книгу по типу, и «application/octet-stream» на PDF её бы
+     *  только запутал. */
     private fun mimeFor(name: String): String = when {
         name.endsWith(".epub", true) -> "application/epub+zip"
         name.endsWith(".fb2", true) -> "application/x-fictionbook+xml"
+        name.endsWith(".pdf", true) -> "application/pdf"
         name.endsWith(".txt", true) -> "text/plain"
         name.endsWith(".xml", true) -> "text/xml"
         name.endsWith(".zip", true) -> "application/zip"

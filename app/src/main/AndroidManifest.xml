@@ -92,28 +92,59 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- msg748/4853: BookVoice в списке «Открыть с помощью» и
-                 «Поделиться». Поимённых типов (msg748) оказалось мало: файловые
+            <!-- msg748/4853/5013: BookVoice в списке «Открыть с помощью»
+                 и «Поделиться».
+
+                 Сначала (msg748) типы были поимённые, но их оказалось мало:
                  менеджеры отдают .fb2 — а нередко и любой файл — как
                  application/octet-stream или вовсе без типа, и нас в списке не
-                 было. Ниже ловим ЛЮБОЙ тип и любые локальные схемы (content://
-                 из SAF и своего провайдера, file:// у старых проводников,
-                 android.resource://), а отбор по расширению делает само
-                 приложение (LibraryActivity.onBookPicked): чужой файл оно не
-                 откроет, зато честно скажет, что формат не тот. -->
+                 было. Тогда (msg4853) мы объявили ЛЮБОЙ тип — и тут же
+                 всплыла обратная сторона (msg5013): читалка предлагала себя
+                 для фотографий, музыки и всего подряд.
+
+                 Почему поимённый список ничего не теряет. Система сравнивает
+                 типы так: знающий своё дело менеджер просит конкретный тип
+                 (например image/jpeg) — и такой запрос ловит только фильтр с
+                 этим типом. А менеджер, который типа не знает, просит «*/*» —
+                 и вот такой запрос совпадает с ЛЮБЫМ фильтром, хоть с самым
+                 узким. Значит, объявив свои типы, мы по-прежнему получаем и
+                 «неизвестные» книги, но перестаём получать картинки, музыку,
+                 видео и чужие документы с известным типом.
+
+                 Ловим только те типы, которые читаем (BookParser): epub, fb2,
+                 pdf, txt, xml, zip (в нём epub), плюс octet-stream — под него
+                 попадают книги от нерадивых проводников, и плюс application/xml
+                 (fb2 нередко отдают им). Схемы — локальные: content:// из SAF и
+                 своего провайдера, file:// у старых проводников,
+                 android.resource://. Отбор по расширению по-прежнему делает
+                 само приложение (LibraryActivity.onBookPicked): файл не-книги
+                 оно не откроет, зато честно скажет, что формат не тот.
+
+                 Доступа это не отнимает: книгу всегда можно открыть из самой
+                 читалки — «⋮» → «Открыть файл». -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="*/*" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/x-fictionbook+xml" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="text/xml" />
+                <data android:mimeType="application/xml" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/octet-stream" />
                 <data android:scheme="content" />
                 <data android:scheme="file" />
                 <data android:scheme="android.resource" />
             </intent-filter>
 
             <!-- Второй фильтр — на случай интента БЕЗ типа вовсе (часть
-                 менеджеров кладёт тип только в extra): фильтр без mimeType тип
-                 не ограничивает, поэтому такая ссылка тоже доходит. -->
+                 менеджеров кладёт тип только в extra): фильтр, не объявивший
+                 ни одного типа, с типизированным интентом не совпадает, зато
+                 ловит интенты без типа. Это единственный оставшийся «широкий»
+                 вход, и он остаётся нарочно (msg5013): без него книга от
+                 менеджера, который тип не проставил, не открылась бы вовсе. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.SEND" />
