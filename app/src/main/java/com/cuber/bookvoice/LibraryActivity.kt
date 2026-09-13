@@ -1137,12 +1137,58 @@ class LibraryActivity(private val act: SectionActivity) {
             )
             return
         }
-        try {
-            contentResolver.takePersistableUriPermission(
-                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        } catch (_: Exception) {
+        // msg4853/4865: ссылка из чужого приложения живёт не вечно. У SAF-документа
+        // можно взять долгое разрешение — тогда книга так и живёт ссылкой. У
+        // проводников вроде MixPlorer разрешение временное (до перезапуска
+        // приложения): книга откроется сейчас, а завтра «в библиотеке» уже нет
+        // файла. Такой файл забираем к себе копией — открываем уже её.
+        if (tryPersist(uri) || uri.scheme == "file") {
+            addAndOpen(uri, name)
+            return
         }
+        toast(getString(R.string.external_copying))
+        Thread {
+            val copy = copyExternal(uri, name)
+            act.runOnUiThread {
+                if (copy == null) toast(getString(R.string.external_copy_failed))
+                else addAndOpen(copy.first, copy.second)
+            }
+        }.start()
+    }
+
+    /** Попросить у системы долгое разрешение на ссылку. Не дали (провайдер таких
+     *  разрешений не выдаёт) — false: файл придётся забирать копией. */
+    private fun tryPersist(uri: Uri): Boolean = try {
+        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        true
+    } catch (_: Exception) {
+        false
+    }
+
+    /** Копия файла, пришедшего снаружи, во внутреннюю папку приложения: возвращает
+     *  ссылку на копию и её имя, либо null. Имя чистим — в чужом имени бывают
+     *  слэши и прочие символы, недопустимые в имени файла. */
+    private fun copyExternal(uri: Uri, name: String): Pair<Uri, String>? = try {
+        val dir = File(act.filesDir, "books").apply { mkdirs() }
+        val clean = name.replace(Regex("""[\\/:*?"<>|]"""), "_").take(120)
+        var file = File(dir, clean)
+        var n = 1
+        while (file.exists()) {
+            file = File(dir, "$n-$clean")
+            n++
+        }
+        contentResolver.openInputStream(uri)?.use { input ->
+            file.outputStream().use { out -> input.copyTo(out) }
+        } ?: throw IllegalStateException("провайдер не дал файл")
+        Diag.log(act, "lib", "файл снаружи забран копией: ${file.name} (${file.length()} Б)")
+        Uri.fromFile(file) to file.name
+    } catch (e: Exception) {
+        Diag.log(act, "lib", "не смог забрать файл снаружи: ${e.message}")
+        null
+    }
+
+    /** Книга снаружи: в библиотеку и в читалку — общий путь для ссылки и копии. */
+    private fun addAndOpen(uri: Uri, name: String) {
         val u = uri.toString()
         val existing = BookStore.byUri(act, u)
         if (existing != null) {
