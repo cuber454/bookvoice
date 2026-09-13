@@ -156,8 +156,10 @@ class LibraryActivity(private val act: SectionActivity) {
         binding.btnCatalogs.setOnClickListener {
             startActivity(Intent(act, CatalogWindowActivity::class.java))
         }
-        // msg2723/2730: долгое нажатие «Каталоги» — открыть окно сразу в голосовом
-        // поиске (микрофон). Каталог сам решит, когда лента готова искать.
+        // msg2723/2730, msg4917: долгое нажатие «Каталоги» — открыть окно сразу
+        // с панелью поиска (раньше — с включённым микрофоном: он стартовал поверх
+        // речи экранного диктора и ловил её вместо владельца). Каталог сам откроет
+        // панель, когда лента готова искать; микрофон — кнопкой рядом.
         binding.btnCatalogs.setOnLongClickListener {
             Vibra.confirm(act)
             startActivity(Intent(act, CatalogWindowActivity::class.java)

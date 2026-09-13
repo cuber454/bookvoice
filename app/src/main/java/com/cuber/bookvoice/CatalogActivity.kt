@@ -291,9 +291,9 @@ class CatalogActivity(private val act: SectionActivity) {
         // если уходили на полку из глубины каталога/со страницы книги.
         restorePosition()
         renderTop()
-        // msg2723/2730: долгое нажатие «Каталоги» на полке — старт голосового
-        // поиска, когда верхняя лента готова (или обычное открытие, если искать
-        // негде — в корне «Мои каталоги»).
+        // msg2723/2730, msg4917: долгое нажатие «Каталоги» на полке — открыть
+        // панель поиска, когда верхняя лента готова (или обычное открытие, если
+        // искать негде — в корне «Мои каталоги»). Микрофон сам не включаем.
         transitFromShelf = intent?.getBooleanExtra(EXTRA_VOICE_SEARCH, false) == true
         pendingVoiceSearch = transitFromShelf
         if (pendingVoiceSearch) binding.root.post { maybeVoiceSearchAfterEntry() }
@@ -516,7 +516,7 @@ class CatalogActivity(private val act: SectionActivity) {
             // каталога; старт возьмёт на себя fetchFirst (лента всё ещё верхняя).
             if (s == null || !s.loadedOnce) return
             pendingVoiceSearch = false
-            if (s.searchTemplate != null) delayedVoiceSearch(s)
+            if (s.searchTemplate != null) delayedSearchPanel(s)
             return
         }
         if (cur == null) {
@@ -534,11 +534,18 @@ class CatalogActivity(private val act: SectionActivity) {
         pendingVoiceSearch = false
     }
 
-    /** Старт голосового поиска с короткой задержкой (после озвучки ленты), только
-     *  если лента [s] всё ещё верхняя — за задержку пользователь мог уйти «назад». */
-    private fun delayedVoiceSearch(s: FeedSession) {
+    /** Открыть панель поиска с короткой задержкой (после озвучки ленты), только
+     *  если лента [s] всё ещё верхняя — за задержку пользователь мог уйти «назад».
+     *
+     *  msg4917: раньше здесь стартовал микрофон — и попадал в речь экранного
+     *  диктора, который в этот момент читал только что открытый экран. Лог
+     *  Сергея: «микрофон слушает» через 0,7 с после ленты, «услышал: того» —
+     *  слово из прочитанного объявления, а не его фраза. Теперь авто-старт
+     *  открывает обычную панель поиска (как нажатие 🔍), а микрофон включается
+     *  кнопкой рядом — когда владелец сам готов говорить. */
+    private fun delayedSearchPanel(s: FeedSession) {
         binding.root.postDelayed({
-            if (currentFeedSession() === s) startVoiceSearch(s)
+            if (currentFeedSession() === s) openSearchPanel(focusField = true)
         }, 500)
     }
 
@@ -1016,11 +1023,11 @@ class CatalogActivity(private val act: SectionActivity) {
                         announceFeed(s)
                         focusFeedFirst()
                         // msg2723/2730: окно открыли долгим нажатием «Каталоги» — ждали
-                        // именно эту ленту. Она всё ещё верхняя и поисковая — стартуем
-                        // голосовой поиск сами.
+                        // именно эту ленту. Она всё ещё верхняя и поисковая — открываем
+                        // панель поиска сами (msg4917: раньше стартовал микрофон).
                         if (pendingVoiceSearch) {
                             pendingVoiceSearch = false
-                            if (s.searchTemplate != null) delayedVoiceSearch(s)
+                            if (s.searchTemplate != null) delayedSearchPanel(s)
                         }
                     }
                 }.onFailure { e ->
