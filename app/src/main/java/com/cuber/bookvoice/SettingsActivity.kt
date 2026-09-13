@@ -800,9 +800,8 @@ class SettingsActivity(private val act: SectionActivity) {
 
     /** msg4895: сколько занял разобранный текст и его очистка. */
     private fun showCacheDialog() {
-        val used = sizeText(BookCache.usedBytes(act))
         MaterialAlertDialogBuilder(act)
-            .setTitle(getString(R.string.cache_title) + ": " + used)
+            .setTitle(cacheText())
             .setMessage(getString(R.string.cache_clear_hint, BookCache.count(act)))
             .setPositiveButton(R.string.cache_clear) { _, _ ->
                 BookCache.clearAll(act)
@@ -817,6 +816,15 @@ class SettingsActivity(private val act: SectionActivity) {
         val mb = bytes / (1024L * 1024L)
         return if (mb >= 1) getString(R.string.cache_mb, mb) else getString(R.string.cache_less_mb)
     }
+
+    /** msg5065: «Кэш: всего 300 МБ, занято 1 МБ». Одна формулировка на строку и
+     *  на заголовок окна очистки — иначе они разъедутся при первой же правке слов. */
+    private fun cacheText(): String = getString(
+        R.string.cache_row,
+        getString(R.string.cache_title),
+        sizeText(BookCache.budgetBytes()),
+        sizeText(BookCache.usedBytes(act)),
+    )
 
     private fun buildDiagGroup() {
         updateModeRow = addValueButton { pickUpdateMode() }
@@ -1067,12 +1075,7 @@ class SettingsActivity(private val act: SectionActivity) {
         backupAutoRow?.text = getString(R.string.backup_auto_title) + ": " + backupAutoLabel()
         updateModeRow?.text = getString(R.string.update_mode_title) + ": " + updateModeLabel()
 
-        cacheRow?.text = getString(
-            R.string.cache_row,
-            getString(R.string.cache_title),
-            sizeText(BookCache.usedBytes(act)),
-            sizeText(BookCache.budgetBytes()),
-        )
+        cacheRow?.text = cacheText()
 
     }
 
