@@ -42,6 +42,9 @@ class SleepTimerSettingsActivity : RowsActivity() {
     /** Раскрыто ли объяснение «Как это работает». */
     private var howOpen = false
 
+    /** Текст раскрытого объяснения — чтобы убрать его при сворачивании. */
+    private var howText: TextView? = null
+
     override fun buildSection(intent: Intent?) {
         setTitle(getString(R.string.sleep_settings_title))
         binding = ActivitySleepBinding.inflate(layoutInflater)
@@ -128,6 +131,7 @@ class SleepTimerSettingsActivity : RowsActivity() {
     private fun buildContent() {
         contentRoot.removeAllViews()
         resultRow = null
+        howText = null
 
         addHint(getString(R.string.sleep_settings_intro))
 
@@ -234,7 +238,7 @@ class SleepTimerSettingsActivity : RowsActivity() {
             ),
             tag = TAG_HOW,
         ) { toggleHow() }
-        if (howOpen) addHint(getString(R.string.sleep_how_text))
+        if (howOpen) howText = addHint(getString(R.string.sleep_how_text))
     }
 
     /** Пересобрать содержимое и вернуть фокус на строку [tag]: строка пересоздана,
@@ -259,6 +263,11 @@ class SleepTimerSettingsActivity : RowsActivity() {
     }
 
     // ---------------- Правка значений ----------------
+    //
+    // Строки-значения правятся НА МЕСТЕ ([updateRow]), а не пересборкой окна:
+    // пересборка убивала строку под курсором, и новое значение не звучало
+    // (msg5005). Для галочек пересборка остаётся — флажок объявляет своё
+    // состояние сам.
 
     private fun cycleExtend() {
         val list = SleepTimerPrefs.EXTEND_CHOICES
@@ -266,30 +275,64 @@ class SleepTimerSettingsActivity : RowsActivity() {
         val next = list[(list.indexOf(cur) + 1) % list.size]
         SleepTimerPrefs.prefs(this).edit().putInt(SleepTimerPrefs.KEY_EXTEND, next).apply()
         Diag.log(this, "sleep", "настройки таймера: продление $next минут")
-        rebuild(TAG_EXTEND)
+        rowWithTag(TAG_EXTEND)?.let {
+            updateRow(
+                it,
+                getString(R.string.sleep_extend_title, getString(R.string.sleep_min, next)),
+                getString(R.string.sleep_extend_hint),
+            )
+        }
     }
 
     private fun cycleSense() {
         val next = (SleepTimerPrefs.sense(this) + 1) % 3
         SleepTimerPrefs.prefs(this).edit().putInt(SleepTimerPrefs.KEY_SENSE, next).apply()
         Diag.log(this, "sleep", "настройки таймера: чувствительность $next")
-        rebuild(TAG_SENSE)
+        rowWithTag(TAG_SENSE)?.let {
+            updateRow(
+                it,
+                getString(R.string.sleep_sense_title, getString(senseWord())),
+                getString(R.string.sleep_sense_hint),
+            )
+        }
     }
 
     private fun cycleVibra() {
         val next = (SleepTimerPrefs.vibraLevel(this) + 1) % 3
         SleepTimerPrefs.prefs(this).edit().putInt(SleepTimerPrefs.KEY_VIBRA, next).apply()
         Diag.log(this, "sleep", "настройки таймера: сила вибрации $next")
-        // Сразу даём послушать выбранную силу: подбирать её на слух удобнее,
-        // чем по названию ступени (та же логика, что у «Прослушать» для голоса).
+        // Сначала даём почувствовать выбранную силу, следом называем её вслух:
+        // вибрация мгновенная, а голос только начинает говорить — так «сильная»
+        // ложится на само ощущение, а не приходит после паузы.
         ReaderEngine.sleepTestVibra()
-        rebuild(TAG_VIBRA)
+        rowWithTag(TAG_VIBRA)?.let {
+            updateRow(
+                it,
+                getString(R.string.sleep_vibra_title, getString(vibraWord())),
+                getString(R.string.sleep_vibra_hint),
+            )
+        }
     }
 
+    /** Раскрыть/свернуть объяснение. Строку правим на месте (та же причина, что
+     *  у строк-значений, msg5005), а текст объяснения добавляем и убираем —
+     *  он лежит ПОСЛЕ строки, поэтому обычная вставка в конец её не сдвигает. */
     private fun toggleHow() {
         howOpen = !howOpen
         Diag.log(this, "sleep", "настройки таймера: объяснение ${if (howOpen) "раскрыто" else "свёрнуто"}")
-        rebuild(TAG_HOW)
+        rowWithTag(TAG_HOW)?.let {
+            updateRow(
+                it,
+                getString(if (howOpen) R.string.sleep_how_title_open else R.string.sleep_how_title),
+                getString(if (howOpen) R.string.sleep_how_hint_open else R.string.sleep_how_hint),
+            )
+        }
+        if (howOpen) {
+            howText = addHint(getString(R.string.sleep_how_text))
+        } else {
+            howText?.let { contentRoot.removeView(it) }
+            howText = null
+        }
     }
 
     // ---------------- Проверки ----------------

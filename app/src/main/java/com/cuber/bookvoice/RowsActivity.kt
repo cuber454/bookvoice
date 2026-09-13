@@ -34,7 +34,7 @@ abstract class RowsActivity : SectionActivity() {
 
     /** Подсказка-пояснение: обычный текст без роли кнопки — скринридер читает его
      *  целиком, когда фокус встаёт на строку. */
-    protected fun addHint(text: String) {
+    protected fun addHint(text: String): TextView {
         val tv = TextView(this).apply {
             this.text = text
             textSize = 15f
@@ -43,6 +43,7 @@ abstract class RowsActivity : SectionActivity() {
             setPadding(dp(4), dp(2), dp(4), dp(10))
         }
         contentRoot.addView(tv)
+        return tv
     }
 
     /** Строка экрана: название, второй строкой — подсказка или состояние. Как
@@ -133,6 +134,23 @@ abstract class RowsActivity : SectionActivity() {
     protected fun focusTag(tag: String) {
         val v = contentRoot.findViewWithTag<View>(tag) ?: return
         TabNav.a11yFocus(v)
+    }
+
+    /** Строка с меткой [tag] — null, если её сейчас в окне нет. */
+    protected fun rowWithTag(tag: String): TextView? = contentRoot.findViewWithTag(tag)
+
+    /** Сменить текст строки НА МЕСТЕ и сказать новое значение словами.
+     *
+     *  Почему не пересборкой содержимого (msg5005). Строка, на которой стоит
+     *  человек, при `removeAllViews` умирает; перенос фокуса на только что
+     *  добавленный View ридер пропускает — у того ещё нет размеров. В итоге
+     *  новое значение не звучит, пока строку не тронешь заново: надпись сменилась
+     *  на «сильная», а голос промолчал. Обновление на месте оставляет и строку,
+     *  и курсор живыми, а значение проговариваем сами — тем же приёмом, что
+     *  скорость и позиция в читалке ([View.announceForAccessibility]). */
+    protected fun updateRow(row: TextView, title: String, hint: String?) {
+        row.text = withHint(title, hint)
+        row.announceForAccessibility(title)
     }
 
     /** Строка с подсказкой второй строкой: название обычным, пояснение — мельче и
