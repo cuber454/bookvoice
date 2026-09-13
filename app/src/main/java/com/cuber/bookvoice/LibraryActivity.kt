@@ -1125,9 +1125,16 @@ class LibraryActivity(private val act: SectionActivity) {
     // ---------------- Открытие книги ----------------
 
     private fun onBookPicked(uri: Uri) {
-        val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: "book"
+        val name = externalBookName(uri)
         if (!supportedFileName(name)) {
-            toast(getString(R.string.unsupported_format))
+            // msg4853: про форматы, которые мы осознанно не читаем (mobi/rtf/
+            // doc…), говорим правду — иначе «формат не поддерживается» звучит
+            // как «файл битый», хотя он целый, просто не для нас.
+            val bad = unreadableExt(name)
+            toast(
+                if (bad != null) getString(R.string.open_format_unreadable, bad.uppercase(Locale.ROOT))
+                else getString(R.string.unsupported_format)
+            )
             return
         }
         try {
@@ -1208,6 +1215,40 @@ class LibraryActivity(private val act: SectionActivity) {
         } catch (_: Exception) {
             null
         }
+
+    /** msg4853: имя файла, пришедшего от чужого приложения (msg4853). Беда в
+     *  том, что имени с расширением может не быть вовсе: провайдер отдаёт
+     *  content://…/document/1234, а расширение живёт только в mime-типе. Тогда
+     *  достраиваем его по типу — иначе книга отсекалась бы как «неизвестный
+     *  формат», хотя открылась бы. Читалка определяет формат по расширению
+     *  имени (BookParser.parse), поэтому имя с типом — рабочий ключ. */
+    private fun externalBookName(uri: Uri): String {
+        val raw = queryDisplayName(uri) ?: uri.lastPathSegment ?: "book"
+        if (supportedFileName(raw)) return raw
+        val mime: String? = try {
+            contentResolver.getType(uri)
+        } catch (_: Exception) {
+            null
+        }
+        if (mime == null) return raw
+        val ext = when {
+            mime.contains("epub") -> ".epub"
+            mime.contains("pdf") -> ".pdf"
+            mime.contains("fb2") || mime.contains("fictionbook") -> ".fb2"
+            mime.contains("zip") -> ".zip"
+            mime.contains("xml") -> ".xml"
+            mime.contains("text/plain") -> ".txt"
+            else -> null
+        } ?: return raw
+        return raw + ext
+    }
+
+    /** Расширение из списка «BookVoice это не читает» — чтобы сказать про файл
+     *  правду вместо общего «формат не поддерживается» (msg4665/4853). */
+    private fun unreadableExt(name: String): String? {
+        val lower = name.lowercase(Locale.ROOT)
+        return MainActivity.UNREADABLE_EXTS.firstOrNull { lower.endsWith(".$it") }
+    }
 
     private fun toast(msg: String) = Toast.makeText(act, msg, Toast.LENGTH_LONG).show()
 

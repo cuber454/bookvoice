@@ -3211,8 +3211,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
         /** msg4665: расширения, которые BookVoice прочитать не может, но которые
          *  книга может получить из сетевой библиотеки (mobi/rtf/html/doc, а
-         *  также .rar — это PDF внутри архива RAR). */
-        private val UNREADABLE_EXTS = listOf("mobi", "rtf", "html", "htm", "doc", "rar", "djvu")
+         *  также .rar — это PDF внутри архива RAR). msg4853: тот же список
+         *  нужен и при открытии файла снаружи — там он говорит правду про
+         *  формат вместо общего «не поддерживается» (LibraryActivity). */
+        internal val UNREADABLE_EXTS = listOf("mobi", "rtf", "html", "htm", "doc", "rar", "djvu")
 
         /** Короткий снимок живой читалки для строки о падении (пишет
          *  BookVoiceApp в diag.log): какая книга открыта, читает ли, скорость.

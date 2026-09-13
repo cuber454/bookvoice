@@ -92,23 +92,34 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- msg748: BookVoice в списке «Открыть с помощью» для читаемых
-                 форматов (PDF, EPUB, TXT, FB2, ZIP-архив с книгой). Типы
-                 объявлены только по mimeType — так фильтр не привязан к схеме
-                 (content:// из SAF и file:// свои оба проходят). Файл дальше
-                 отсекается по расширению в LibraryActivity.handleExternalOpen. -->
+            <!-- msg748/4853: BookVoice в списке «Открыть с помощью» и
+                 «Поделиться». Поимённых типов (msg748) оказалось мало: файловые
+                 менеджеры отдают .fb2 — а нередко и любой файл — как
+                 application/octet-stream или вовсе без типа, и нас в списке не
+                 было. Ниже ловим ЛЮБОЙ тип и любые локальные схемы (content://
+                 из SAF и своего провайдера, file:// у старых проводников,
+                 android.resource://), а отбор по расширению делает само
+                 приложение (LibraryActivity.onBookPicked): чужой файл оно не
+                 откроет, зато честно скажет, что формат не тот. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/pdf" />
-                <data android:mimeType="application/epub+zip" />
-                <data android:mimeType="application/x-fictionbook+xml" />
-                <data android:mimeType="application/xml" />
-                <data android:mimeType="text/xml" />
-                <data android:mimeType="text/plain" />
-                <data android:mimeType="application/zip" />
-                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="*/*" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:scheme="android.resource" />
+            </intent-filter>
+
+            <!-- Второй фильтр — на случай интента БЕЗ типа вовсе (часть
+                 менеджеров кладёт тип только в extra): фильтр без mimeType тип
+                 не ограничивает, поэтому такая ссылка тоже доходит. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
             </intent-filter>
         </activity>
 
