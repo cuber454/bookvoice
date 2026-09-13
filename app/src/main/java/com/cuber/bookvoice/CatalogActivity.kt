@@ -1418,7 +1418,15 @@ class CatalogActivity(private val act: SectionActivity) {
             } else {
                 val primary = Button(act).apply {
                     text = getString(R.string.catalog_dl_with_fmt, fmtLabel)
-                    contentDescription = getString(R.string.catalog_dl_primary_cd)
+                    // msg5161: форматов несколько — в озвучке называем и формат,
+                    // и долгое нажатие. Молчать про него нельзя: выбор есть, а
+                    // узнать о нём незрячему неоткуда (в списке книг подсказка
+                    // про долгий тап была, на странице книги — нет).
+                    contentDescription = if (b.downloads.size > 1) {
+                        getString(R.string.catalog_dl_primary_cd_many, fmtLabel)
+                    } else {
+                        getString(R.string.catalog_dl_primary_cd)
+                    }
                     textSize = 17f
                     gravity = Gravity.START or Gravity.CENTER_VERTICAL
                     setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -1432,6 +1440,15 @@ class CatalogActivity(private val act: SectionActivity) {
                             toast(getString(R.string.catalog_no_fmt, fmtLabel, avail))
                             showFormatDialog(b, getString(R.string.catalog_pick_fmt_dialog))
                         }
+                    }
+                    // msg5161: долгий тап — все форматы, какие есть у книги на
+                    // сайте, чтобы выбрать руками. Короткий тап остаётся прежним
+                    // (формат из настроек), поэтому жест ничего не ломает: кто
+                    // привык скачивать в один тап, скачивает так же.
+                    setOnLongClickListener {
+                        vibrate(70)
+                        showFormatDialog(b, getString(R.string.catalog_pick_fmt_dialog))
+                        true
                     }
                 }
                 content().addView(primary, lp().apply { topMargin = dp(2); bottomMargin = dp(2) })
