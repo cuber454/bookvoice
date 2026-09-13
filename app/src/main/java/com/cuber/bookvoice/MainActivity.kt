@@ -3191,7 +3191,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
          *  также .rar — это PDF внутри архива RAR). msg4853: тот же список
          *  нужен и при открытии файла снаружи — там он говорит правду про
          *  формат вместо общего «не поддерживается» (LibraryActivity). */
-        internal val UNREADABLE_EXTS = listOf("mobi", "rtf", "html", "htm", "doc", "rar", "djvu")
+        internal val UNREADABLE_EXTS = listOf("mobi", "rtf", "doc", "rar", "djvu")
 
         /** Короткий снимок живой читалки для строки о падении (пишет
          *  BookVoiceApp в diag.log): какая книга открыта, читает ли, скорость.

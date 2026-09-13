@@ -112,9 +112,10 @@
                  видео и чужие документы с известным типом.
 
                  Ловим только те типы, которые читаем (BookParser): epub, fb2,
-                 pdf, txt, xml, zip (в нём epub), плюс octet-stream — под него
-                 попадают книги от нерадивых проводников, и плюс application/xml
-                 (fb2 нередко отдают им). Схемы — локальные: content:// из SAF и
+                 pdf, txt, xml, zip (в нём epub), docx, odt, html, плюс
+                 octet-stream — под него попадают книги от нерадивых
+                 проводников, и плюс application/xml (fb2 нередко отдают им).
+                 Схемы — локальные: content:// из SAF и
                  своего провайдера, file:// у старых проводников,
                  android.resource://. Отбор по расширению по-прежнему делает
                  само приложение (LibraryActivity.onBookPicked): файл не-книги
@@ -133,6 +134,10 @@
                 <data android:mimeType="text/xml" />
                 <data android:mimeType="application/xml" />
                 <data android:mimeType="application/zip" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="application/vnd.oasis.opendocument.text" />
+                <data android:mimeType="text/html" />
+                <data android:mimeType="application/xhtml+xml" />
                 <data android:mimeType="application/octet-stream" />
                 <data android:scheme="content" />
                 <data android:scheme="file" />

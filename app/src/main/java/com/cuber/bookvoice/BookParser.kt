@@ -12,13 +12,33 @@ import java.util.zip.ZipInputStream
 
 /**
  * Разбор книги из байтов по имени файла. Поддерживает FB2, TXT, ZIP
- * (внутри ищет первую книгу .fb2/.txt/.epub), EPUB и PDF (текстовый слой).
+ * (внутри ищет первую книгу .fb2/.txt/.epub), EPUB, PDF (текстовый слой),
+ * DOCX/ODT (Word и OpenDocument, см. [OfficeParser]) и HTML.
  */
 object BookParser {
 
     fun parse(fileName: String, data: ByteArray): BookDocument? {
         if (data.isEmpty()) return null
         val lower = fileName.lowercase(Locale.ROOT)
+        // DOCX и ODT — ТОЖЕ zip, и раскладка у них другая. Проверяем их по
+        // расширению ДО общей zip-ветки: иначе epub-парсер не найдёт у них
+        // META-INF/container.xml, отвалится в parseZip, тот возьмёт первую
+        // запись архива ([Content_Types].xml), прочитает её как «текст» — и
+        // книга откроется мусором вместо «формат не читается». Не вышло
+        // разобрать как office-файл (битая подпись, чужое расширение) —
+        // падаем в обычный zip, как раньше.
+        if (lower.endsWith(".docx")) {
+            return tryParse { OfficeParser.parseDocx(data) } ?: tryParse { parseZip(data) }
+        }
+        if (lower.endsWith(".odt")) {
+            return tryParse { OfficeParser.parseOdt(data) } ?: tryParse { parseZip(data) }
+        }
+        // HTML читается как есть: текст в файле готов, снимаем разметку.
+        // (.xhtml здесь — САМОСТОЯТЕЛЬНЫЙ файл; главы внутри EPUB идут другим
+        // путём, через parseEpub, и сюда не попадают.)
+        if (lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml")) {
+            return tryParse { HtmlParser.parse(data) }
+        }
         // EPUB — тоже zip; пробуем сначала его (быстро отвалится, если внутри
         // архива нет META-INF/container.xml), иначе ищем fb2/txt как раньше.
         if (isZip(data)) return tryParse { parseEpub(data) ?: parseZip(data) }
@@ -35,7 +55,7 @@ object BookParser {
         }
     }
 
-    private fun isZip(data: ByteArray): Boolean =
+    internal fun isZip(data: ByteArray): Boolean =
         data.size >= 4 && data[0] == 'P'.code.toByte() &&
             data[1] == 'K'.code.toByte() &&
             (data[2] == 3.toByte() || data[2] == 5.toByte() || data[2] == 7.toByte())
@@ -54,10 +74,18 @@ object BookParser {
      *  для полки и окна «Информация о книге». */
     fun peekMeta(fileName: String, data: ByteArray): BookMeta? {
         if (data.isEmpty()) return null
+        val lower = fileName.lowercase(Locale.ROOT)
+        // DOCX/ODT — тоже zip, но их опись лежит в своём месте. Разбираем по
+        // расширению раньше общей zip-ветки: та назвала бы книгу по имени
+        // внутренней записи ([Content_Types].xml) — на полке вышло бы «файл».
+        if (lower.endsWith(".docx")) return tryParse { OfficeParser.peekDocx(data) } ?: zipMeta(data)
+        if (lower.endsWith(".odt")) return tryParse { OfficeParser.peekOdt(data) } ?: zipMeta(data)
+        if (lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml")) {
+            return tryParse { HtmlParser.peek(data) }
+        }
         // EPUB-метаданные проверяем первыми: иначе zipMeta принял бы
         // META-INF/container.xml за книгу и назвал бы её «container».
         if (isZip(data)) return epubPeekMeta(data) ?: zipMeta(data)
-        val lower = fileName.lowercase(Locale.ROOT)
         return when {
             lower.endsWith(".fb2") || lower.endsWith(".xml") ->
                 metaFromText(data.copyOfRange(0, minOf(data.size, META_PREFIX)))
@@ -140,7 +168,7 @@ object BookParser {
         return BookMeta(title, author, ann)
     }
 
-    private fun unescape(s: String): String = s
+    internal fun unescape(s: String): String = s
         .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
         .replace("&quot;", "\"").replace("&apos;", "'")
         .replace("&nbsp;", " ")
@@ -176,7 +204,7 @@ object BookParser {
 
     private const val META_PREFIX = 256 * 1024
 
-    private inline fun <T> tryParse(block: () -> T?): T? = try {
+    internal inline fun <T> tryParse(block: () -> T?): T? = try {
         block()
     } catch (_: Exception) {
         null
@@ -370,7 +398,7 @@ object BookParser {
         Regex("full-path\\s*=\\s*\"([^\"]+)\"").find(decodeText(container))?.groupValues?.get(1)
 
     /** Нормализация пути внутри zip: без "./" и "../", всё в нижний регистр. */
-    private fun normName(path: String): String {
+    internal fun normName(path: String): String {
         val stack = ArrayList<String>()
         for (seg in path.replace('\\', '/').split('/')) {
             when {
@@ -383,7 +411,7 @@ object BookParser {
     }
 
     /** Значение атрибута из строки XML-тега (в двойных или одинарных кавычках). */
-    private fun attr(tag: String, name: String): String? {
+    internal fun attr(tag: String, name: String): String? {
         Regex("\\b" + name + "\\s*=\\s*\"([^\"]*)\"", RegexOption.IGNORE_CASE)
             .find(tag)?.let { return it.groupValues[1] }
         return Regex("\\b" + name + "\\s*=\\s*'([^']*)'", RegexOption.IGNORE_CASE)
@@ -405,7 +433,7 @@ object BookParser {
     // ---- XHTML главы -> абзацы ----
 
     /** Блочные теги XHTML — граница абзаца. */
-    private val blockTagNames = setOf(
+    internal val blockTagNames = setOf(
         "p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote",
         "pre", "section", "article", "aside", "header", "footer", "figure",
         "table", "tr", "td", "th", "ul", "ol", "dl", "dt", "dd", "hr",
@@ -413,7 +441,7 @@ object BookParser {
     )
 
     /** Выкинуть из страницы то, что не несёт текста книги: скрипты, стили, шапку. */
-    private fun stripNoise(html: String): String {
+    internal fun stripNoise(html: String): String {
         var s = html
         for (tag in arrayOf("script", "style", "head", "svg", "math", "object", "embed")) {
             s = Regex("(?s)<" + tag + "\\b.*?</" + tag + "\\s*>", RegexOption.IGNORE_CASE)
@@ -423,7 +451,7 @@ object BookParser {
     }
 
     /** XHTML -> абзацы: блочные теги и <br> начинают новый абзац, разметка выкинута. */
-    private fun xhtmlParagraphs(html: String): List<String> {
+    internal fun xhtmlParagraphs(html: String): List<String> {
         val paragraphs = ArrayList<String>()
         val cur = StringBuilder()
         val n = html.length
@@ -466,7 +494,7 @@ object BookParser {
     }
 
     /** Первая рубрика h1-h6 страницы — запасное название главы. */
-    private fun firstHeading(html: String): String? {
+    internal fun firstHeading(html: String): String? {
         val re = Regex(
             "<h[1-6][^>]*>(.*?)</h[1-6]>",
             setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
@@ -476,7 +504,7 @@ object BookParser {
         }
     }
 
-    private fun stripTags(s: String): String = s.replace(Regex("<[^>]*>"), " ")
+    internal fun stripTags(s: String): String = s.replace(Regex("<[^>]*>"), " ")
 
     // ---------------- FB2 ----------------
 
@@ -710,30 +738,108 @@ object BookParser {
      *  слух никто не дойдёт). Метку `[1K1]` из речи убираем, только если заметка
      *  нашлась: битая ссылка остаётся в тексте как есть, ни слова не теряем. */
     private fun fb2Sentences(sec: Fb2Sec, notes: Map<String, String>): List<Sentence> {
-        val res = ArrayList<Sentence>()
+        val paras = ArrayList<NoteParagraph>()
         for ((i, para) in sec.own.withIndex()) {
             val refs = sec.refs.getOrNull(i).orEmpty()
+            // Заметку читаем, только если она нашлась: битая ссылка остаётся в
+            // тексте как есть, ни слова не теряем.
             val found = refs.filter { notes.containsKey(it.id) }
-            val text = if (found.isEmpty()) para else fb2WithoutMarks(para, found)
+            paras.add(NoteParagraph(
+                text = para,
+                marks = found.map { it.mark },
+                notes = found.mapNotNull { notes[it.id] },
+            ))
+        }
+        return noteSentences(paras)
+    }
+
+    // ---------------- Сноски: общий механизм на все форматы ----------------
+    //
+    // Правило одно и то же для FB2, DOCX, ODT и HTML (msg4789, msg5025):
+    // заметка читается сразу за тем абзацем, где стоит ссылка на неё, со
+    // словом-подсказкой [NOTE_CUE] впереди. Метка ссылки из речи убирается —
+    // но только если заметка нашлась.
+
+    /** Абзац книги вместе со сносками, которые в нём стоят.
+     *  [marks] — метки ссылок, как они стоят в тексте (цифра, звёздочка); их
+     *  вырезаем. Пустой список — метки в тексте нет вовсе: DOCX и ODT номер
+     *  сноски в текст не пишут, разметка хранит только «здесь сноска».
+     *  [notes] — тексты НАЙДЕННЫХ заметок, по одной на метку. */
+    internal class NoteParagraph(
+        val text: String,
+        val marks: List<String> = emptyList(),
+        val notes: List<String> = emptyList(),
+    )
+
+    /** Абзацы со сносками → предложения книги. */
+    internal fun noteSentences(paras: List<NoteParagraph>): List<Sentence> {
+        val res = ArrayList<Sentence>()
+        for (p in paras) {
+            val text = if (p.notes.isEmpty()) p.text else withoutMarks(p.text, p.marks)
             res.addAll(TextSplit.fromParagraphs(listOf(text)))
-            for (ref in found) {
-                val note = notes[ref.id] ?: continue
-                res.addAll(TextSplit.fromParagraphs(listOf("$FB2_NOTE_CUE$note")))
+            for (note in p.notes) {
+                res.addAll(TextSplit.fromParagraphs(listOf("$NOTE_CUE$note")))
             }
         }
         return res
     }
 
+    /** Абзац готового текста — то, что отдают «офисные» парсеры и HTML: сам
+     *  текст, сноски в нём и, если абзац оказался заголовком, его название. */
+    internal class BlockParagraph(
+        val text: String,
+        val title: String? = null,
+        val notes: List<String> = emptyList(),
+    )
+
+    /** Абзацы → главы: абзац-заголовок открывает новую главу (своим текстом он
+     *  в чтение не идёт — он и есть название). Передний неназванный служебный
+     *  текст (титул, выходные данные) срезаем по тому же правилу, что в FB2:
+     *  книга начинается с первой названной главы. Нет ни одного заголовка —
+     *  вся книга одной главой без названия: резать нечем, и терять нечего. */
+    internal fun blocksToChapters(paras: List<BlockParagraph>): List<Chapter> {
+        val chapters = ArrayList<Chapter>()
+        var title: String? = null
+        val cur = ArrayList<NoteParagraph>()
+
+        fun close() {
+            val s = noteSentences(cur)
+            if (s.isNotEmpty()) chapters.add(Chapter(title, s))
+            cur.clear()
+            title = null
+        }
+
+        for (p in paras) {
+            val head = p.title?.takeIf { it.isNotBlank() }
+            if (head != null) {
+                close()
+                title = head
+                continue
+            }
+            if (p.text.isBlank() && p.notes.isEmpty()) continue
+            cur.add(NoteParagraph(p.text, emptyList(), p.notes))
+        }
+        close()
+
+        val firstTitled = chapters.indexOfFirst { it.title != null }
+        if (firstTitled <= 0) return chapters
+        var from = 0
+        while (from < firstTitled && chapters[from].title == null &&
+            wordsIn(chapters[from]) < FRONT_MATTER_MAX_WORDS
+        ) from++
+        return if (from == 0) chapters else ArrayList(chapters.subList(from, chapters.size))
+    }
+
     /** Текст абзаца без найденных меток сносок. Идём по тексту курсором, чтобы
      *  две одинаковые метки в одном абзаце снялись по своим местам. */
-    private fun fb2WithoutMarks(para: String, refs: List<Fb2NoteRef>): String {
+    internal fun withoutMarks(para: String, marks: List<String>): String {
         val sb = StringBuilder(para)
         var from = 0
-        for (ref in refs) {
-            if (ref.mark.isEmpty()) continue
-            val idx = sb.indexOf(ref.mark, from)
+        for (mark in marks) {
+            if (mark.isEmpty()) continue
+            val idx = sb.indexOf(mark, from)
             if (idx < 0) continue
-            sb.delete(idx, idx + ref.mark.length)
+            sb.delete(idx, idx + mark.length)
             from = idx
         }
         // На месте метки остаются лишние пробелы («метку  в тексте») — подчищаем.
@@ -751,8 +857,9 @@ object BookParser {
     private val fb2ParagraphTags = setOf("p", "v", "subtitle", "text-author")
 
     /** Слово-подсказка перед заметкой: без него сноска посреди абзаца звучит как
-     *  продолжение рассказа, и слушатель теряет нить (msg4789). */
-    private const val FB2_NOTE_CUE = "Сноска. "
+     *  продолжение рассказа, и слушатель теряет нить (msg4789). Одно на все
+     *  форматы — сноску в DOCX/ODT/HTML читаем ровно так же, как в FB2 (msg5025). */
+    internal const val NOTE_CUE = "Сноска. "
 
     /** Рекурсивно читает один <section> до его закрытия (включая вложенные). */
     private fun readFb2Section(xp: XmlPullParser): Fb2Sec {
@@ -851,14 +958,19 @@ object BookParser {
         return null
     }
 
+    internal fun wordsOf(text: String): Int =
+        if (text.isBlank()) 0 else text.trim().split(Regex("\\s+")).size
+
     private fun wordsIn(ch: Chapter): Int =
         ch.sentences.sumOf { it.text.split(Regex("\\s+")).size }
 
-    private const val FRONT_MATTER_MAX_WORDS = 30
+    /** Сколько слов в неназванном начале книги терпим, прежде чем считать его
+     *  титулом и служебной обвязкой, а не текстом (см. collectFb2Chapters). */
+    internal const val FRONT_MATTER_MAX_WORDS = 30
 
     // ---------------- Декодирование текста ----------------
 
-    private fun decodeText(data: ByteArray): String {
+    internal fun decodeText(data: ByteArray): String {
         if (data.size >= 3 && data[0] == 0xEF.toByte() && data[1] == 0xBB.toByte() && data[2] == 0xBF.toByte())
             return String(data, 3, data.size - 3, Charsets.UTF_8)
         if (data.size >= 2 && data[0] == 0xFF.toByte() && data[1] == 0xFE.toByte())

@@ -1090,12 +1090,15 @@ class LibraryActivity(private val act: SectionActivity) {
         return added
     }
 
-    /** Название ищем в файле только там, где оно есть: fb2, xml, архив, epub.
-     *  У голого txt метаданных нет — оставляем имя файла. */
+    /** Название ищем в файле только там, где оно есть: fb2, xml, архив, epub,
+     *  а также docx/odt (у них опись в docProps/core.xml и meta.xml) и html
+     *  (тег title). У голого txt метаданных нет — оставляем имя файла. */
     private fun needsBookMeta(name: String): Boolean {
         val lower = name.lowercase(Locale.ROOT)
         return lower.endsWith(".fb2") || lower.endsWith(".xml") ||
-            lower.endsWith(".zip") || lower.endsWith(".epub")
+            lower.endsWith(".zip") || lower.endsWith(".epub") ||
+            lower.endsWith(".docx") || lower.endsWith(".odt") ||
+            lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml")
     }
 
     /** Аннотацию из файла умеем доставать только у FB2-подобных форматов:
@@ -1146,11 +1149,16 @@ class LibraryActivity(private val act: SectionActivity) {
         }
     }
 
+    /** Что читалка умеет открыть. Список обязан совпадать с [BookParser.parse]
+     *  и с типами, объявленными в манифесте (msg5013): если файл пришёл из
+     *  чужого проводника, а расширения тут нет — человек получит отказ на
+     *  ровном месте. */
     private fun supportedFileName(name: String): Boolean {
         val lower = name.lowercase(Locale.ROOT)
         return lower.endsWith(".fb2") || lower.endsWith(".txt") ||
             lower.endsWith(".zip") || lower.endsWith(".xml") || lower.endsWith(".epub") ||
-            lower.endsWith(".pdf")
+            lower.endsWith(".pdf") || lower.endsWith(".docx") || lower.endsWith(".odt") ||
+            lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml")
     }
 
     // ---------------- Открытие книги ----------------
@@ -1312,6 +1320,11 @@ class LibraryActivity(private val act: SectionActivity) {
             mime.contains("epub") -> ".epub"
             mime.contains("pdf") -> ".pdf"
             mime.contains("fb2") || mime.contains("fictionbook") -> ".fb2"
+            mime.contains("wordprocessingml") -> ".docx"
+            mime.contains("opendocument") -> ".odt"
+            // xhtml проверяем раньше xml: его тип тоже кончается на «+xml».
+            mime.contains("xhtml") -> ".xhtml"
+            mime.contains("html") -> ".html"
             mime.contains("zip") -> ".zip"
             mime.contains("xml") -> ".xml"
             mime.contains("text/plain") -> ".txt"
@@ -1444,6 +1457,10 @@ class LibraryActivity(private val act: SectionActivity) {
         name.endsWith(".txt", true) -> "text/plain"
         name.endsWith(".xml", true) -> "text/xml"
         name.endsWith(".zip", true) -> "application/zip"
+        name.endsWith(".docx", true) -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        name.endsWith(".odt", true) -> "application/vnd.oasis.opendocument.text"
+        name.endsWith(".html", true) || name.endsWith(".htm", true) -> "text/html"
+        name.endsWith(".xhtml", true) -> "application/xhtml+xml"
         else -> "application/octet-stream"
     }
 

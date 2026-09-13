@@ -42,11 +42,15 @@ data class OpdsRelated(val label: String, val url: String)
 
 /** Читаемые форматы каталога: ключ (он же хранится в настройке формата) — название.
  *  Из этого списка собирается выбор «формат для скачивания» в настройках, поэтому
- *  нечитаемые форматы (mobi/rtf/html/doc) сюда не входят: по умолчанию качать
+ *  нечитаемые форматы (mobi/rtf/doc) сюда не входят: по умолчанию качать
  *  то, что потом не откроется, — плохая настройка. Скачать их всё равно можно —
- *  они приходят в списке форматов книги (msg4665). */
+ *  они приходят в списке форматов книги (msg4665). docx/odt/html тут с msg5025:
+ *  их читалка теперь разбирает. */
 val OPDS_READABLE_FORMATS =
-    listOf("fb2" to "FB2", "epub" to "EPUB", "txt" to "TXT", "pdf" to "PDF")
+    listOf(
+        "fb2" to "FB2", "epub" to "EPUB", "txt" to "TXT", "pdf" to "PDF",
+        "docx" to "DOCX", "odt" to "ODT", "html" to "HTML",
+    )
 
 fun opdsFormatLabel(key: String): String =
     OPDS_READABLE_FORMATS.firstOrNull { it.first == key }?.second ?: key.uppercase()
@@ -553,12 +557,12 @@ object OpdsParser {
         l.type?.contains("atom+xml") == true
 
     /** Форматы, которые BookVoice умеет читать; порядок = предпочтения списка. */
-    private val READABLE_FORMATS = listOf("fb2", "epub", "txt", "pdf")
+    private val READABLE_FORMATS = listOf("fb2", "epub", "txt", "pdf", "docx", "odt", "html")
 
     /** Форматы flibusta, которые BookVoice читать не умеет (msg4665): скачать
      *  можно, открыть — нет. Идут в списке после читаемых, чтобы первым всегда
      *  стоял тот, который откроется. */
-    private val OTHER_FORMATS = listOf("mobi", "rtf", "html", "doc", "pdfrar")
+    private val OTHER_FORMATS = listOf("mobi", "rtf", "doc", "pdfrar")
 
     /** Ключ формата по MIME acquisition-ссылки, либо null. Порядок проверок
      *  важен: `pdf+rar` содержит и «pdf», и «rar» — это PDF внутри архива RAR,
@@ -572,6 +576,10 @@ object OpdsParser {
         type.contains("epub") -> "epub"
         type.contains("txt") || type.contains("text/plain") -> "txt"
         type.contains("pdf") -> "pdf"
+        // Офисные форматы — до «doc»: слово «wordprocessingml» якорь /doc не
+        // поймал бы, а вот порядок здесь важен для «opendocument» и xml-типов.
+        type.contains("wordprocessingml") -> "docx"
+        type.contains("opendocument") -> "odt"
         type.contains("mobipocket") || type.contains("mobi") -> "mobi"
         type.contains("rtf") -> "rtf"
         type.contains("html") -> "html"
@@ -593,9 +601,11 @@ object OpdsParser {
         "epub" -> "EPUB"
         "txt" -> "TXT"
         "pdf" -> "PDF"
+        "docx" -> "DOCX"
+        "odt" -> "ODT"
+        "html" -> "HTML"
         "mobi" -> "MOBI — не читается"
         "rtf" -> "RTF — не читается"
-        "html" -> "HTML — не читается"
         "doc" -> "DOC — не читается"
         "pdfrar" -> "PDF в RAR — не читается"
         else -> key.uppercase()
