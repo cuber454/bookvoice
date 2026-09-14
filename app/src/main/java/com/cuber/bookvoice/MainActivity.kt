@@ -1397,6 +1397,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         e.putBoolean(KEY_UI_NEXT_SENT, prefs.getBoolean(KEY_UI_SENT, true))
         e.putBoolean(KEY_UI_PREV_CH, prefs.getBoolean(KEY_UI_CHAPTERS, true))
         e.putBoolean(KEY_UI_NEXT_CH, prefs.getBoolean(KEY_UI_CHAPTERS, true))
+        // msg5230: у «главы» на гарнитуре уровень остался в KEY_CH_NAV. Мелкие
+        // значения (предложение/абзац) движок и раньше вёл как обычные главы —
+        // записываем это прямо, чтобы строка настроек показывала то, что человек
+        // действительно слышит, а не выбор, которого у «главы» нет.
+        if (chMode != CH_NAV_MAJOR && chMode != CH_NAV_CHAPTERS && chMode != CH_NAV_ALL) {
+            e.putString(KEY_CH_NAV, CH_NAV_CHAPTERS)
+        }
         e.putBoolean(KEY_BTN_MIGRATED, true)
         e.apply()
     }

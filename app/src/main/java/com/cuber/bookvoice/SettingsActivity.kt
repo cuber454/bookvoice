@@ -87,6 +87,7 @@ class SettingsActivity(private val act: SectionActivity) {
     // Строки-резюме кнопок гарнитуры „назад/вперёд“ (msg2136).
     private var headsetPrevRow: Button? = null
     private var headsetNextRow: Button? = null
+    private var headsetStepRow: Button? = null   // «глава» на гарнитуре (msg5230)
     // msg2527: настройки кнопок гарнитуры собраны в подраздел «Управления» —
     // в списке раздела строка-переход, открывающая отдельный экран.
     private var headsetGroupRow: Button? = null
@@ -580,7 +581,60 @@ class SettingsActivity(private val act: SectionActivity) {
         headsetNextRow = addValueButton {
             pickHeadset(MainActivity.KEY_HS_NEXT)
         }
+        // msg5230: уровень шага «Глава» у кнопок гарнитуры. Раньше это была общая
+        // строка «Кнопки глав шагают» — она исчезла вместе с переездом кнопок
+        // читалки на палитру действий, а движок (ReaderEngine.chapterStopIndexes)
+        // по-прежнему читает ключ CH_NAV. Живёт здесь, рядом с назначением кнопок
+        // гарнитуры: другого потребителя у этого ключа не осталось.
+        headsetStepRow = addValueButton { pickHeadsetStep() }
     }
+
+    /** Уровень «главы» для кнопок гарнитуры: крупные разделы / главы / все
+     *  заголовки — три настоящих уровня, которые движок различает. Значения
+     *  читаются из того же ключа CH_NAV, что и раньше (msg5230). */
+    private fun pickHeadsetStep() {
+        val values = arrayOf(
+            MainActivity.CH_NAV_MAJOR, MainActivity.CH_NAV_CHAPTERS, MainActivity.CH_NAV_ALL,
+        )
+        val cur = values.indexOf(headsetStepValue()).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.headset_step_dialog)
+            .setSingleChoiceItems(
+                arrayOf(
+                    getString(R.string.headset_step_major),
+                    getString(R.string.headset_step_chapters),
+                    getString(R.string.headset_step_all),
+                ),
+                cur,
+            ) { d, which ->
+                prefs.edit().putString(MainActivity.KEY_CH_NAV, values[which]).apply()
+                d.dismiss()
+                refreshRows()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Что сейчас стоит у «главы» гарнитуры. Старые мелкие значения (предложение/
+     *  абзац) движок вёл как обычные главы — показываем их тем же словом, а не
+     *  несуществующим выбором (перенос в MainActivity.migrateReaderButtons их
+     *  заодно и записывает как главы). */
+    private fun headsetStepValue(): String {
+        val cur = prefs.getString(MainActivity.KEY_CH_NAV, MainActivity.CH_NAV_ALL)
+        return when (cur) {
+            MainActivity.CH_NAV_MAJOR -> MainActivity.CH_NAV_MAJOR
+            MainActivity.CH_NAV_CHAPTERS -> MainActivity.CH_NAV_CHAPTERS
+            MainActivity.CH_NAV_ALL -> MainActivity.CH_NAV_ALL
+            else -> MainActivity.CH_NAV_CHAPTERS
+        }
+    }
+
+    /** Название уровня «главы» гарнитуры — для строки-резюме. */
+    private fun headsetStepLabel(): String = getString(when (headsetStepValue()) {
+        MainActivity.CH_NAV_MAJOR -> R.string.headset_step_major
+        MainActivity.CH_NAV_ALL -> R.string.headset_step_all
+        else -> R.string.headset_step_chapters
+    })
 
     /** Диалог выбора шага для одной кнопки гарнитуры. */
     private fun pickHeadset(key: String) {
@@ -1050,6 +1104,7 @@ class SettingsActivity(private val act: SectionActivity) {
             headsetLabel(prefs.getString(MainActivity.KEY_HS_PREV, MainActivity.HS_SENTENCE))
         headsetNextRow?.text = getString(R.string.headset_next_title) + ": " +
             headsetLabel(prefs.getString(MainActivity.KEY_HS_NEXT, MainActivity.HS_SENTENCE))
+        headsetStepRow?.text = getString(R.string.headset_step_title) + ": " + headsetStepLabel()
 
         afterCallRow?.text = getString(R.string.after_call_title) + ": " + afterCallLabel()
         afterCallRewindRow?.text = getString(R.string.after_call_rewind_title) + ": " + rewindLabel()
