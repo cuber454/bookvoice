@@ -516,6 +516,28 @@
     <string name="voice_step">2. Выберите голос</string>
     <string name="no_engines">Движки не найдены</string>
     <string name="no_voices">В этом движке нет голосов</string>
+    <!-- msg5503/5511: движок, язык и голос выбираются тремя строками-значениями
+         (список голосов — только выбранного языка, а не все языки вперемешку).
+         Названия строк и общий вид «Язык: Русский, 8 голосов» — как у строк-
+         значений в Настройках («После звонка: продолжить»). -->
+    <string name="voice_engine_row">Движок</string>
+    <string name="voice_lang_row">Язык</string>
+    <string name="voice_voice_row">Голос</string>
+    <string name="voice_row_value">%1$s: %2$s</string>
+    <string name="voice_engine_system">системный</string>
+    <string name="voice_lang_unset">не выбран</string>
+    <string name="voice_pick_lang">Язык голосов</string>
+    <string name="voice_pick_voice">Голос</string>
+    <string name="voice_engine_switch">Переключаю движок…</string>
+    <!-- msg5511: голос выбран не из того языка, что открыт в списке — показываем
+         его как есть и говорим, какого он языка, чтобы выбор не пропадал молча. -->
+    <string name="voice_lang_other">%1$s (%2$s)</string>
+    <plurals name="voice_count">
+        <item quantity="one">%1$d голос</item>
+        <item quantity="few">%1$d голоса</item>
+        <item quantity="many">%1$d голосов</item>
+        <item quantity="other">%1$d голосов</item>
+    </plurals>
 
     <string name="chapter_start_title">Озвучивать название главы в начале</string>
     <string name="chapter_start_on">Озвучка названия главы включена</string>

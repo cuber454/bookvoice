@@ -118,6 +118,11 @@ class SettingsActivity(private val act: SectionActivity) {
     // #57: галочка «Бесшовная передача» — при альтернативном способе озвучки
     // становится недоступной (она в этом режиме не работает).
     private var gaplessBox: CheckBox? = null
+    // #70 (msg5503/5511): движок, язык и голос — три строки-значения вместо одной
+    // кнопки «Голос и движок» с визардом и плоским списком всех голосов движка.
+    private var engineRow: Button? = null
+    private var voiceLangRow: Button? = null
+    private var voiceRow: Button? = null
     private var backupAutoRow: Button? = null
     // Режим авто-проверки обновлений (0.3.91): «Автоматически» / «Вручную».
     private var updateModeRow: Button? = null
@@ -383,7 +388,13 @@ class SettingsActivity(private val act: SectionActivity) {
         // Громкость чтения (0..100%) — общий KEY_VOLUME (тот же, что был в окне «Голос и речь»).
         addVolumeSlider()
 
-        addButton(getString(R.string.voice_engine_title)) { openVoiceDialog() }
+        // #70 (msg5503/5511): движок → язык → голос тремя строками-значениями —
+        // как «После звонка» и прочие выбиралки. Раньше тут была кнопка «Голос и
+        // движок»: открывался визард, и на шаге голосов вываливались ВСЕ голоса
+        // движка — русские, английские, украинские вперемешку.
+        engineRow = addValueButton { pickEngine() }
+        voiceLangRow = addValueButton { pickVoiceLang() }
+        voiceRow = addValueButton { pickVoice() }
     }
 
     /** «Чтение» (msg721): когда начинать чтение и что озвучивать. Переехало из «Голоса». */
@@ -1209,6 +1220,24 @@ class SettingsActivity(private val act: SectionActivity) {
                 prefs.getString(MainActivity.KEY_HS_NEXT, MainActivity.HS_SENTENCE),
                 MainActivity.KEY_HS_NEXT,
             )
+        // #70: движок, язык и голос — строки-значения раздела «Голос».
+        engineRow?.text = getString(
+            R.string.voice_row_value,
+            getString(R.string.voice_engine_row),
+            engineSummary(),
+        )
+        voiceLangRow?.text = getString(
+            R.string.voice_row_value,
+            getString(R.string.voice_lang_row),
+            prefs.getString(MainActivity.KEY_VOICE_LANG, null)?.let { VoicePick.langLabel(it) }
+                ?: getString(R.string.voice_lang_unset),
+        )
+        voiceRow?.text = getString(
+            R.string.voice_row_value,
+            getString(R.string.voice_voice_row),
+            prefs.getString(MainActivity.KEY_VOICE, null)
+                ?: getString(R.string.voice_engine_system),
+        )
         afterCallRow?.text = getString(R.string.after_call_title) + ": " + afterCallLabel()
         afterCallRewindRow?.text = getString(R.string.after_call_rewind_title) + ": " + rewindLabel()
         startRewindRow?.text = getString(R.string.start_rewind_title) + ": " + startRewindLabel()
@@ -1867,25 +1896,27 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Движок/голос меняем через живой плеер открытой книги (если она есть).
      *  Из библиотеки (без книги) предложить открыть книгу — голос выбирать
      *  не на чем. */
-    private fun openVoiceDialog() {
+    /** #70: выбор движка, языка и голоса работает и без открытой книги. У живой
+     *  книги это её плеер (выбор слышен сразу), без книги на время списка
+     *  поднимаем временный движок и гасим его, когда список закрыли: выбор всё
+     *  равно уходит в настройки и подхватится при следующем открытии книги
+     *  (MainActivity читает KEY_ENGINE / KEY_VOICE / KEY_VOICE_LANG). Раньше на
+     *  это место был тост «сначала открой книгу» — Сергей упёрся в него в 0.3.40
+     *  (msg766). [onReady] получает плеер и признак «временный»: временный надо
+     *  погасить самому, когда диалог закрылся. */
+    private fun withVoiceEngine(titleRes: Int, onReady: (SpeechPlayer, Boolean) -> Unit) {
         val live = MainActivity.active?.player
         if (live != null && live.isReady) {
-            showVoicePicker(live, releaseOnClose = false)
+            onReady(live, false)
             return
         }
-        // Открытой книги нет (Настройки открыты сами по себе) — движок и голос всё
-        // равно можно выбрать: на время диалога поднимаем временный движок, а выбор
-        // сохраняем в настройки (применится при следующем открытии книги, MainActivity
-        // читает KEY_ENGINE/KEY_VOICE в openBook). Раньше тут был только тост
-        // «сначала открой книгу» — Сергей упёрся в него в 0.3.40 (msg766).
         val tmp = SpeechPlayer(act.applicationContext)
-        val saved = prefs.getString(MainActivity.KEY_ENGINE, null)
         val loading = MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.voice_engine_value)
+            .setTitle(titleRes)
             .setMessage(R.string.engine_loading)
             .setNegativeButton(R.string.toc_close, null)
             .show()
-        tmp.setEngine(saved) { ok ->
+        tmp.setEngine(prefs.getString(MainActivity.KEY_ENGINE, null)) { ok ->
             if (!ok) {
                 prefs.edit().remove(MainActivity.KEY_ENGINE).apply()
                 runCatching { loading.dismiss() }
@@ -1899,142 +1930,127 @@ class SettingsActivity(private val act: SectionActivity) {
                 return@setEngine
             }
             runCatching { loading.dismiss() }
-            showVoicePicker(tmp, releaseOnClose = true)
+            onReady(tmp, true)
         }
     }
 
-    /** Диалог «выбор движка (шаг 1) → выбор голоса (шаг 2)». Работает как на живом
-     *  плеере открытой книги ([releaseOnClose]=false — смена применяется сразу),
-     *  так и на временном движке из [openVoiceDialog] (после закрытия временный
-     *  движок гасится, выбор остаётся в настройках). */
-    private fun showVoicePicker(p: SpeechPlayer, releaseOnClose: Boolean) {
-        val scroll = android.widget.ScrollView(act)
-        val body = LinearLayout(act).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(8))
-        }
-        scroll.addView(body)
-        val handler = Handler(Looper.getMainLooper())
+    /** Имя выбранного движка для строки-резюме: подпись приложения движка из
+     *  пакета — движок ради подписи поднимать не нужно. Не выбран — «системный». */
+    private fun engineSummary(): String {
+        val pkg = prefs.getString(MainActivity.KEY_ENGINE, null)
+            ?: return getString(R.string.voice_engine_system)
+        val label = runCatching {
+            val pm = act.packageManager
+            pm.getApplicationInfo(pkg, 0).loadLabel(pm).toString()
+        }.getOrNull()
+        return label?.takeIf { it.isNotBlank() } ?: pkg
+    }
 
-        val btnBack = Button(act).apply {
-            text = getString(R.string.engine_back)
-            visibility = View.GONE
-        }
-        val engineTitle = TextView(act).apply {
-            text = getString(R.string.engine_step)
-            textSize = 16f
-            setPadding(0, 0, 0, dp(4))
-        }
-        val engineGroup = RadioGroup(act)
-
-        val voiceBlock = LinearLayout(act).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-        }
-        voiceBlock.addView(TextView(act).apply {
-            text = getString(R.string.voice_step)
-            textSize = 16f
-            setPadding(0, 0, 0, dp(4))
-        })
-        val voiceContainer = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
-        voiceBlock.addView(voiceContainer)
-
-        fun showStep(step: Int) {
-            val second = step == 2
-            btnBack.visibility = if (second) View.VISIBLE else View.GONE
-            engineTitle.visibility = if (second) View.GONE else View.VISIBLE
-            engineGroup.visibility = if (second) View.GONE else View.VISIBLE
-            voiceBlock.visibility = if (second) View.VISIBLE else View.GONE
-        }
-
-        fun revealVoices() {
-            populateVoiceList(voiceContainer, p)
-            showStep(2)
-        }
-
-        fun onEngineChosen(pkg: String) {
-            if (pkg == p.enginePackage) {
-                revealVoices()
-                return
+    private fun pickEngine() {
+        withVoiceEngine(R.string.voice_engine_row) { p, temp ->
+            val engines = p.engines
+            if (engines.isEmpty()) {
+                toast(getString(R.string.no_engines))
+                if (temp) p.shutdown()
+                return@withVoiceEngine
             }
-            prefs.edit().putString(MainActivity.KEY_ENGINE, pkg).apply()
-            voiceContainer.removeAllViews()
-            voiceContainer.addView(TextView(act).apply {
-                text = getString(R.string.engine_loading)
-                textSize = 15f
-            })
-            p.setEngine(pkg) { ok ->
-                handler.post {
-                    if (ok) {
-                        revealVoices()
-                    } else {
-                        prefs.edit().remove(MainActivity.KEY_ENGINE).apply()
-                        p.setEngine(null) { _ -> revealVoices() }
-                        toast("Движок не запустился, вернул системный")
+            val defaultEngine = p.defaultEngine
+            val cur = p.enginePackage ?: defaultEngine
+            val labels = engines.map { (pkg, label) ->
+                if (pkg == defaultEngine) "$label (системный)" else label
+            }.toTypedArray()
+            val idx = engines.indexOfFirst { it.first == cur }.coerceAtLeast(0)
+            val dlg = MaterialAlertDialogBuilder(act)
+                .setTitle(R.string.voice_engine_row)
+                .setSingleChoiceItems(labels, idx) { d, which ->
+                    d.dismiss()
+                    val pkg = engines[which].first
+                    if (pkg == p.enginePackage) return@setSingleChoiceItems
+                    prefs.edit().putString(MainActivity.KEY_ENGINE, pkg).apply()
+                    p.setEngine(pkg) { ok ->
+                        act.runOnUiThread {
+                            if (!ok) {
+                                prefs.edit().remove(MainActivity.KEY_ENGINE).apply()
+                                p.setEngine(null) { _ -> act.runOnUiThread { rebuildCurrentGroup() } }
+                                toast("Движок не запустился, вернул системный")
+                            }
+                            // У нового движка свои языки: старый выбор языка больше
+                            // ничего не значит — вернём его по выбранному голосу.
+                            prefs.edit().remove(MainActivity.KEY_VOICE_LANG).apply()
+                            rebuildCurrentGroup()
+                        }
                     }
                 }
-            }
+                .setNegativeButton(R.string.toc_close, null)
+                .show()
+            if (temp) dlg.setOnDismissListener { p.shutdown() }
         }
-
-        body.addView(btnBack)
-        body.addView(engineTitle)
-        val engines = p.engines
-        val defaultEngine = p.defaultEngine
-        val currentEngine = p.enginePackage ?: defaultEngine
-        if (engines.isEmpty()) {
-            body.addView(TextView(act).apply {
-                text = getString(R.string.no_engines)
-                textSize = 15f
-            })
-        } else {
-            for ((pkg, engineLabel) in engines) {
-                val rb = RadioButton(act)
-                rb.text = if (pkg == defaultEngine) "$engineLabel (системный)" else engineLabel
-                rb.tag = pkg
-                rb.isChecked = pkg == currentEngine
-                rb.setOnClickListener { onEngineChosen(rb.tag as String) }
-                engineGroup.addView(rb)
-            }
-            body.addView(engineGroup)
-        }
-        body.addView(voiceBlock)
-
-        btnBack.setOnClickListener { showStep(1) }
-        showStep(1)
-
-        val dlg = MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.voice_engine_value)
-            .setView(scroll)
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-        if (releaseOnClose) dlg.setOnDismissListener { p.shutdown() }
     }
 
-    private fun populateVoiceList(container: LinearLayout, p: SpeechPlayer) {
-        container.removeAllViews()
-        val voices = p.voices
-        if (voices.isEmpty()) {
-            container.addView(TextView(act).apply {
-                text = getString(R.string.no_voices)
-                textSize = 15f
-            })
-            return
-        }
-        val group = RadioGroup(act)
-        container.addView(group)
-        val current = prefs.getString(MainActivity.KEY_VOICE, null)
-        for (v in voices) {
-            val shown = if (v.isNetworkConnectionRequired) "${v.name} (сеть)" else v.name
-            val rb = RadioButton(act)
-            rb.text = shown
-            rb.tag = v.name
-            rb.isChecked = v.name == current
-            rb.setOnClickListener {
-                val sel = rb.tag as String
-                prefs.edit().putString(MainActivity.KEY_VOICE, sel).apply()
-                p.selectVoice(sel)
+    private fun pickVoiceLang() {
+        withVoiceEngine(R.string.voice_pick_lang) { p, temp ->
+            val voices = p.voices
+            if (voices.isEmpty()) {
+                toast(getString(R.string.no_voices))
+                if (temp) p.shutdown()
+                return@withVoiceEngine
             }
-            group.addView(rb)
+            // Открытым держим язык выбранного голоса; если он ещё не выбран —
+            // язык глобального голоса из настроек.
+            val cur = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
+                ?: VoicePick.langOf(voices, prefs.getString(MainActivity.KEY_VOICE, null))
+            val langs = VoicePick.langs(voices, cur)
+            val labels = langs.map { VoicePick.langTitle(act, it.code, it.voices.size) }.toTypedArray()
+            val idx = langs.indexOfFirst { it.code == cur }.coerceAtLeast(0)
+            val dlg = MaterialAlertDialogBuilder(act)
+                .setTitle(R.string.voice_pick_lang)
+                .setSingleChoiceItems(labels, idx) { d, which ->
+                    d.dismiss()
+                    prefs.edit().putString(MainActivity.KEY_VOICE_LANG, langs[which].code).apply()
+                    rebuildCurrentGroup()
+                }
+                .setNegativeButton(R.string.toc_close, null)
+                .show()
+            if (temp) dlg.setOnDismissListener { p.shutdown() }
+        }
+    }
+
+    private fun pickVoice() {
+        withVoiceEngine(R.string.voice_pick_voice) { p, temp ->
+            val voices = p.voices
+            if (voices.isEmpty()) {
+                toast(getString(R.string.no_voices))
+                if (temp) p.shutdown()
+                return@withVoiceEngine
+            }
+            val curVoice = prefs.getString(MainActivity.KEY_VOICE, null)
+            val lang = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
+                ?: VoicePick.langOf(voices, curVoice)
+                ?: VoicePick.defaultLang(voices)
+            // Список — только выбранного языка: чужие языки больше не подмешиваются.
+            val list = VoicePick.voicesOf(voices, lang)
+            if (list.isEmpty()) {
+                toast(getString(R.string.no_voices))
+                if (temp) p.shutdown()
+                return@withVoiceEngine
+            }
+            val labels = list.map { VoicePick.voiceLabel(it) }.toTypedArray()
+            val idx = list.indexOfFirst { it.name == curVoice }
+            val dlg = MaterialAlertDialogBuilder(act)
+                .setTitle(R.string.voice_pick_voice)
+                .setSingleChoiceItems(labels, idx) { d, which ->
+                    d.dismiss()
+                    val v = list[which]
+                    prefs.edit()
+                        .putString(MainActivity.KEY_VOICE, v.name)
+                        .putString(MainActivity.KEY_VOICE_LANG, VoicePick.codeOf(v))
+                        .apply()
+                    p.selectVoice(v.name)
+                    rebuildCurrentGroup()
+                }
+                .setNegativeButton(R.string.toc_close, null)
+                .show()
+            if (temp) dlg.setOnDismissListener { p.shutdown() }
         }
     }
 
