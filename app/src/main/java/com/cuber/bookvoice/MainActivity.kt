@@ -463,6 +463,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg5220: первый запуск после обновления — старые настройки шага и
         // режима глав переезжают в действия кнопок (до первого чтения имён).
         migrateReaderButtons()
+        // msg5295: следом уровень «главы» кнопки гарнитуры переезжает в сам шаг
+        // (читает уже перенесённый migrateReaderButtons ключ CH_NAV).
+        migrateHeadsetStep()
         // Возврат из экрана настроек: там могли поменять, какие элементы
         // читалки показывать, скорость и голос — применяем к живой книге.
         applyReaderUi()
@@ -1390,8 +1393,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  в действие каждой кнопки (поведение сохраняем как было), свайпы, у которых
      *  стоял «глава по режиму», разворачиваем в тот же конкретный уровень, а
      *  парные галочки конструктора — в четыре одиночных. KEY_STEP/KEY_CH_NAV
-     *  после этого никто не пишет: KEY_CH_NAV ещё читает ReaderEngine для шага
-     *  «глава» кнопок гарнитуры (их поведение сохраняем как было). */
+     *  после этого никто не пишет; читает их только разовый перенос —
+     *  KEY_CH_NAV, следом за нами, в migrateHeadsetStep (msg5295). */
     private fun migrateReaderButtons() {
         if (prefs.getBoolean(KEY_BTN_MIGRATED, false)) return
         val chMode = prefs.getString(KEY_CH_NAV, CH_NAV_ALL) ?: CH_NAV_ALL
@@ -1426,14 +1429,41 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         e.putBoolean(KEY_UI_NEXT_SENT, prefs.getBoolean(KEY_UI_SENT, true))
         e.putBoolean(KEY_UI_PREV_CH, prefs.getBoolean(KEY_UI_CHAPTERS, true))
         e.putBoolean(KEY_UI_NEXT_CH, prefs.getBoolean(KEY_UI_CHAPTERS, true))
-        // msg5230: у «главы» на гарнитуре уровень остался в KEY_CH_NAV. Мелкие
-        // значения (предложение/абзац) движок и раньше вёл как обычные главы —
-        // записываем это прямо, чтобы строка настроек показывала то, что человек
+        // msg5230: у «главы» на гарнитуре уровень жил в KEY_CH_NAV, пока шаг не
+        // переехал в сам пункт списка (msg5295). Мелкие значения (предложение/
+        // абзац) движок и раньше вёл как обычные главы — записываем это прямо,
+        // чтобы перенос шага гарнитуры (migrateHeadsetStep) взял то, что человек
         // действительно слышит, а не выбор, которого у «главы» нет.
         if (chMode != CH_NAV_MAJOR && chMode != CH_NAV_CHAPTERS && chMode != CH_NAV_ALL) {
             e.putString(KEY_CH_NAV, CH_NAV_CHAPTERS)
         }
         e.putBoolean(KEY_BTN_MIGRATED, true)
+        e.apply()
+    }
+
+    /** msg5295: уровень «главы» кнопки гарнитуры переехал из отдельной настройки
+     *  («Шаг „главы“ на гарнитуре», ключ CH_NAV) в сам шаг кнопки — в списке шагов
+     *  стало три главы-пункта вместо одного. Переносим по разу: у кого стояла
+     *  «глава», получает именно тот уровень, по которому он и ходил. Свой
+     *  рубильник, а не общий KEY_BTN_MIGRATED: тот у владельца уже поднят, и до
+     *  его настроек гарнитуры мы бы не добрались. Значение по умолчанию у ключа
+     *  берём CH_NAV_ALL — так его читал движок до этой правки
+     *  (ReaderEngine.chapterStopIndexes), то есть ровно то, что человек слышал.
+     *  Сам движок ключ больше не читает: уровень приходит от шага. */
+    private fun migrateHeadsetStep() {
+        if (prefs.getBoolean(KEY_HS_MIGRATED, false)) return
+        val level = when (prefs.getString(KEY_CH_NAV, CH_NAV_ALL)) {
+            CH_NAV_MAJOR -> HS_MAJOR
+            CH_NAV_ALL -> HS_HEADER
+            else -> HS_CHAPTER
+        }
+        val e = prefs.edit()
+        for (key in listOf(KEY_HS_PREV, KEY_HS_NEXT)) {
+            if ((prefs.getString(key, HS_SENTENCE) ?: HS_SENTENCE) == HS_CHAPTER) {
+                e.putString(key, level)
+            }
+        }
+        e.putBoolean(KEY_HS_MIGRATED, true)
         e.apply()
     }
 
@@ -3323,6 +3353,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Default CH_NAV_ALL — как раньше. Режимы sent/paragraph (msg2531/2539) —
         // мелкий шаг: кнопки листают по предложениям/абзацам, как «Пред./След.»;
         // major/chapters/all — скачок по узлам разметки FB2 (см. chapterStopIndexes).
+        // msg5295: настройки больше нет — уровень несёт само действие (G_*_CH/
+        // MAJOR/HEADER, HS_CHAPTER/MAJOR/HEADER), ключ оставлен под перенос.
         internal const val KEY_CH_NAV = "ch_nav"
         internal const val CH_NAV_SENT = "sentence"
         internal const val CH_NAV_PARAGRAPH = "paragraph"
@@ -3334,9 +3366,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // палитры (GESTURE_ACTIONS). msg5266: действий у кнопки стало два —
         // короткое нажатие (KEY_BTN_*) и долгое (KEY_BTN_*_LONG); оба выбираются
         // в «Управлении», список по долгому нажатию убран. KEY_STEP/KEY_CH_NAV
-        // остались только как источник разового переноса (migrateReaderButtons)
-        // и для шага «глава» кнопок гарнитуры — его читает
-        // ReaderEngine.chapterStopIndexes.
+        // остались только источником разового переноса: KEY_STEP — в действия
+        // кнопок (migrateReaderButtons), KEY_CH_NAV — в шаг «глава» кнопок
+        // гарнитуры (migrateHeadsetStep, msg5295). Боевых читателей у ключей нет.
         internal const val KEY_BTN_PREV_SENT = "btn_prev_sent"
         internal const val KEY_BTN_NEXT_SENT = "btn_next_sent"
         internal const val KEY_BTN_PREV_CH = "btn_prev_ch"
@@ -3346,6 +3378,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_BTN_PREV_CH_LONG = "btn_prev_ch_long"
         internal const val KEY_BTN_NEXT_CH_LONG = "btn_next_ch_long"
         internal const val KEY_BTN_MIGRATED = "btn_actions_migrated"
+        // msg5295: свой рубильник у переноса шага гарнитуры (см. migrateHeadsetStep).
+        internal const val KEY_HS_MIGRATED = "hs_step_migrated"
         // Конструктор экрана (msg5220): четыре кнопки прячутся по одной; старые
         // парные ключи KEY_UI_SENT/KEY_UI_CHAPTERS — только для переноса.
         internal const val KEY_UI_PREV_SENT = "ui_prev_sent"
@@ -3443,6 +3477,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val HS_SENTENCE = "sentence"
         internal const val HS_PARAGRAPH = "paragraph"
         internal const val HS_CHAPTER = "chapter"
+        // msg5295: уровень «главы» у кнопки гарнитуры — не отдельная настройка, а
+        // три отдельных шага, как у свайпов и кнопок читалки (G_NEXT_CH/MAJOR/
+        // HEADER): глава без вложенных подразделов / крупный раздел / любой
+        // заголовок. Раньше уровень жил строкой «Шаг „главы“ на гарнитуре»
+        // (ключ CH_NAV); разовый перенос — migrateHeadsetStep.
+        internal const val HS_MAJOR = "major"
+        internal const val HS_HEADER = "header"
         // msg5250: шаг гарнитуры «моталка» — сразу N предложений в сторону кнопки
         // (сколько именно, берём из настроек моталки: у «вперёд» своё число, у
         // «назад» своё). Направление задаёт сама кнопка, как у прочих шагов.

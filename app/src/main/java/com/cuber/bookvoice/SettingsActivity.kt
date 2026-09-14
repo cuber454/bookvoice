@@ -102,7 +102,6 @@ class SettingsActivity(private val act: SectionActivity) {
     // Строки-резюме кнопок гарнитуры „назад/вперёд“ (msg2136).
     private var headsetPrevRow: Button? = null
     private var headsetNextRow: Button? = null
-    private var headsetStepRow: Button? = null   // «глава» на гарнитуре (msg5230)
     // msg2527: настройки кнопок гарнитуры собраны в подраздел «Управления» —
     // в списке раздела строка-переход, открывающая отдельный экран.
     private var headsetGroupRow: Button? = null
@@ -653,66 +652,18 @@ class SettingsActivity(private val act: SectionActivity) {
         headsetNextRow = addValueButton {
             pickHeadset(MainActivity.KEY_HS_NEXT)
         }
-        // msg5230: уровень шага «Глава» у кнопок гарнитуры. Раньше это была общая
-        // строка «Кнопки глав шагают» — она исчезла вместе с переездом кнопок
-        // читалки на палитру действий, а движок (ReaderEngine.chapterStopIndexes)
-        // по-прежнему читает ключ CH_NAV. Живёт здесь, рядом с назначением кнопок
-        // гарнитуры: другого потребителя у этого ключа не осталось.
-        headsetStepRow = addValueButton { pickHeadsetStep() }
+        // msg5295: отдельной строки «Шаг „главы“ на гарнитуре» больше нет — уровень
+        // живёт в самом шаге (три пункта «Глава» в списке кнопки), как у свайпов и
+        // кнопок читалки. Строка msg5230 убрана, ключ CH_NAV остался только
+        // источником разового переноса (MainActivity.migrateHeadsetStep).
     }
-
-    /** Уровень «главы» для кнопок гарнитуры: крупные разделы / главы / все
-     *  заголовки — три настоящих уровня, которые движок различает. Значения
-     *  читаются из того же ключа CH_NAV, что и раньше (msg5230). */
-    private fun pickHeadsetStep() {
-        val values = arrayOf(
-            MainActivity.CH_NAV_MAJOR, MainActivity.CH_NAV_CHAPTERS, MainActivity.CH_NAV_ALL,
-        )
-        val cur = values.indexOf(headsetStepValue()).coerceAtLeast(0)
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.headset_step_dialog)
-            .setSingleChoiceItems(
-                arrayOf(
-                    getString(R.string.headset_step_major),
-                    getString(R.string.headset_step_chapters),
-                    getString(R.string.headset_step_all),
-                ),
-                cur,
-            ) { d, which ->
-                prefs.edit().putString(MainActivity.KEY_CH_NAV, values[which]).apply()
-                d.dismiss()
-                refreshRows()
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-    }
-
-    /** Что сейчас стоит у «главы» гарнитуры. Старые мелкие значения (предложение/
-     *  абзац) движок вёл как обычные главы — показываем их тем же словом, а не
-     *  несуществующим выбором (перенос в MainActivity.migrateReaderButtons их
-     *  заодно и записывает как главы). */
-    private fun headsetStepValue(): String {
-        val cur = prefs.getString(MainActivity.KEY_CH_NAV, MainActivity.CH_NAV_ALL)
-        return when (cur) {
-            MainActivity.CH_NAV_MAJOR -> MainActivity.CH_NAV_MAJOR
-            MainActivity.CH_NAV_CHAPTERS -> MainActivity.CH_NAV_CHAPTERS
-            MainActivity.CH_NAV_ALL -> MainActivity.CH_NAV_ALL
-            else -> MainActivity.CH_NAV_CHAPTERS
-        }
-    }
-
-    /** Название уровня «главы» гарнитуры — для строки-резюме. */
-    private fun headsetStepLabel(): String = getString(when (headsetStepValue()) {
-        MainActivity.CH_NAV_MAJOR -> R.string.headset_step_major
-        MainActivity.CH_NAV_ALL -> R.string.headset_step_all
-        else -> R.string.headset_step_chapters
-    })
 
     /** Диалог выбора шага для одной кнопки гарнитуры. */
     private fun pickHeadset(key: String) {
         val values = arrayOf(
             MainActivity.HS_OFF, MainActivity.HS_SENTENCE,
             MainActivity.HS_PARAGRAPH, MainActivity.HS_CHAPTER,
+            MainActivity.HS_MAJOR, MainActivity.HS_HEADER,
             MainActivity.HS_SENT_N,
         )
         val cur = values.indexOf(
@@ -726,6 +677,10 @@ class SettingsActivity(private val act: SectionActivity) {
                     getString(R.string.headset_sentence),
                     getString(R.string.headset_paragraph),
                     getString(R.string.headset_chapter),
+                    // msg5295: три уровня «главы» отдельными пунктами — ровно те,
+                    // что уже есть у свайпов и кнопок читалки.
+                    getString(R.string.headset_major),
+                    getString(R.string.headset_header),
                     // msg5250: моталка — направление даёт сама кнопка, поэтому в
                     // пункте стоит число ИМЕННО этой кнопки («вперёд» или «назад»).
                     MainActivity.sentencesPhrase(act, headsetJumpCount(key)).let {
@@ -753,6 +708,8 @@ class SettingsActivity(private val act: SectionActivity) {
         MainActivity.HS_SENTENCE -> getString(R.string.headset_sentence)
         MainActivity.HS_PARAGRAPH -> getString(R.string.headset_paragraph)
         MainActivity.HS_CHAPTER -> getString(R.string.headset_chapter)
+        MainActivity.HS_MAJOR -> getString(R.string.headset_major)
+        MainActivity.HS_HEADER -> getString(R.string.headset_header)
         // msg5250: у моталки в строке видно, на сколько она мотает именно здесь.
         MainActivity.HS_SENT_N -> getString(
             R.string.headset_sent_n,
@@ -1226,8 +1183,6 @@ class SettingsActivity(private val act: SectionActivity) {
                 prefs.getString(MainActivity.KEY_HS_NEXT, MainActivity.HS_SENTENCE),
                 MainActivity.KEY_HS_NEXT,
             )
-        headsetStepRow?.text = getString(R.string.headset_step_title) + ": " + headsetStepLabel()
-
         afterCallRow?.text = getString(R.string.after_call_title) + ": " + afterCallLabel()
         afterCallRewindRow?.text = getString(R.string.after_call_rewind_title) + ": " + rewindLabel()
         startRewindRow?.text = getString(R.string.start_rewind_title) + ": " + startRewindLabel()

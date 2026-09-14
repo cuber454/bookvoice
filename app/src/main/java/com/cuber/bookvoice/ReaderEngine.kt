@@ -478,7 +478,11 @@ internal object ReaderEngine {
             MainActivity.HS_SENTENCE -> headsetSentenceTarget(bk, delta)
             MainActivity.HS_PARAGRAPH -> headsetParagraphTarget(bk, delta)
             MainActivity.HS_SENT_N -> headsetJumpTarget(bk, delta) // msg5250: моталка
-            else -> headsetChapterTarget(bk, delta) // HS_CHAPTER
+            // msg5295: у «главы» три уровня — как у свайпов и кнопок читалки
+            // (G_NEXT_CH/MAJOR/HEADER), а не одна настройка на все шаги.
+            MainActivity.HS_MAJOR -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_MAJOR)
+            MainActivity.HS_HEADER -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_ALL)
+            else -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_CHAPTERS)
         } ?: return
         if (target.chapter == chapterIdx && target.sentence == sentenceIdx) return
         goTo(target.chapter, target.sentence)
@@ -569,10 +573,12 @@ internal object ReaderEngine {
     }
 
     /** Глава в сторону [delta] — та же линейка, что «Предыдущая/Следующая глава»
-     *  в читалке (chapterStopIndexes учитывает настройку «Кнопки глав шагают»,
-     *  0.3.37). Историю переходов (#101, pushPlace) не трогаем — это кнопка. */
-    private fun headsetChapterTarget(bk: BookDocument, delta: Int): Place? {
-        val stops = chapterStopIndexes()
+     *  в читалке: [mode] выбирает уровень (CH_NAV_MAJOR — крупный раздел,
+     *  CH_NAV_CHAPTERS — глава без подразделов, CH_NAV_ALL — любой заголовок),
+     *  его несёт сам шаг кнопки, отдельной настройки нет (msg5295).
+     *  Историю переходов (#101, pushPlace) не трогаем — это кнопка. */
+    private fun headsetChapterTarget(bk: BookDocument, delta: Int, mode: String): Place? {
+        val stops = chapterStopIndexes(mode)
         if (stops.isEmpty()) return null
         val cur = chapterIdx
         var target = -1
@@ -585,13 +591,13 @@ internal object ReaderEngine {
         return Place(target, 0)
     }
 
-    /** По каким «главам» ходит шаг «глава» кнопок гарнитуры — копия линейки окна
+    /** По каким «главам» ходит шаг [mode] кнопок гарнитуры — копия линейки окна
      *  (MainActivity.chapterStopIndexes): фильтр плоского списка глав по разметке
-     *  FB2 и настройке CH_NAV. Дублируем, чтобы гарнитура работала и без окна
-     *  (движок — процессный синглтон); держать в синхроне с окном. */
-    private fun chapterStopIndexes(): IntArray {
+     *  FB2. Уровень приходит от самого шага (msg5295), из настроек ничего не
+     *  читаем. Дублируем, чтобы гарнитура работала и без окна (движок —
+     *  процессный синглтон); держать в синхроне с окном. */
+    private fun chapterStopIndexes(mode: String): IntArray {
         val bk = book ?: return intArrayOf()
-        val mode = prefs.getString(MainActivity.KEY_CH_NAV, MainActivity.CH_NAV_ALL)
         val size = bk.chapters.size
         if (mode == MainActivity.CH_NAV_ALL) return IntArray(size) { it }
         val out = ArrayList<Int>(size)
