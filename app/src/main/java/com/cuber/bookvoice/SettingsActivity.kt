@@ -551,18 +551,6 @@ class SettingsActivity(private val act: SectionActivity) {
         // Автопрокрутка текста (#318) — переехала из «Управления» (msg721): тоже
         // про поведение экрана чтения, не про звук или запуск.
         addCheck(R.string.scroll_title, MainActivity.KEY_SCROLL, true)
-
-        // Вкладки Библиотеки (#97): отдельный блок «Интерфейса» — порядок и
-        // видимость верхних фильтров «Читаю/Новые/Прочитанные/Все». «Все»
-        // скрыть нельзя; активную и последнюю видимую тоже.
-        addHint(getString(R.string.lib_tabs_hint))
-        tabRowButtons.clear()
-        for (mode in LibraryActivity.tabsOrder(prefs)) {
-            val row = addValueButton { tabActions(mode) }
-            row.tag = mode
-            tabRowButtons.add(mode to row)
-        }
-        resetTabsRow = addButton(getString(R.string.lib_tabs_reset)) { resetTabs() }
     }
 
     /** Диалог выбора числа для моталки (msg5234): готовый ряд чисел, а не ввод с
@@ -852,6 +840,19 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     private fun buildLibraryGroup() {
+        // Вкладки Библиотеки (#97, переехали из «Интерфейса» msg5317): порядок и
+        // видимость верхних фильтров «Читаю/Новые/Прочитанные/Все» — это про
+        // полку, а не про экран книги, поэтому и живут в «Библиотеке». «Все»
+        // скрыть нельзя; активную и последнюю видимую тоже.
+        addHint(getString(R.string.lib_tabs_hint))
+        tabRowButtons.clear()
+        for (mode in LibraryActivity.tabsOrder(prefs)) {
+            val row = addValueButton { tabActions(mode) }
+            row.tag = mode
+            tabRowButtons.add(mode to row)
+        }
+        resetTabsRow = addButton(getString(R.string.lib_tabs_reset)) { resetTabs() }
+
         folderRow = addValueButton {
             if (treeUri() == null) {
                 openFolderPicker()

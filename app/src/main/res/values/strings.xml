@@ -298,7 +298,7 @@
     <!-- Разделы настроек (0.3.32): главный экран — список групп, внутри — свой список -->
     <string name="settings_group_voice">Голос</string>
     <string name="settings_group_reading">Чтение</string>
-    <string name="settings_group_reader">Интерфейс</string>
+    <string name="settings_group_reader">Экран книги</string>
     <string name="settings_group_start">Управление</string>
     <string name="settings_group_library">Библиотека и скачанные</string>
     <string name="settings_group_diag">Разное</string>
@@ -306,9 +306,9 @@
          в главном списке Настроек. Не значения, а «что внутри» — помогает найти раздел. -->
     <string name="settings_group_voice_hint">Скорость, громкость, голос и синтезатор</string>
     <string name="settings_group_reading_hint">Когда начинать чтение и что озвучивать</string>
-    <string name="settings_group_reader_hint">Что показывать в читалке</string>
+    <string name="settings_group_reader_hint">Что видно на экране книги</string>
     <string name="settings_group_start_hint">Запуск, листание и шаг кнопок</string>
-    <string name="settings_group_library_hint">Папка с книгами, куда и в каком формате качать</string>
+    <string name="settings_group_library_hint">Вкладки полки, папка с книгами и формат скачивания</string>
     <string name="settings_group_diag_hint">Проверка обновлений и журнал приложения</string>
     <string name="settings_about_hint">Что это за программа и её фишки</string>
     <string name="settings_bg_hint_on">Разрешена: система не останавливает чтение</string>
