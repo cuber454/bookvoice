@@ -321,6 +321,9 @@ internal object ReaderEngine {
         // msg4598: бесшовная передача звука встык — тестовая галочка, по
         // умолчанию выкл (сравнение двух стыков на слух).
         sp.gapless = prefs.getBoolean(MainActivity.KEY_GAPLESS, false)
+        // #57: альтернативный способ озвучки — фразу целиком играет движок
+        // (проба, по умолчанию выкл). Наш конвейер заготовок при нём молчит.
+        sp.altDirect = prefs.getBoolean(MainActivity.KEY_ALT_VOICE, false)
         // Чтение всегда непрерывное: кнопка «по одному предложению» убрана.
         continuous = true
         voiceName = prefs.getString(MainActivity.KEY_VOICE, null)

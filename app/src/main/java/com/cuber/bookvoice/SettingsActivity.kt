@@ -417,6 +417,14 @@ class SettingsActivity(private val act: SectionActivity) {
         // умолчанию выключена.
         addHint(getString(R.string.gapless_hint))
         addCheck(R.string.gapless_title, MainActivity.KEY_GAPLESS, false)
+        // #57: альтернативный способ озвучки — звук целиком отдаём движку.
+        // Стоит сразу после встыка, потому что отменяет его: прицеплять
+        // нечего, когда фразу играет сам движок. Тестовая галочка, по
+        // умолчанию выкл; применяется на месте, не дожидаясь перезапуска.
+        addHint(getString(R.string.alt_voice_hint))
+        addCheck(R.string.alt_voice_title, MainActivity.KEY_ALT_VOICE, false) { on ->
+            ReaderEngine.player?.altDirect = on
+        }
         // msg5067: тихий звуковой поток переехал сюда из окна «Не засыпать»
         // (Сергей искал его как звуковую настройку и не нашёл: окно про батарею).
         // Стоит вторым в звуковой паре — «Бесшовная передача» про стык
