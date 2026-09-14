@@ -115,6 +115,9 @@ class SettingsActivity(private val act: SectionActivity) {
     private var resetTabsRow: Button? = null
     // Резервная копия (#100): папка и частота (строка-резюме).
     private var backupDirRow: Button? = null
+    // #57: галочка «Бесшовная передача» — при альтернативном способе озвучки
+    // становится недоступной (она в этом режиме не работает).
+    private var gaplessBox: CheckBox? = null
     private var backupAutoRow: Button? = null
     // Режим авто-проверки обновлений (0.3.91): «Автоматически» / «Вручную».
     private var updateModeRow: Button? = null
@@ -416,7 +419,7 @@ class SettingsActivity(private val act: SectionActivity) {
         // предложений). Пока это тестовая галочка для сравнения на слух, по
         // умолчанию выключена.
         addHint(getString(R.string.gapless_hint))
-        addCheck(R.string.gapless_title, MainActivity.KEY_GAPLESS, false)
+        gaplessBox = addCheck(R.string.gapless_title, MainActivity.KEY_GAPLESS, false)
         // #57: альтернативный способ озвучки — звук целиком отдаём движку.
         // Стоит сразу после встыка, потому что отменяет его: прицеплять
         // нечего, когда фразу играет сам движок. Тестовая галочка, по
@@ -424,7 +427,9 @@ class SettingsActivity(private val act: SectionActivity) {
         addHint(getString(R.string.alt_voice_hint))
         addCheck(R.string.alt_voice_title, MainActivity.KEY_ALT_VOICE, false) { on ->
             ReaderEngine.player?.altDirect = on
+            syncAltVoiceRows()
         }
+        syncAltVoiceRows()
         // msg5067: тихий звуковой поток переехал сюда из окна «Не засыпать»
         // (Сергей искал его как звуковую настройку и не нашёл: окно про батарею).
         // Стоит вторым в звуковой паре — «Бесшовная передача» про стык
@@ -746,6 +751,16 @@ class SettingsActivity(private val act: SectionActivity) {
     private fun gestureLabel(id: String?): String =
         MainActivity.gestureActionLabel(act, prefs, id ?: "")
 
+    /** #57: при включённом альтернативном способе озвучки бесшовная передача не
+     *  работает — фразу целиком играет движок, прицеплять к нашему плееру
+     *  нечего. Строку делаем недоступной, чтобы человек не искал причину в ней.
+     *  Значение галочки НЕ трогаем: снимут альтернативную — бесшовная вернётся
+     *  такой, какой была. */
+    private fun syncAltVoiceRows() {
+        val alt = prefs.getBoolean(MainActivity.KEY_ALT_VOICE, false)
+        gaplessBox?.isEnabled = !alt
+    }
+
     private fun buildStartGroup() {
         // msg1254: тактильное подтверждение действий (книга удалена/скачана, копия,
         // закладка/цитата и т.д.). Один общий рубильник — снял галочку, вибраций нет.
@@ -1048,8 +1063,8 @@ class SettingsActivity(private val act: SectionActivity) {
         key: String,
         def: Boolean,
         onChange: ((Boolean) -> Unit)? = null,
-    ) {
-        content().addView(CheckBox(act).apply {
+    ): CheckBox {
+        val box = CheckBox(act).apply {
             text = getString(titleRes)
             textSize = 17f
             isChecked = prefs.getBoolean(key, def)
@@ -1059,7 +1074,9 @@ class SettingsActivity(private val act: SectionActivity) {
                 onChange?.invoke(checked)
             }
             setPadding(dp(4), dp(2), dp(4), dp(2))
-        })
+        }
+        content().addView(box)
+        return box
     }
 
     /** В журнал — и что выбрано, и что вышло на самом деле: если чтение сейчас не
