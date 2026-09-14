@@ -637,6 +637,20 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         Diag.log(this, "activity", "rejoin: окно вернулось к живой книге «${book?.title}»")
     }
 
+    /** msg5475/5499: файл не открылся — скан-PDF без текстового слоя, PDF под
+     *  паролем, нечитаемый формат. Говорим причину и УХОДИМ назад (на полку, в
+     *  каталог или в то приложение, откуда книгу открыли), а не оставляем пустое
+     *  окно читалки: раньше тут был showEmpty(), и окно надо было закрывать
+     *  руками. Сергей выбрал этот вариант — «сказал и вернулся» — вместо окна с
+     *  кнопкой «Понятно» (msg5499). Тост гаснет сам, окно тоста живёт отдельно от
+     *  активити, поэтому finish() его не снимает. */
+    private fun failOpen(message: String) {
+        Diag.log(this, "activity", "не открылось: $message — возвращаюсь назад")
+        toast(message)
+        Vibra.error(this)
+        finish()
+    }
+
     private fun showEmpty() {
         adapter.clear()
         adapterBook = null
@@ -751,10 +765,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 // «ReaderEngine не подключён» на плеере.
                 if (isDestroyed || isFinishing || ReaderEngine.player == null) return@post
                 if (doc == null) {
-                    toast(unreadableFormatMessage()
+                    failOpen(unreadableFormatMessage()
                         ?: "Не удалось открыть: формат не поддерживается или файл повреждён")
-                    Vibra.error(this)
-                    showEmpty()
                     return@post
                 }
                 // PDF, который распознан, но текст не извлекается (скан/пароль) —
@@ -767,16 +779,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     }
                 }
                 if (unreadableRes != null) {
-                    toast(getString(unreadableRes))
-                    Vibra.error(this)
-                    showEmpty()
+                    failOpen(getString(unreadableRes))
                     return@post
                 }
                 if (!doc.hasText) {
-                    toast(unreadableFormatMessage()
+                    failOpen(unreadableFormatMessage()
                         ?: "Не удалось открыть: формат не поддерживается или файл повреждён")
-                    Vibra.error(this)
-                    showEmpty()
                     return@post
                 }
                 currentUri = uri.toString()
