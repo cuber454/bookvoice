@@ -477,6 +477,7 @@ internal object ReaderEngine {
         val target = when (step) {
             MainActivity.HS_SENTENCE -> headsetSentenceTarget(bk, delta)
             MainActivity.HS_PARAGRAPH -> headsetParagraphTarget(bk, delta)
+            MainActivity.HS_SENT_N -> headsetJumpTarget(bk, delta) // msg5250: моталка
             else -> headsetChapterTarget(bk, delta) // HS_CHAPTER
         } ?: return
         if (target.chapter == chapterIdx && target.sentence == sentenceIdx) return
@@ -498,6 +499,35 @@ internal object ReaderEngine {
             ch++
             s = 0
         }
+        return Place(ch, s)
+    }
+
+    /** Моталка (msg5250): сразу N предложений в сторону [delta] — тем же правилом,
+     *  что соседний шаг «предложение» (граница главы переходит в следующую). Число
+     *  берётся из настроек моталки: «вперёд» — своё, «назад» — своё. null — на
+     *  этом краю книги двигаться некуда, шаг не состоялся. */
+    private fun headsetJumpTarget(bk: BookDocument, delta: Int): Place? {
+        val count = MainActivity.jumpCount(prefs, delta > 0)
+        var ch = chapterIdx
+        var s = sentenceIdx
+        var left = count
+        while (left > 0) {
+            var nextCh = ch
+            var nextS = s + delta
+            if (nextS < 0) {
+                if (nextCh <= 0) break
+                nextCh--
+                nextS = bk.chapters[nextCh].sentences.size - 1
+            } else if (nextS >= bk.chapters[ch].sentences.size) {
+                if (ch + 1 >= bk.chapters.size) break
+                nextCh = ch + 1
+                nextS = 0
+            }
+            ch = nextCh
+            s = nextS
+            left--
+        }
+        if (left == count) return null
         return Place(ch, s)
     }
 

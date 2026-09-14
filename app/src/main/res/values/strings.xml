@@ -353,6 +353,13 @@
     <!-- Настраиваемые свайпы вправо/влево в читалке (#77) -->
     <string name="gesture_right_title">Свайп вправо</string>
     <string name="gesture_left_title">Свайп влево</string>
+    <!-- msg5234: две строки моталки — сколько предложений отматывать за раз
+         вперёд и назад (своё число у каждого направления). -->
+    <string name="jump_fwd_title">Моталка вперёд</string>
+    <string name="jump_back_title">Моталка назад</string>
+    <string name="jump_fwd_dialog">На сколько предложений мотать вперёд</string>
+    <string name="jump_back_dialog">На сколько предложений мотать назад</string>
+    <string name="jump_hint">Моталка ходит сразу на несколько предложений. Выбери её в списке действий кнопки или свайпа — там она называется числом, которое стоит здесь.</string>
     <string name="gesture_choose_title">Выберите действие</string>
     <!-- msg2547: заголовок диалога называет направление настраиваемого свайпа. -->
     <string name="gesture_choose_right">Действие свайпа вправо</string>
@@ -369,6 +376,18 @@
          заголовок — все заголовки, включая вложенные. -->
     <string name="g_action_next_major">Следующий раздел</string>
     <string name="g_action_prev_major">Предыдущий раздел</string>
+    <!-- msg5234: моталка — шаг сразу на N предложений, N человек задаёт сам
+         (две строки в «Управлении», отдельно вперёд и назад). Число стоит прямо
+         в названии пункта, поэтому в строке палитры оно подстановкой, а не
+         константой; склонение слова — plurals sentences_n. -->
+    <string name="g_action_next_sent_n">Вперёд на %1$s</string>
+    <string name="g_action_prev_sent_n">Назад на %1$s</string>
+    <plurals name="sentences_n">
+        <item quantity="one">%1$d предложение</item>
+        <item quantity="few">%1$d предложения</item>
+        <item quantity="many">%1$d предложений</item>
+        <item quantity="other">%1$d предложения</item>
+    </plurals>
     <string name="g_action_next_header">Следующий заголовок</string>
     <string name="g_action_prev_header">Предыдущий заголовок</string>
     <!-- msg5220: короткая видимая надпись на кнопке читалки — своя у каждого
@@ -383,6 +402,10 @@
     <string name="btn_short_next_major">Разд. ▶</string>
     <string name="btn_short_prev_header">◀ Заг.</string>
     <string name="btn_short_next_header">Заг. ▶</string>
+    <!-- msg5234: у моталки на кнопке короткая подпись с числом — «+15»/«−15»;
+         в прежнюю ширину кнопок длинное название моталки не влезло бы. -->
+    <string name="btn_short_jump_next">+%1$d</string>
+    <string name="btn_short_jump_prev">−%1$d</string>
     <string name="btn_short_play">Читать</string>
     <string name="btn_short_pause">Пауза</string>
     <string name="btn_short_repeat">Повтор</string>
@@ -425,6 +448,10 @@
     <string name="headset_sentence">Предложение</string>
     <string name="headset_paragraph">Абзац</string>
     <string name="headset_chapter">Глава</string>
+    <!-- msg5250: в списке шагов гарнитуры — моталка. Направление даёт сама кнопка
+         (как у «Предложения»/«Абзаца»), поэтому пункт один, а число берётся из
+         настройки своей кнопки: на «вперёд» — из «вперёд», на «назад» — из «назад». -->
+    <string name="headset_sent_n">Через %1$s</string>
 
     <!-- Уровень шага «Глава» у кнопок гарнитуры (msg5230). Раньше это была общая
          настройка «Кнопки глав шагают»: она задавала и шаг четырёх кнопок читалки,

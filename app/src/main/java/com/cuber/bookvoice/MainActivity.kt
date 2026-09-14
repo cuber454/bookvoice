@@ -1191,6 +1191,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         when (act) {
             G_PREV_SENT -> jumpAndAnnounce { moveBySentence(-1) }
             G_NEXT_SENT -> jumpAndAnnounce { moveBySentence(+1) }
+            // msg5234: моталка — сразу N предложений в сторону; число у каждого
+            // направления своё (две строки в «Управлении»).
+            G_PREV_SENT_N -> jumpAndAnnounce {
+                moveBySentences(-1, jumpCount(prefs, forward = false))
+            }
+            G_NEXT_SENT_N -> jumpAndAnnounce {
+                moveBySentences(+1, jumpCount(prefs, forward = true))
+            }
             G_PREV_PARA -> jumpAndAnnounce { moveByParagraph(-1) }
             G_NEXT_PARA -> jumpAndAnnounce { moveByParagraph(+1) }
             G_PREV_CH -> jumpAndAnnounce { moveByChapter(-1, CH_NAV_CHAPTERS) }
@@ -1237,6 +1245,37 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             ch++
             s = 0
         }
+        goTo(ch, s)
+    }
+
+    /** Моталка (msg5234): шаг сразу на [count] предложений в сторону [delta] — по
+     *  книге целиком, сквозь главы, ровно тем же правилом, что «След. предложение»
+     *  (граница главы переходит в соседнюю). У края книги останавливаемся там, где
+     *  он: доехать на меньшее число предложений лучше, чем не сдвинуться вовсе.
+     *  Если не сдвинулись ни на шаг — позицию не трогаем (иначе озвучка «Где я»
+     *  повторила бы то же место как результат перемотки). */
+    private fun moveBySentences(delta: Int, count: Int) {
+        val bk = book ?: return
+        var ch = chapterIdx
+        var s = sentenceIdx
+        var left = count
+        while (left > 0) {
+            var nextCh = ch
+            var nextS = s + delta
+            if (nextS < 0) {
+                if (nextCh <= 0) break
+                nextCh--
+                nextS = bk.chapters[nextCh].sentences.size - 1
+            } else if (nextS >= bk.chapters[ch].sentences.size) {
+                if (ch + 1 >= bk.chapters.size) break
+                nextCh = ch + 1
+                nextS = 0
+            }
+            ch = nextCh
+            s = nextS
+            left--
+        }
+        if (left == count) return
         goTo(ch, s)
     }
 
@@ -1334,7 +1373,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         for (i in READER_BUTTONS.indices) {
             val b = READER_BUTTONS[i]
             views[i].contentDescription = readerButtonName(this, prefs, b)
-            views[i].text = getString(actionShortRes(readerButtonAction(prefs, b)))
+            views[i].text = actionShort(this, prefs, readerButtonAction(prefs, b))
         }
     }
 
@@ -1342,7 +1381,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  Список тот же, что в «Жестах»; заголовок называет саму кнопку — человек
      *  слышит, что именно переназначает. */
     private fun pickReaderButtonAction(b: ReaderButton) {
-        val labels = GESTURE_ACTIONS.map { getString(it.second) }.toTypedArray()
+        val labels = GESTURE_ACTIONS.map { gestureActionLabel(this, prefs, it.first) }.toTypedArray()
         val cur = readerButtonAction(prefs, b)
         val idx = GESTURE_ACTIONS.indexOfFirst { it.first == cur }.coerceAtLeast(0)
         MaterialAlertDialogBuilder(this)
@@ -3415,6 +3454,29 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val HS_SENTENCE = "sentence"
         internal const val HS_PARAGRAPH = "paragraph"
         internal const val HS_CHAPTER = "chapter"
+        // msg5250: шаг гарнитуры «моталка» — сразу N предложений в сторону кнопки
+        // (сколько именно, берём из настроек моталки: у «вперёд» своё число, у
+        // «назад» своё). Направление задаёт сама кнопка, как у прочих шагов.
+        internal const val HS_SENT_N = "sent_n"
+
+        // msg5234: моталка — шаг сразу на N предложений. Число задаётся человеком
+        // (две строки в «Управлении»), поэтому в пункте палитры оно подставляется
+        // в название, а на кнопке читалки стоит короткая подпись «+15»/«−15».
+        internal const val KEY_JUMP_FWD = "jump_fwd"
+        internal const val KEY_JUMP_BACK = "jump_back"
+        internal const val JUMP_DEFAULT = 10
+        /** Готовый ряд чисел моталки: выбирать из списка незрячему дешевле, чем
+         *  вводить число с клавиатуры, а нужны всё равно круглые значения. */
+        internal val JUMP_STEPS = intArrayOf(1, 2, 3, 5, 10, 15, 20, 30, 50)
+
+        /** Сколько предложений отматывать за раз: [forward] — «вперёд» или «назад». */
+        internal fun jumpCount(prefs: SharedPreferences, forward: Boolean): Int =
+            prefs.getInt(if (forward) KEY_JUMP_FWD else KEY_JUMP_BACK, JUMP_DEFAULT)
+
+        /** «15 предложений» в правильной форме — общая для названий пункта палитры,
+         *  строк настроек и пункта гарнитуры. */
+        internal fun sentencesPhrase(ctx: Context, n: Int): String =
+            ctx.resources.getQuantityString(R.plurals.sentences_n, n, n)
 
         // msg2695/2699: долгое нажатие кнопки «▶» (играть/пауза). Значение pref — одна
         // из PLAY_LONG_*. По умолчанию PLAY_LONG_SLEEP — долгое нажатие открывает
@@ -3441,6 +3503,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val G_NEXT_MAJOR = "next_major"
         internal const val G_PREV_HEADER = "prev_header"
         internal const val G_NEXT_HEADER = "next_header"
+        // msg5234: моталка — шаг сразу на N предложений (число из настроек).
+        internal const val G_PREV_SENT_N = "prev_sent_n"
+        internal const val G_NEXT_SENT_N = "next_sent_n"
         internal const val G_NONE = "none"
         internal const val G_PLAY = "play"
         internal const val G_PAUSE = "pause"
@@ -3464,6 +3529,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_PREV_HEADER to R.string.g_action_prev_header,
             G_NEXT_SENT to R.string.g_action_next_sent,
             G_PREV_SENT to R.string.g_action_prev_sent,
+            // msg5234: моталка — рядом с соседями по смыслу (шаг по предложениям),
+            // число в названии подставляется при показе списка (gestureActionLabel).
+            G_NEXT_SENT_N to R.string.g_action_next_sent_n,
+            G_PREV_SENT_N to R.string.g_action_prev_sent_n,
             G_NEXT_PARA to R.string.g_action_next_para,
             G_PREV_PARA to R.string.g_action_prev_para,
             G_PLAY to R.string.g_action_play,
@@ -3499,14 +3568,40 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             b: ReaderButton,
         ): String {
             val act = readerButtonAction(prefs, b)
-            val label = GESTURE_ACTIONS.firstOrNull { it.first == act }
-                ?.let { ctx.getString(it.second) } ?: ""
+            val label = gestureActionLabel(ctx, prefs, act)
             val twin = READER_BUTTONS.any { it !== b && readerButtonAction(prefs, it) == act }
             return if (twin) ctx.getString(R.string.btn_name_with_pos, label, ctx.getString(b.posRes))
             else label
         }
 
-        /** Короткая видимая надпись на кнопке — по её действию (msg5220). */
+        /** Название действия из палитры — то, что человек слышит в списке и на
+         *  кнопке (msg5220). У моталки (msg5234) в название подставляется число
+         *  из настроек, поэтому это не голая строка ресурса, а функция: список
+         *  показывается в момент открытия, и число в нём всегда актуальное. */
+        internal fun gestureActionLabel(ctx: Context, prefs: SharedPreferences, act: String): String {
+            val res = GESTURE_ACTIONS.firstOrNull { it.first == act }?.second ?: return ""
+            return when (act) {
+                G_NEXT_SENT_N -> ctx.getString(res, sentencesPhrase(ctx, jumpCount(prefs, true)))
+                G_PREV_SENT_N -> ctx.getString(res, sentencesPhrase(ctx, jumpCount(prefs, false)))
+                else -> ctx.getString(res)
+            }
+        }
+
+        /** Короткая видимая надпись на кнопке — по её действию (msg5220). Моталка
+         *  подписывается числом («+15»/«−15», msg5234): длинное название растянуло
+         *  бы кнопку за прежнюю ширину (msg2431). */
+        internal fun actionShort(ctx: Context, prefs: SharedPreferences, act: String): String =
+            when (act) {
+                G_NEXT_SENT_N -> ctx.getString(
+                    R.string.btn_short_jump_next, jumpCount(prefs, true),
+                )
+                G_PREV_SENT_N -> ctx.getString(
+                    R.string.btn_short_jump_prev, jumpCount(prefs, false),
+                )
+                else -> ctx.getString(actionShortRes(act))
+            }
+
+        /** Ресурс короткой надписи для действий без подстановки (msg5220). */
         internal fun actionShortRes(act: String): Int = when (act) {
             G_PREV_SENT -> R.string.btn_short_prev_sent
             G_NEXT_SENT -> R.string.btn_short_next_sent

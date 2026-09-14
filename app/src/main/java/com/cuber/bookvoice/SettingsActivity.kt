@@ -75,6 +75,8 @@ class SettingsActivity(private val act: SectionActivity) {
     private var startRow: Button? = null
     private var exitRow: Button? = null
     private var playLongRow: Button? = null  // msg2695/2699: долгое нажатие «▶»
+    private var jumpFwdRow: Button? = null   // msg5234: моталка — число вперёд
+    private var jumpBackRow: Button? = null  // msg5234: моталка — число назад
     private var folderRow: Button? = null
     private var dlFolderRow: Button? = null
     private var dlFormatRow: Button? = null
@@ -554,6 +556,32 @@ class SettingsActivity(private val act: SectionActivity) {
         resetTabsRow = addButton(getString(R.string.lib_tabs_reset)) { resetTabs() }
     }
 
+    /** Диалог выбора числа для моталки (msg5234): готовый ряд чисел, а не ввод с
+     *  клавиатуры — незрячему выбор из списка дешевле, а нужны круглые значения.
+     *  [forward] — какое из двух чисел правим; в названиях пунктов слово
+     *  «предложение» стоит в правильной форме (sentencesPhrase). */
+    private fun pickJumpSteps(key: String, forward: Boolean) {
+        val cur = prefs.getInt(key, MainActivity.JUMP_DEFAULT)
+        val checked = MainActivity.JUMP_STEPS.indexOf(cur).coerceAtLeast(0)
+        val labels = MainActivity.JUMP_STEPS
+            .map { MainActivity.sentencesPhrase(act, it) }
+            .toTypedArray()
+        MaterialAlertDialogBuilder(act)
+            .setTitle(if (forward) R.string.jump_fwd_dialog else R.string.jump_back_dialog)
+            .setSingleChoiceItems(labels, checked) { d, which ->
+                prefs.edit().putInt(key, MainActivity.JUMP_STEPS[which]).apply()
+                d.dismiss()
+                refreshRows()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Строка моталки: «Моталка вперёд: 15 предложений» (msg5234). */
+    private fun jumpRowText(titleRes: Int, key: String): String =
+        getString(titleRes) + ": " +
+            MainActivity.sentencesPhrase(act, prefs.getInt(key, MainActivity.JUMP_DEFAULT))
+
     /** Строки свайпов вправо/влево (#77). Раньше были отдельным разделом «Жесты»,
      *  по просьбе перенесены в «Управление». Палитра действий общая с ридером
      *  (MainActivity.GESTURE_ACTIONS): выбранный id хранится в prefs и читается
@@ -641,6 +669,7 @@ class SettingsActivity(private val act: SectionActivity) {
         val values = arrayOf(
             MainActivity.HS_OFF, MainActivity.HS_SENTENCE,
             MainActivity.HS_PARAGRAPH, MainActivity.HS_CHAPTER,
+            MainActivity.HS_SENT_N,
         )
         val cur = values.indexOf(
             prefs.getString(key, MainActivity.HS_SENTENCE) ?: MainActivity.HS_SENTENCE
@@ -653,6 +682,11 @@ class SettingsActivity(private val act: SectionActivity) {
                     getString(R.string.headset_sentence),
                     getString(R.string.headset_paragraph),
                     getString(R.string.headset_chapter),
+                    // msg5250: моталка — направление даёт сама кнопка, поэтому в
+                    // пункте стоит число ИМЕННО этой кнопки («вперёд» или «назад»).
+                    MainActivity.sentencesPhrase(act, headsetJumpCount(key)).let {
+                        getString(R.string.headset_sent_n, it)
+                    },
                 ),
                 cur,
             ) { d, which ->
@@ -664,18 +698,33 @@ class SettingsActivity(private val act: SectionActivity) {
             .show()
     }
 
+    /** Сколько предложений мотает кнопка гарнитуры [key] (msg5250): у «вперёд» —
+     *  число из настройки «моталка вперёд», у «назад» — из «моталка назад», как и
+     *  на экране чтения. */
+    private fun headsetJumpCount(key: String): Int =
+        MainActivity.jumpCount(prefs, forward = key == MainActivity.KEY_HS_NEXT)
+
     /** Название выбранного шага кнопки гарнитуры — для строки-резюме. */
-    private fun headsetLabel(id: String?): String = getString(when (id) {
-        MainActivity.HS_SENTENCE -> R.string.headset_sentence
-        MainActivity.HS_PARAGRAPH -> R.string.headset_paragraph
-        MainActivity.HS_CHAPTER -> R.string.headset_chapter
-        else -> R.string.headset_off
-    })
+    private fun headsetLabel(id: String?, key: String): String = when (id) {
+        MainActivity.HS_SENTENCE -> getString(R.string.headset_sentence)
+        MainActivity.HS_PARAGRAPH -> getString(R.string.headset_paragraph)
+        MainActivity.HS_CHAPTER -> getString(R.string.headset_chapter)
+        // msg5250: у моталки в строке видно, на сколько она мотает именно здесь.
+        MainActivity.HS_SENT_N -> getString(
+            R.string.headset_sent_n,
+            MainActivity.sentencesPhrase(act, headsetJumpCount(key)),
+        )
+        else -> getString(R.string.headset_off)
+    }
 
     /** Диалог выбора действия для одного свайпа (общая палитра жестов). Заголовок
      *  называет направление свайпа (msg2547): «Действие свайпа вправо»/«…влево». */
     private fun pickGesture(key: String, def: String, titleRes: Int) {
-        val labels = MainActivity.GESTURE_ACTIONS.map { getString(it.second) }.toTypedArray()
+        // msg5234: название действия собирается общим помощником — у моталки в нём
+        // стоит число из настроек, поэтому список показываем в момент открытия.
+        val labels = MainActivity.GESTURE_ACTIONS
+            .map { MainActivity.gestureActionLabel(act, prefs, it.first) }
+            .toTypedArray()
         val cur = prefs.getString(key, def) ?: def
         val idx = MainActivity.GESTURE_ACTIONS.indexOfFirst { it.first == cur }.coerceAtLeast(0)
         MaterialAlertDialogBuilder(act)
@@ -690,10 +739,8 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     /** Имя действия по его id из палитры жестов (для строк-резюме и подписи раздела). */
-    private fun gestureLabel(id: String?): String {
-        val res = MainActivity.GESTURE_ACTIONS.firstOrNull { it.first == id }?.second ?: return ""
-        return getString(res)
-    }
+    private fun gestureLabel(id: String?): String =
+        MainActivity.gestureActionLabel(act, prefs, id ?: "")
 
     private fun buildStartGroup() {
         // msg1254: тактильное подтверждение действий (книга удалена/скачана, копия,
@@ -764,6 +811,14 @@ class SettingsActivity(private val act: SectionActivity) {
                 .show()
         }
         addGestureRows()
+        // msg5234: моталка — шаг сразу на несколько предложений, число выбирается
+        // здесь (своё для «вперёд» и «назад»), а сама моталка появляется пунктом в
+        // общем списке действий — на кнопке читалки, на свайпе и на кнопке
+        // гарнитуры. Подсказка нужна: без неё непонятно, что пункт списка и эта
+        // строка связаны.
+        addHint(getString(R.string.jump_hint))
+        jumpFwdRow = addValueButton { pickJumpSteps(MainActivity.KEY_JUMP_FWD, forward = true) }
+        jumpBackRow = addValueButton { pickJumpSteps(MainActivity.KEY_JUMP_BACK, forward = false) }
         // msg2527: настройки кнопок гарнитуры („назад/вперёд“) вынесены в подраздел —
         // в списке «Управления» остаётся строка-переход, открывающая подраздел
         // (двухуровневая навигация, как из корня в раздел).
@@ -1099,11 +1154,20 @@ class SettingsActivity(private val act: SectionActivity) {
             gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_HEADER))
         gestureLeftRow?.text = getString(R.string.gesture_left_title) + ": " +
             gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_HEADER))
+        // msg5234: моталка — числа показываем словами («15 предложений»).
+        jumpFwdRow?.text = jumpRowText(R.string.jump_fwd_title, MainActivity.KEY_JUMP_FWD)
+        jumpBackRow?.text = jumpRowText(R.string.jump_back_title, MainActivity.KEY_JUMP_BACK)
 
         headsetPrevRow?.text = getString(R.string.headset_prev_title) + ": " +
-            headsetLabel(prefs.getString(MainActivity.KEY_HS_PREV, MainActivity.HS_SENTENCE))
+            headsetLabel(
+                prefs.getString(MainActivity.KEY_HS_PREV, MainActivity.HS_SENTENCE),
+                MainActivity.KEY_HS_PREV,
+            )
         headsetNextRow?.text = getString(R.string.headset_next_title) + ": " +
-            headsetLabel(prefs.getString(MainActivity.KEY_HS_NEXT, MainActivity.HS_SENTENCE))
+            headsetLabel(
+                prefs.getString(MainActivity.KEY_HS_NEXT, MainActivity.HS_SENTENCE),
+                MainActivity.KEY_HS_NEXT,
+            )
         headsetStepRow?.text = getString(R.string.headset_step_title) + ": " + headsetStepLabel()
 
         afterCallRow?.text = getString(R.string.after_call_title) + ": " + afterCallLabel()
