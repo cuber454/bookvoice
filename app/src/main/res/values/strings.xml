@@ -420,7 +420,11 @@
     <!-- msg5220: имя кнопки читалки — строка действия; место на конце нужно,
          только когда такое же действие стоит ещё на одной кнопке. -->
     <string name="btn_name_with_pos">%1$s, %2$s</string>
-    <string name="btn_action_dialog">Действие кнопки «%1$s»</string>
+    <!-- msg5266: у кнопки читалки два действия — подпись строки в настройках
+         называет место кнопки и вид нажатия. -->
+    <string name="btn_action_short_title">%1$s: короткое нажатие</string>
+    <string name="btn_action_long_title">%1$s: долгое нажатие</string>
+    <string name="reader_actions_hint">Действия четырёх кнопок читалки. Короткое нажатие — по обычному касанию, долгое — по удержанию; список тот же, что у свайпов.</string>
     <string name="btn_pos_top_left">верхняя левая</string>
     <string name="btn_pos_top_right">верхняя правая</string>
     <string name="btn_pos_bottom_left">нижняя левая</string>

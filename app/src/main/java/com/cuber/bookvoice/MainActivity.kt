@@ -312,9 +312,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             onPlayPauseLongClick()
             true
         }
-        // msg5220: у каждой из четырёх кнопок читалки своё действие из общей
-        // палитры — короткое нажатие идёт тем же диспетчером, что и свайпы,
-        // долгое открывает выбор действия (см. pickReaderButtonAction).
+        // msg5220/msg5266: у каждой из четырёх кнопок читалки два действия из
+        // общей палитры — короткое и долгое; оба назначаются в «Управлении»,
+        // диспетчер тот же, что у свайпов. Долгое подтверждаем вибрацией: списка
+        // на нём больше нет, и без толчка незрячему не за что зацепиться — сработал
+        // ли вообще долгий тап. Действие «Выключено» молчит: обещать толчком
+        // нечего.
         val buttonViews: List<Pair<ReaderButton, android.view.View>> = listOf(
             READER_BUTTONS[0] to binding.btnPrevChapter,
             READER_BUTTONS[1] to binding.btnNextChapter,
@@ -324,7 +327,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         for ((b, view) in buttonViews) {
             view.setOnClickListener { runGestureAction(readerButtonAction(prefs, b)) }
             view.setOnLongClickListener {
-                pickReaderButtonAction(b)
+                val long = readerButtonLongAction(prefs, b)
+                if (long != G_NONE) {
+                    Vibra.confirm(this)
+                    runGestureAction(long)
+                }
                 true
             }
         }
@@ -1377,23 +1384,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
     }
 
-    /** Долгое нажатие кнопки читалки: выбор действия из общей палитры (msg5220).
-     *  Список тот же, что в «Жестах»; заголовок называет саму кнопку — человек
-     *  слышит, что именно переназначает. */
-    private fun pickReaderButtonAction(b: ReaderButton) {
-        val labels = GESTURE_ACTIONS.map { gestureActionLabel(this, prefs, it.first) }.toTypedArray()
-        val cur = readerButtonAction(prefs, b)
-        val idx = GESTURE_ACTIONS.indexOfFirst { it.first == cur }.coerceAtLeast(0)
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.btn_action_dialog, readerButtonName(this, prefs, b)))
-            .setSingleChoiceItems(labels, idx) { d, which ->
-                prefs.edit().putString(b.key, GESTURE_ACTIONS[which].first).apply()
-                d.dismiss()
-                updateButtonNames()
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-    }
 
     /** msg5220: разовый перенос старых настроек в действия кнопок. Шаг «Пред./
      *  След.» и режим «Кнопки глав» были отдельными настройками — переводим их
@@ -3263,6 +3253,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     internal class ReaderButton(
         val key: String,
         val def: String,
+        val longKey: String,
+        val longDef: String,
         val posRes: Int,
         val uiKey: String,
     )
@@ -3339,15 +3331,20 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val CH_NAV_ALL = "all"
 
         // msg5220: у каждой из четырёх кнопок читалки своё действие из общей
-        // палитры (GESTURE_ACTIONS) — назначается долгим нажатием на самой
-        // кнопке (msg5224: строки «шагают по» из «Управления» убраны). KEY_STEP/
-        // KEY_CH_NAV остались только как источник разового переноса
-        // (migrateReaderButtons) и для шага «глава» кнопок гарнитуры — его
-        // читает ReaderEngine.chapterStopIndexes.
+        // палитры (GESTURE_ACTIONS). msg5266: действий у кнопки стало два —
+        // короткое нажатие (KEY_BTN_*) и долгое (KEY_BTN_*_LONG); оба выбираются
+        // в «Управлении», список по долгому нажатию убран. KEY_STEP/KEY_CH_NAV
+        // остались только как источник разового переноса (migrateReaderButtons)
+        // и для шага «глава» кнопок гарнитуры — его читает
+        // ReaderEngine.chapterStopIndexes.
         internal const val KEY_BTN_PREV_SENT = "btn_prev_sent"
         internal const val KEY_BTN_NEXT_SENT = "btn_next_sent"
         internal const val KEY_BTN_PREV_CH = "btn_prev_ch"
         internal const val KEY_BTN_NEXT_CH = "btn_next_ch"
+        internal const val KEY_BTN_PREV_SENT_LONG = "btn_prev_sent_long"
+        internal const val KEY_BTN_NEXT_SENT_LONG = "btn_next_sent_long"
+        internal const val KEY_BTN_PREV_CH_LONG = "btn_prev_ch_long"
+        internal const val KEY_BTN_NEXT_CH_LONG = "btn_next_ch_long"
         internal const val KEY_BTN_MIGRATED = "btn_actions_migrated"
         // Конструктор экрана (msg5220): четыре кнопки прячутся по одной; старые
         // парные ключи KEY_UI_SENT/KEY_UI_CHAPTERS — только для переноса.
@@ -3539,16 +3536,36 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_NONE to R.string.g_action_none,
         )
 
+        /** Четыре кнопки читалки: короткое действие (msg5220) и долгое (msg5266).
+         *  По умолчанию короткие — как было исстари (верхние шагают по заголовкам,
+         *  нижние по предложениям), долгие выключены: пока человек сам не назначит,
+         *  долгое нажатие ничего не делает и не удивляет. */
         internal val READER_BUTTONS: List<ReaderButton> = listOf(
-            ReaderButton(KEY_BTN_PREV_CH, G_PREV_HEADER, R.string.btn_pos_top_left, KEY_UI_PREV_CH),
-            ReaderButton(KEY_BTN_NEXT_CH, G_NEXT_HEADER, R.string.btn_pos_top_right, KEY_UI_NEXT_CH),
-            ReaderButton(KEY_BTN_PREV_SENT, G_PREV_SENT, R.string.btn_pos_bottom_left, KEY_UI_PREV_SENT),
-            ReaderButton(KEY_BTN_NEXT_SENT, G_NEXT_SENT, R.string.btn_pos_bottom_right, KEY_UI_NEXT_SENT),
+            ReaderButton(
+                KEY_BTN_PREV_CH, G_PREV_HEADER, KEY_BTN_PREV_CH_LONG, G_NONE,
+                R.string.btn_pos_top_left, KEY_UI_PREV_CH,
+            ),
+            ReaderButton(
+                KEY_BTN_NEXT_CH, G_NEXT_HEADER, KEY_BTN_NEXT_CH_LONG, G_NONE,
+                R.string.btn_pos_top_right, KEY_UI_NEXT_CH,
+            ),
+            ReaderButton(
+                KEY_BTN_PREV_SENT, G_PREV_SENT, KEY_BTN_PREV_SENT_LONG, G_NONE,
+                R.string.btn_pos_bottom_left, KEY_UI_PREV_SENT,
+            ),
+            ReaderButton(
+                KEY_BTN_NEXT_SENT, G_NEXT_SENT, KEY_BTN_NEXT_SENT_LONG, G_NONE,
+                R.string.btn_pos_bottom_right, KEY_UI_NEXT_SENT,
+            ),
         )
 
-        /** Действие кнопки читалки (или его значение по умолчанию). */
+        /** Действие кнопки читалки на короткое нажатие (или значение по умолчанию). */
         internal fun readerButtonAction(prefs: SharedPreferences, b: ReaderButton): String =
             prefs.getString(b.key, b.def) ?: b.def
+
+        /** Действие кнопки читалки на долгое нажатие (msg5266). */
+        internal fun readerButtonLongAction(prefs: SharedPreferences, b: ReaderButton): String =
+            prefs.getString(b.longKey, b.longDef) ?: b.longDef
 
         /** Имя кнопки читалки для скринридера (msg5220): строка действия, а если
          *  такое же действие стоит ещё на одной кнопке — с местом на конце

@@ -86,6 +86,19 @@ class SettingsActivity(private val act: SectionActivity) {
     // msg5220: четыре строки конструктора читалки — галочка прячет кнопку, а
     // текст строки следует её действию (кнопка и строка зовутся одинаково).
     private val readerButtonRows = ArrayList<Pair<MainActivity.ReaderButton, CheckBox>>()
+    // msg5266: восемь строк действий кнопок читалки — по две на кнопку (короткое
+    // и долгое нажатие). Подпись постоянная («нижняя левая: долгое нажатие»),
+    // меняется только значение, поэтому храним её рядом с кнопкой.
+    private val buttonActionRows = ArrayList<ButtonActionRow>()
+
+    /** Строка-резюме одного действия кнопки читалки (msg5266): ключ настройки,
+     *  значение по умолчанию и постоянная подпись строки. */
+    private class ButtonActionRow(
+        val key: String,
+        val def: String,
+        val title: String,
+        val button: Button,
+    )
     // Строки-резюме кнопок гарнитуры „назад/вперёд“ (msg2136).
     private var headsetPrevRow: Button? = null
     private var headsetNextRow: Button? = null
@@ -594,6 +607,40 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
+    /** Восемь строк действий кнопок читалки (msg5266): на каждую кнопку — строка
+     *  короткого нажатия и строка долгого. Подпись строки постоянная и называет
+     *  место кнопки на экране; значение — выбранное действие. Идём по порядку
+     *  [MainActivity.READER_BUTTONS] (верхние главы, нижние предложения), поэтому
+     *  строки стоят парами и читаются как список кнопок. */
+    private fun addReaderActionRows() {
+        for (b in MainActivity.READER_BUTTONS) {
+            val pos = getString(b.posRes)
+            buttonActionRows.add(
+                addActionRow(
+                    b.key, b.def,
+                    getString(R.string.btn_action_short_title, pos),
+                )
+            )
+            buttonActionRows.add(
+                addActionRow(
+                    b.longKey, b.longDef,
+                    getString(R.string.btn_action_long_title, pos),
+                )
+            )
+        }
+    }
+
+    /** Строка-значение одного действия кнопки читалки: тап открывает общую
+     *  палитру действий (pickAction), текст обновляется в [refreshRows]. */
+    private fun addActionRow(key: String, def: String, title: String): ButtonActionRow {
+        val btn = addValueButton { pickAction(key, def, title) }
+        return ButtonActionRow(key, def, title, btn)
+    }
+
+    /** Текст строки действия: «нижняя левая: долгое нажатие: Ничего не делать». */
+    private fun actionRowText(r: ButtonActionRow): String =
+        r.title + ": " + gestureLabel(prefs.getString(r.key, r.def) ?: r.def)
+
     /** Строки кнопок гарнитуры „назад/вперёд“ (msg2136). msg2527: открываются
      *  в подразделе «Настройки кнопок гарнитуры» (openHeadsetSub), не в общем
      *  списке «Управления». У каждой кнопки свой выбор шага: „Выключено“ /
@@ -717,6 +764,13 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Диалог выбора действия для одного свайпа (общая палитра жестов). Заголовок
      *  называет направление свайпа (msg2547): «Действие свайпа вправо»/«…влево». */
     private fun pickGesture(key: String, def: String, titleRes: Int) {
+        pickAction(key, def, getString(titleRes))
+    }
+
+    /** Тот же список действий, но заголовок — готовая строка (msg5266): кнопкам
+     *  читалки он собирается из места кнопки и вида нажатия, а не лежит
+     *  отдельным ресурсом на каждую из восьми строк. */
+    private fun pickAction(key: String, def: String, title: CharSequence) {
         // msg5234: название действия собирается общим помощником — у моталки в нём
         // стоит число из настроек, поэтому список показываем в момент открытия.
         val labels = MainActivity.GESTURE_ACTIONS
@@ -725,7 +779,7 @@ class SettingsActivity(private val act: SectionActivity) {
         val cur = prefs.getString(key, def) ?: def
         val idx = MainActivity.GESTURE_ACTIONS.indexOfFirst { it.first == cur }.coerceAtLeast(0)
         MaterialAlertDialogBuilder(act)
-            .setTitle(titleRes)
+            .setTitle(title)
             .setSingleChoiceItems(labels, idx) { d, which ->
                 prefs.edit().putString(key, MainActivity.GESTURE_ACTIONS[which].first).apply()
                 d.dismiss()
@@ -808,6 +862,11 @@ class SettingsActivity(private val act: SectionActivity) {
                 .show()
         }
         addGestureRows()
+        // msg5266: у каждой из четырёх кнопок читалки теперь два действия —
+        // короткое и долгое нажатие; оба выбираются здесь из той же палитры,
+        // что у свайпов. Список по долгому нажатию на самой кнопке убран.
+        addHint(getString(R.string.reader_actions_hint))
+        addReaderActionRows()
         // msg5234: моталка — шаг сразу на несколько предложений, число выбирается
         // здесь (своё для «вперёд» и «назад»), а сама моталка появляется пунктом в
         // общем списке действий — на кнопке читалки, на свайпе и на кнопке
@@ -1151,6 +1210,8 @@ class SettingsActivity(private val act: SectionActivity) {
             gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_HEADER))
         gestureLeftRow?.text = getString(R.string.gesture_left_title) + ": " +
             gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_HEADER))
+        // msg5266: восемь строк действий кнопок читалки — значение следует выбору.
+        for (r in buttonActionRows) r.button.text = actionRowText(r)
         // msg5234: моталка — числа показываем словами («15 предложений»).
         jumpFwdRow?.text = jumpRowText(R.string.jump_fwd_title, MainActivity.KEY_JUMP_FWD)
         jumpBackRow?.text = jumpRowText(R.string.jump_back_title, MainActivity.KEY_JUMP_BACK)
