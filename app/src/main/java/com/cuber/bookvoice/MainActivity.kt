@@ -1605,10 +1605,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun refreshSpeedValue() {
         binding.tvSpeed.text = speedText(currentSpeed())
-        // msg4402: галочка коротких пауз могла переключиться в настройках —
-        // подхватываем её для уже открытой книги (onStart зовёт нас на возврате
-        // из «Настроек»), не заставляя переоткрывать книгу.
-        ReaderEngine.player?.tightPauses = prefs.getBoolean(KEY_TIGHT_PAUSES, true)
         // msg4598: тестовая галочка бесшовной передачи — подхватываем её так же,
         // на возврате из «Настроек», не переоткрывая книгу.
         ReaderEngine.player?.gapless = prefs.getBoolean(KEY_GAPLESS, false)
@@ -3366,10 +3362,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Портянка (msg4372, вариант А): во время чтения отпущенная прокрутка
         // перекидывает голос на верхнюю строку — он читает дальше с неё.
         internal const val KEY_SCROLL_FOLLOW = "scroll_follows_reading"
-        // msg4402: короткие паузы между предложениями — склейка соседних
-        // предложений в одну фразу. По умолчанию вкл (msg4446): просьба тестера,
-        // полезно всем; явно сохранённое значение владельца перебивает умолчание.
-        internal const val KEY_TIGHT_PAUSES = "tight_sentence_pauses"
         // msg4598: бесшовная передача звука встык — ТЕСТОВАЯ настройка. По
         // умолчанию выкл: Сергей сравнивает на слух два варианта стыка
         // предложений (обычный перезапуск плеера против платформенного перехода).

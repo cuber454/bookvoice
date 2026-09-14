@@ -316,8 +316,8 @@ internal object ReaderEngine {
         sp.speed = prefs.getFloat(MainActivity.KEY_SPEED, 1f)
         sp.pitch = prefs.getFloat(MainActivity.KEY_PITCH, 1f)
         sp.volume = prefs.getFloat(MainActivity.KEY_VOLUME, 1f)
-        // msg4402: короткие паузы между предложениями (просьба тестера).
-        sp.tightPauses = prefs.getBoolean(MainActivity.KEY_TIGHT_PAUSES, true)
+        // msg4402/msg5254: короткие паузы между предложениями (просьба тестера) —
+        // галочки нет, склейка и обрезка работают всегда.
         // msg4598: бесшовная передача звука встык — тестовая галочка, по
         // умолчанию выкл (сравнение двух стыков на слух).
         sp.gapless = prefs.getBoolean(MainActivity.KEY_GAPLESS, false)
@@ -841,10 +841,10 @@ internal object ReaderEngine {
     private const val TIGHT_CHUNK_MAX = 220
     private const val TIGHT_CHUNK_MAX_UNITS = 4
 
-    /** Сколько предложений с [s] уйдёт в движок одной фразой (1 — если склейка
-     *  выключена). Без побочных эффектов: позицию не двигает. */
+    /** Сколько предложений с [s] уйдёт в движок одной фразой. Склейка коротких
+     *  фраз включена всегда (msg5254: галочка убрана). Без побочных эффектов:
+     *  позицию не двигает. */
     private fun chunkSpan(ch: Int, s: Int): Int {
-        if (player?.tightPauses != true) return 1
         val cur = book?.chapters?.getOrNull(ch)?.sentences ?: return 1
         var n = 1
         var len = cur.getOrNull(s)?.text?.length ?: return 1
