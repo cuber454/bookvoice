@@ -41,6 +41,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.cuber.bookvoice.databinding.ActivityMainBinding
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.json.JSONArray
 import org.json.JSONObject
@@ -1588,6 +1589,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // значка ▶/⏸ в строке (msg1144: значок скринридер читал отдельным словом)
         // и без contentDescription: одно изменение = одно объявление.
         binding.btnPlayPause.text = if (playing) "Пауза" else "Читать"
+        // msg5561: вместе с подписью меняем и значок (треугольник ↔ две палочки).
+        // Вторым источником озвучки он не становится: значок TalkBack не
+        // объявляет, объявление по-прежнему одно — от текста (msg1644 был про
+        // значок В САМОЙ строке кнопки, и он читался отдельным словом).
+        // Приведение нужно потому, что ViewBinding типизирует поле по тегу
+        // <Button>, а в Material-теме объект на самом деле MaterialButton.
+        (binding.btnPlayPause as? MaterialButton)?.setIconResource(
+            if (playing) R.drawable.ic_pause else R.drawable.ic_play,
+        )
         // #54: та же кнопка в полноэкранной панели голоса — «Прослушать»/«Пауза».
         binding.btnVoiceTest.text = if (playing) "Пауза" else getString(R.string.voice_test_play)
         MediaSessionService.setPlaying(playing)

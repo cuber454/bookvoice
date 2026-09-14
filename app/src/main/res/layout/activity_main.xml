@@ -493,7 +493,11 @@
          ряда короткие и всегда в одну строку, без стрелок: «Пред.» / «Читать» /
          «След.» / «Голос» — чтобы текст не переносился. Полные имена для
          скринридера живут в contentDescription («Предыдущее предложение»,
-         «Следующее предложение», «Голос чтения»). -->
+         «Следующее предложение», «Голос чтения»).
+         msg5561: у каждой кнопки ряда теперь значок сверху и подпись под ним
+         (как в нижней навигации Android) — подписи обрезались при увеличенном
+         системном шрифте, а значок читается и без текста. Подписи ужаты до
+         12sp (play 13sp) с автоподбором до 9sp, высоты кнопок не менялись. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -511,7 +515,14 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="Пред."
-            android:textSize="16sp" />
+            android:textSize="12sp"
+            app:autoSizeMaxTextSize="12sp"
+            app:autoSizeMinTextSize="9sp"
+            app:autoSizeTextType="uniform"
+            app:icon="@drawable/ic_prev"
+            app:iconGravity="top"
+            app:iconPadding="2dp"
+            app:iconSize="26dp" />
 
         <Button
             android:id="@+id/btnPlayPause"
@@ -522,7 +533,14 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="Читать"
-            android:textSize="18sp" />
+            android:textSize="13sp"
+            app:autoSizeMaxTextSize="13sp"
+            app:autoSizeMinTextSize="9sp"
+            app:autoSizeTextType="uniform"
+            app:icon="@drawable/ic_play"
+            app:iconGravity="top"
+            app:iconPadding="2dp"
+            app:iconSize="30dp" />
 
         <Button
             android:id="@+id/btnNextSentence"
@@ -534,7 +552,14 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="След."
-            android:textSize="16sp" />
+            android:textSize="12sp"
+            app:autoSizeMaxTextSize="12sp"
+            app:autoSizeMinTextSize="9sp"
+            app:autoSizeTextType="uniform"
+            app:icon="@drawable/ic_next"
+            app:iconGravity="top"
+            app:iconPadding="2dp"
+            app:iconSize="26dp" />
 
         <!-- msg2415: кнопка «Голос чтения» — четвёртая в нижнем ряду, справа от
              «След. ▶». Открывает шторку voicePanel наверху (скорость/тон/громкость,
@@ -552,6 +577,13 @@
             android:ellipsize="end"
             android:maxLines="1"
             android:text="Голос"
-            android:textSize="15sp" />
+            android:textSize="12sp"
+            app:autoSizeMaxTextSize="12sp"
+            app:autoSizeMinTextSize="9sp"
+            app:autoSizeTextType="uniform"
+            app:icon="@drawable/ic_voice"
+            app:iconGravity="top"
+            app:iconPadding="2dp"
+            app:iconSize="26dp" />
     </LinearLayout>
 </LinearLayout>

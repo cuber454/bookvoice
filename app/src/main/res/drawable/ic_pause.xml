@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Material Icons (Apache 2.0): пауза. Пара к ic_play — кнопка меняет
+         значок вместе с подписью «Читать» → «Пауза». -->
+    <path
+        android:fillColor="#E8EAED"
+        android:pathData="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+</vector>
