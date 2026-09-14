@@ -74,8 +74,6 @@ class SettingsActivity(private val act: SectionActivity) {
     // Строки-резюме, обновляются после выбора (стартовый экран, шаг, папка, сортировка).
     private var startRow: Button? = null
     private var exitRow: Button? = null
-    private var stepRow: Button? = null
-    private var chNavRow: Button? = null   // «Кнопки глав шагают» (0.3.37)
     private var playLongRow: Button? = null  // msg2695/2699: долгое нажатие «▶»
     private var folderRow: Button? = null
     private var dlFolderRow: Button? = null
@@ -83,6 +81,9 @@ class SettingsActivity(private val act: SectionActivity) {
     // Строки-резюме назначенных жестов (#77).
     private var gestureRightRow: Button? = null
     private var gestureLeftRow: Button? = null
+    // msg5220: четыре строки конструктора читалки — галочка прячет кнопку, а
+    // текст строки следует её действию (кнопка и строка зовутся одинаково).
+    private val readerButtonRows = ArrayList<Pair<MainActivity.ReaderButton, CheckBox>>()
     // Строки-резюме кнопок гарнитуры „назад/вперёд“ (msg2136).
     private var headsetPrevRow: Button? = null
     private var headsetNextRow: Button? = null
@@ -119,10 +120,8 @@ class SettingsActivity(private val act: SectionActivity) {
 
     // Пункты конструктора экрана чтения (#58) — порядок показа в разделе.
     private val readerUi: List<Pair<Int, String>> = listOf(
-        R.string.ui_sent_title to MainActivity.KEY_UI_SENT,
         R.string.ui_play_title to MainActivity.KEY_UI_PLAY,
         R.string.ui_voice_title to MainActivity.KEY_UI_VOICE,
-        R.string.ui_chapters_title to MainActivity.KEY_UI_CHAPTERS,
         R.string.ui_slider_title to MainActivity.KEY_UI_SLIDER,
         R.string.ui_position_title to MainActivity.KEY_UI_POSITION,
         R.string.ui_stats_title to MainActivity.KEY_UI_STATS,
@@ -530,6 +529,13 @@ class SettingsActivity(private val act: SectionActivity) {
         // Конструктор экрана чтения (#58): какие элементы читалки показывать.
         // Применяется в MainActivity.onStart (applyReaderUi) при возврате в книгу.
         readerUi.forEach { (res, key) -> addCheck(res, key, true) }
+        // msg5220: четыре кнопки читалки — по одной строке каждая; строка
+        // называется действием кнопки (оно меняется долгим нажатием в читалке),
+        // поэтому текст обновляем в refreshRows, а не берём из ресурса.
+        readerButtonRows.clear()
+        for (b in MainActivity.READER_BUTTONS) {
+            readerButtonRows.add(b to addCheckText(readerButtonTitle(b), b.uiKey, true))
+        }
         // Автопрокрутка текста (#318) — переехала из «Управления» (msg721): тоже
         // про поведение экрана чтения, не про звук или запуск.
         addCheck(R.string.scroll_title, MainActivity.KEY_SCROLL, true)
@@ -554,10 +560,11 @@ class SettingsActivity(private val act: SectionActivity) {
      *  в разделе остаются только сами строки выбора. */
     private fun addGestureRows() {
         gestureRightRow = addValueButton {
-            pickGesture(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_CH, R.string.gesture_choose_right)
+            // msg5220: по умолчанию «по всем заголовкам» — как свайп ходил раньше.
+            pickGesture(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_HEADER, R.string.gesture_choose_right)
         }
         gestureLeftRow = addValueButton {
-            pickGesture(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_CH, R.string.gesture_choose_left)
+            pickGesture(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_HEADER, R.string.gesture_choose_left)
         }
     }
 
@@ -679,33 +686,9 @@ class SettingsActivity(private val act: SectionActivity) {
                 .setNegativeButton(R.string.toc_close, null)
                 .show()
         }
-        // Шаг кнопок «Пред.»/«След.» (msg2459/2471): предложение / абзац / глава.
-        // От выбранного шага в читалке меняется и имя кнопок для скринридера
-        // («…предложение»/«…абзац»/«…глава», MainActivity.updateSentenceButtonNames).
-        val stepOptions = listOf(
-            getString(R.string.step_sentence) to MainActivity.STEP_SENTENCE,
-            getString(R.string.step_paragraph) to MainActivity.STEP_PARAGRAPH,
-            getString(R.string.step_chapter) to MainActivity.STEP_CHAPTER,
-        )
-        stepRow = addValueButton {
-            val cur = prefs.getString(MainActivity.KEY_STEP, MainActivity.STEP_SENTENCE)
-                ?: MainActivity.STEP_SENTENCE
-            val checked = stepOptions.indexOfFirst { it.second == cur }.coerceAtLeast(0)
-            MaterialAlertDialogBuilder(act)
-                .setTitle(R.string.step_dialog)
-                .setSingleChoiceItems(stepOptions.map { it.first }.toTypedArray(), checked) { d, which ->
-                    prefs.edit().putString(MainActivity.KEY_STEP, stepOptions[which].second).apply()
-                    d.dismiss()
-                    refreshRows()
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
-        }
-        // «Кнопки глав шагают» (0.3.37; msg2531/2539): по чём переходят
-        // «Предыдущая/Следующая глава». Мелкий шаг — по предложениям/абзацам,
-        // скачок — по крупным разделам / по главам / по всем заголовкам.
-        // Для TXT/EPUB иерархии нет, скачковые режимы не влияют (полный список глав).
-        chNavRow = addValueButton { pickChapterNav() }
+        // msg5220/5224: строк «Кнопки назад и далее шагают по» и «Кнопки глав
+        // шагают» здесь больше нет — шаг стал самим действием кнопки, и
+        // назначается он долгим нажатием на самой кнопке в читалке.
         // msg2695/2699: долгое нажатие кнопки «▶». Опция живёт здесь же, где остальные
         // назначаемые кнопки. Значение — MainActivity.PLAY_LONG_*; по умолчанию таймер сна.
         val playLongOptions = listOf(
@@ -901,6 +884,31 @@ class SettingsActivity(private val act: SectionActivity) {
         })
     }
 
+    /** Галочка с готовым текстом — нужна конструктору читалки (msg5220): строка
+     *  называется действием кнопки, а оно меняется долгим нажатием в читалке,
+     *  поэтому текст приходит строкой и обновляется в [refreshRows]. */
+    private fun addCheckText(text: CharSequence, key: String, def: Boolean): CheckBox {
+        val cb = CheckBox(act).apply {
+            this.text = text
+            textSize = 17f
+            isChecked = prefs.getBoolean(key, def)
+            isClickable = true
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(key, checked).apply()
+            }
+            setPadding(dp(4), dp(2), dp(4), dp(2))
+        }
+        content().addView(cb)
+        return cb
+    }
+
+    /** Подпись строки конструктора: «Кнопка „<действие кнопки>“» — та же формула,
+     *  по которой кнопка зовёт себя в читалке (msg5220). */
+    private fun readerButtonTitle(b: MainActivity.ReaderButton): String = getString(
+        R.string.ui_reader_button,
+        MainActivity.readerButtonName(act, prefs, b),
+    )
+
     /** [onChange] — для галочек, которые надо не только запомнить, но и применить
      *  сразу: тихий поток живёт в движке, а не в prefs (msg5067). Параметр
      *  последний, поэтому трейлинг-лямбда попадает в него, а не в [def]. */
@@ -1003,49 +1011,6 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
-    /** Диалог: по чём шагают «Предыдущая/Следующая глава» (0.3.37; мелкие режимы
-     *  sent/paragraph добавлены msg2531/2539). Пять режимов: по предложениям и по
-     *  абзацам — мелкий шаг (MainActivity.chapterNavMove), major/chapters/all —
-     *  скачок по узлам разметки FB2 (MainActivity.chapterStopIndexes). */
-    private fun pickChapterNav() {
-        val values = arrayOf(
-            MainActivity.CH_NAV_SENT,
-            MainActivity.CH_NAV_PARAGRAPH,
-            MainActivity.CH_NAV_MAJOR,
-            MainActivity.CH_NAV_CHAPTERS,
-            MainActivity.CH_NAV_ALL,
-        )
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.ch_nav_dialog)
-            .setSingleChoiceItems(
-                arrayOf(
-                    getString(R.string.ch_nav_sent),
-                    getString(R.string.ch_nav_paragraph),
-                    getString(R.string.ch_nav_major),
-                    getString(R.string.ch_nav_chapters),
-                    getString(R.string.ch_nav_all),
-                ),
-                values.indexOf(prefs.getString(MainActivity.KEY_CH_NAV, MainActivity.CH_NAV_ALL)).coerceAtLeast(0),
-            ) { d, which ->
-                prefs.edit().putString(MainActivity.KEY_CH_NAV, values[which]).apply()
-                d.dismiss()
-                refreshRows()
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-    }
-
-    /** Название выбранного шага глав — для строки-резюме. */
-    private fun chNavLabel(): String = getString(
-        when (prefs.getString(MainActivity.KEY_CH_NAV, MainActivity.CH_NAV_ALL)) {
-            MainActivity.CH_NAV_SENT -> R.string.ch_nav_sent
-            MainActivity.CH_NAV_PARAGRAPH -> R.string.ch_nav_paragraph
-            MainActivity.CH_NAV_MAJOR -> R.string.ch_nav_major
-            MainActivity.CH_NAV_CHAPTERS -> R.string.ch_nav_chapters
-            else -> R.string.ch_nav_all
-        }
-    )
-
     /** Обновить тексты строк-резюме (стартовый экран, шаг, папка, сортировка). */
     private fun refreshRows() {
         val startLast = prefs.getString(MainActivity.KEY_START, MainActivity.START_LAST) == MainActivity.START_LAST
@@ -1056,14 +1021,9 @@ class SettingsActivity(private val act: SectionActivity) {
         exitRow?.text = getString(R.string.exit_title) + ": " +
             if (exitLibrary) getString(R.string.exit_library) else getString(R.string.exit_desktop)
 
-        val stepValueRes = when (prefs.getString(MainActivity.KEY_STEP, MainActivity.STEP_SENTENCE)) {
-            MainActivity.STEP_PARAGRAPH -> R.string.step_paragraph_value
-            MainActivity.STEP_CHAPTER -> R.string.step_chapter_value
-            else -> R.string.step_sentence_value
-        }
-        stepRow?.text = getString(R.string.step_title) + " " + getString(stepValueRes)
-
-        chNavRow?.text = getString(R.string.ch_nav_title) + ": " + chNavLabel()
+        // msg5220: строки «шагают по» убраны, но подписи четырёх строк
+        // конструктора читалки следуют действию кнопки — обновляем их здесь.
+        for ((b, row) in readerButtonRows) row.text = readerButtonTitle(b)
 
         playLongRow?.text = getString(R.string.play_long_title) + ": " + getString(
             if (prefs.getString(MainActivity.KEY_PLAY_LONG, MainActivity.PLAY_LONG_SLEEP) == MainActivity.PLAY_LONG_OFF)
@@ -1082,9 +1042,9 @@ class SettingsActivity(private val act: SectionActivity) {
             OPDS_READABLE_FORMATS.firstOrNull { it.first == dlFormatKey() }?.second ?: "FB2"
 
         gestureRightRow?.text = getString(R.string.gesture_right_title) + ": " +
-            gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_CH))
+            gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_HEADER))
         gestureLeftRow?.text = getString(R.string.gesture_left_title) + ": " +
-            gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_CH))
+            gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_HEADER))
 
         headsetPrevRow?.text = getString(R.string.headset_prev_title) + ": " +
             headsetLabel(prefs.getString(MainActivity.KEY_HS_PREV, MainActivity.HS_SENTENCE))

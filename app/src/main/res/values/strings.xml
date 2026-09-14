@@ -363,6 +363,45 @@
     <string name="g_action_prev_sent">Предыдущее предложение</string>
     <string name="g_action_next_para">Следующий абзац</string>
     <string name="g_action_prev_para">Предыдущий абзац</string>
+    <!-- msg5220: шаг «глава» разложен на три честных уровня (раньше был один
+         пункт «глава», а куда он ведёт, задавала настройка «Кнопки глав шагают»):
+         раздел — крупные части книги, глава — главы без вложенных подразделов,
+         заголовок — все заголовки, включая вложенные. -->
+    <string name="g_action_next_major">Следующий раздел</string>
+    <string name="g_action_prev_major">Предыдущий раздел</string>
+    <string name="g_action_next_header">Следующий заголовок</string>
+    <string name="g_action_prev_header">Предыдущий заголовок</string>
+    <!-- msg5220: короткая видимая надпись на кнопке читалки — своя у каждого
+         действия (влезает в прежнюю ширину кнопок). -->
+    <string name="btn_short_prev_sent">Пред.</string>
+    <string name="btn_short_next_sent">След.</string>
+    <string name="btn_short_prev_para">◀ Абз.</string>
+    <string name="btn_short_next_para">Абз. ▶</string>
+    <string name="btn_short_prev_ch">◀ Глава</string>
+    <string name="btn_short_next_ch">Глава ▶</string>
+    <string name="btn_short_prev_major">◀ Разд.</string>
+    <string name="btn_short_next_major">Разд. ▶</string>
+    <string name="btn_short_prev_header">◀ Заг.</string>
+    <string name="btn_short_next_header">Заг. ▶</string>
+    <string name="btn_short_play">Читать</string>
+    <string name="btn_short_pause">Пауза</string>
+    <string name="btn_short_repeat">Повтор</string>
+    <string name="btn_short_position">Где я</string>
+    <string name="btn_short_speed_up">Быстр.</string>
+    <string name="btn_short_speed_down">Тише</string>
+    <string name="btn_short_toc">Оглавл.</string>
+    <string name="btn_short_bookmarks">Закл.</string>
+    <string name="btn_short_add_bm">+Закл.</string>
+    <!-- msg5220: кнопка с «Ничего не делать» остаётся на месте, но молчит. -->
+    <string name="btn_short_none">—</string>
+    <!-- msg5220: имя кнопки читалки — строка действия; место на конце нужно,
+         только когда такое же действие стоит ещё на одной кнопке. -->
+    <string name="btn_name_with_pos">%1$s, %2$s</string>
+    <string name="btn_action_dialog">Действие кнопки «%1$s»</string>
+    <string name="btn_pos_top_left">верхняя левая</string>
+    <string name="btn_pos_top_right">верхняя правая</string>
+    <string name="btn_pos_bottom_left">нижняя левая</string>
+    <string name="btn_pos_bottom_right">нижняя правая</string>
     <string name="g_action_play">Начать чтение</string>
     <string name="g_action_pause">Пауза</string>
     <string name="g_action_repeat">Повторить текущее</string>
@@ -389,10 +428,12 @@
 
     <!-- Конструктор экрана чтения (#58): какие элементы показывать в читалке -->
     <string name="reader_group_hint">Галочка показывает элемент на экране книги, без галочки элемент скрыт.</string>
-    <string name="ui_sent_title">Кнопки «Предыдущее» и «Следующее» предложение</string>
+    <!-- msg5220: четыре кнопки читалки прячутся по одной, и строка называется
+         так же, как сама кнопка (имя = назначенное действие): парами нельзя —
+         после переназначения строка «главы» врала бы. -->
+    <string name="ui_reader_button">Кнопка «%1$s»</string>
     <string name="ui_play_title">Кнопка «Читать / Пауза»</string>
     <string name="ui_voice_title">Кнопка «Голос чтения»</string>
-    <string name="ui_chapters_title">Кнопки «Предыдущая глава» и «Следующая глава»</string>
     <string name="ui_slider_title">Слайдер перемотки по книге</string>
     <string name="ui_position_title">Строка позиции (глава, предложение)</string>
     <string name="ui_stats_title">Строка «Прочитано, осталось»</string>
@@ -465,25 +506,11 @@
     <string name="net_permission_message">Интернет нужен BookVoice для сетевых библиотек, но доступ к нему у приложения отключён. Система сама об этом не спросит — откройте настройки приложения кнопкой ниже и включите переключатель «Интернет».</string>
     <string name="net_permission_open">Открыть настройки</string>
 
-    <string name="step_title">Кнопки назад и далее шагают по</string>
-    <string name="step_dialog">Какой шаг у кнопок „назад“ и „далее“?</string>
-    <string name="step_sentence">Предложение</string>
-    <string name="step_paragraph">Абзац</string>
-    <string name="step_chapter">Глава</string>
-    <string name="step_sentence_value">предложениям</string>
-    <string name="step_paragraph_value">абзацам</string>
-    <string name="step_chapter_value">главам</string>
-
-    <!-- 0.3.37: по чём шагают кнопки «Предыдущая/Следующая глава». Режимы
-         sent/paragraph (msg2531/2539) листают по предложениям/абзацам мелким шагом,
-         major/chapters/all — скачком по узлам разметки FB2. -->
-    <string name="ch_nav_title">Кнопки глав шагают</string>
-    <string name="ch_nav_dialog">По чём шагают «Предыдущая» и «Следующая глава»</string>
-    <string name="ch_nav_sent">По предложениям</string>
-    <string name="ch_nav_paragraph">По абзацам</string>
-    <string name="ch_nav_major">По крупным разделам</string>
-    <string name="ch_nav_chapters">По главам</string>
-    <string name="ch_nav_all">По всем заголовкам</string>
+    <!-- msg5220: строки «Кнопки назад и далее шагают по» (step_*) и «Кнопки глав
+         шагают» (ch_nav_*) убраны — шаг больше не отдельная настройка, а само
+         действие кнопки (долгое нажатие на ней). KEY_STEP/KEY_CH_NAV остались
+         только как источник разового переноса и для шага «глава» кнопок
+         гарнитуры (ReaderEngine). -->
 
     <!-- msg2695/2699: долгое нажатие кнопки «▶» (играть/пауза) — что оно делает.
          По умолчанию «Таймер сна» (экономит кнопку). Опция в разделе «Управление»,

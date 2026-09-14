@@ -8,6 +8,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.speech.RecognizerIntent
 import android.media.AudioManager
@@ -311,10 +312,22 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             onPlayPauseLongClick()
             true
         }
-        binding.btnPrevSentence.setOnClickListener { stepMove(-1) }
-        binding.btnNextSentence.setOnClickListener { stepMove(+1) }
-        binding.btnPrevChapter.setOnClickListener { chapterNavMove(-1) }
-        binding.btnNextChapter.setOnClickListener { chapterNavMove(+1) }
+        // msg5220: у каждой из четырёх кнопок читалки своё действие из общей
+        // палитры — короткое нажатие идёт тем же диспетчером, что и свайпы,
+        // долгое открывает выбор действия (см. pickReaderButtonAction).
+        val buttonViews: List<Pair<ReaderButton, android.view.View>> = listOf(
+            READER_BUTTONS[0] to binding.btnPrevChapter,
+            READER_BUTTONS[1] to binding.btnNextChapter,
+            READER_BUTTONS[2] to binding.btnPrevSentence,
+            READER_BUTTONS[3] to binding.btnNextSentence,
+        )
+        for ((b, view) in buttonViews) {
+            view.setOnClickListener { runGestureAction(readerButtonAction(prefs, b)) }
+            view.setOnLongClickListener {
+                pickReaderButtonAction(b)
+                true
+            }
+        }
         // Кнопки скорости (#58): шаг по списку скорости, меняют темп на лету.
         binding.btnSpeedDown.setOnClickListener { nudgeSpeed(up = false) }
         binding.btnSpeedUp.setOnClickListener { nudgeSpeed(up = true) }
@@ -440,15 +453,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     override fun onStart() {
         super.onStart()
+        // msg5220: первый запуск после обновления — старые настройки шага и
+        // режима глав переезжают в действия кнопок (до первого чтения имён).
+        migrateReaderButtons()
         // Возврат из экрана настроек: там могли поменять, какие элементы
         // читалки показывать, скорость и голос — применяем к живой книге.
         applyReaderUi()
-        // Там же могли сменить шаг кнопок «Пред.»/«След.» — переименовываем
-        // их для скринридера под выбранный шаг (msg2471).
-        updateSentenceButtonNames()
-        // Там же могли сменить режим «Кнопки глав шагают» (по главам/разделам/
-        // заголовкам) — имя «◀ Глава/Глава ▶» для скринридера следует режиму (msg2535).
-        updateChapterButtonNames()
+        // msg5220: имена и короткие подписи четырёх кнопок читалки — по их
+        // текущим действиям (вернулись из читалки после долгого нажатия —
+        // переименовываем).
+        updateButtonNames()
         refreshSpeedValue()
         // Карточка рождается только когда книга реально начала читаться
         // (startSpeakingCurrent) — msg1779: при просто открытой, но молчащей
@@ -1165,7 +1179,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private fun fireSwipe(dir: Int) {
         if (book == null) return
         val key = if (dir < 0) KEY_GESTURE_LEFT else KEY_GESTURE_RIGHT
-        val def = if (dir < 0) G_PREV_CH else G_NEXT_CH
+        // msg5220: по умолчанию свайп ходит по всем заголовкам — как ходил
+        // раньше (прежний режим по умолчанию был «по всем заголовкам»).
+        val def = if (dir < 0) G_PREV_HEADER else G_NEXT_HEADER
         runGestureAction(prefs.getString(key, def) ?: def)
     }
 
@@ -1177,8 +1193,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_NEXT_SENT -> jumpAndAnnounce { moveBySentence(+1) }
             G_PREV_PARA -> jumpAndAnnounce { moveByParagraph(-1) }
             G_NEXT_PARA -> jumpAndAnnounce { moveByParagraph(+1) }
-            G_PREV_CH -> jumpAndAnnounce { chapterNavMove(-1) }
-            G_NEXT_CH -> jumpAndAnnounce { chapterNavMove(+1) }
+            G_PREV_CH -> jumpAndAnnounce { moveByChapter(-1, CH_NAV_CHAPTERS) }
+            G_NEXT_CH -> jumpAndAnnounce { moveByChapter(+1, CH_NAV_CHAPTERS) }
+            G_PREV_MAJOR -> jumpAndAnnounce { moveByChapter(-1, CH_NAV_MAJOR) }
+            G_NEXT_MAJOR -> jumpAndAnnounce { moveByChapter(+1, CH_NAV_MAJOR) }
+            G_PREV_HEADER -> jumpAndAnnounce { moveByChapter(-1, CH_NAV_ALL) }
+            G_NEXT_HEADER -> jumpAndAnnounce { moveByChapter(+1, CH_NAV_ALL) }
             // msg2547: свайп можно назначить на «Ничего не делать» — просто игнорируем.
             G_NONE -> {}
             G_PLAY -> togglePlay()
@@ -1220,8 +1240,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         goTo(ch, s)
     }
 
-    private fun moveByChapter(delta: Int) {
-        val stops = chapterStopIndexes()
+    /** Шаг по «главам» ([mode] — по какому уровню ходим: [CH_NAV_MAJOR] — крупные
+     *  разделы, [CH_NAV_CHAPTERS] — главы без вложенных подразделов, [CH_NAV_ALL] —
+     *  все заголовки). msg5220: уровень больше не настройка, а само действие
+     *  кнопки/свайпа, поэтому приходит параметром. */
+    private fun moveByChapter(delta: Int, mode: String = CH_NAV_ALL) {
+        val stops = chapterStopIndexes(mode)
         if (stops.isEmpty()) return
         val cur = chapterIdx
         var target = -1
@@ -1278,11 +1302,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  мелком режиме (например шаг «Глава» у «Пред./След.»), ведём себя как
      *  [CH_NAV_ALL] — полный список. Для TXT/EPUB иерархии нет — все режимы
      *  дают полный список. */
-    private fun chapterStopIndexes(): IntArray {
+    private fun chapterStopIndexes(mode: String = CH_NAV_ALL): IntArray {
         val bk = book ?: return intArrayOf()
-        val mode = prefs.getString(KEY_CH_NAV, CH_NAV_ALL)
         val size = bk.chapters.size
-        if (mode == CH_NAV_ALL || mode == CH_NAV_SENT || mode == CH_NAV_PARAGRAPH) {
+        if (mode != CH_NAV_MAJOR && mode != CH_NAV_CHAPTERS) {
             return IntArray(size) { it }
         }
         val out = ArrayList<Int>(size)
@@ -1297,72 +1320,85 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         return out.toIntArray()
     }
 
-    /** Шаг «дальше/назад» (настройка в «Управлении»): предложение / абзац / глава. */
-    private fun stepMode(): String =
-        prefs.getString(KEY_STEP, STEP_SENTENCE) ?: STEP_SENTENCE
-
-    /** Кнопки «Пред.»/«След.» листают шагом из настроек: по умолчанию — по
-     *  предложениям; «Абзац» — переходят к началу абзаца (msg2471); «Глава» —
-     *  по главам, как кнопки ⏮/⏭. */
-    private fun stepMove(delta: Int) {
-        when (stepMode()) {
-            STEP_PARAGRAPH -> moveByParagraph(delta)
-            STEP_CHAPTER -> moveByChapter(delta)
-            else -> moveBySentence(delta)
+    /** Имена четырёх кнопок читалки для скринридера и короткие надписи на них
+     *  (msg5220): кнопка называется тем действием, которое на ней висит. Раньше
+     *  имя следовало шагу из настроек (msg2471/2531) — теперь шаг и есть
+     *  назначенное действие, поэтому источник один: палитра действий. Короткие
+     *  подписи держим той же длины, что прежние «Пред.»/«След.»/«◀ Глава» —
+     *  растягивать их запрещено (msg2431). Вызывается в onStart. */
+    private fun updateButtonNames() {
+        val views = listOf(
+            binding.btnPrevChapter, binding.btnNextChapter,
+            binding.btnPrevSentence, binding.btnNextSentence,
+        )
+        for (i in READER_BUTTONS.indices) {
+            val b = READER_BUTTONS[i]
+            views[i].contentDescription = readerButtonName(this, prefs, b)
+            views[i].text = getString(actionShortRes(readerButtonAction(prefs, b)))
         }
     }
 
-    /** Режим «Кнопки глав шагают» — что листают кнопки «◀ Глава/Глава ▶»
-     *  (настройка KEY_CH_NAV). Default CH_NAV_ALL — как раньше. */
-    private fun chNavMode(): String =
-        prefs.getString(KEY_CH_NAV, CH_NAV_ALL) ?: CH_NAV_ALL
-
-    /** Кнопки «◀ Глава/Глава ▶» идут по режиму «Кнопки глав шагают» (msg2531/2539):
-     *  выбрано «по предложениям»/«по абзацам» — листают мелким шагом, как
-     *  «Пред./След.» в том же режиме (moveBySentence/moveByParagraph); остальные
-     *  режимы — скачком по главам/разделам/заголовкам (moveByChapter). */
-    private fun chapterNavMove(delta: Int) {
-        when (chNavMode()) {
-            CH_NAV_SENT -> moveBySentence(delta)
-            CH_NAV_PARAGRAPH -> moveByParagraph(delta)
-            else -> moveByChapter(delta)
-        }
+    /** Долгое нажатие кнопки читалки: выбор действия из общей палитры (msg5220).
+     *  Список тот же, что в «Жестах»; заголовок называет саму кнопку — человек
+     *  слышит, что именно переназначает. */
+    private fun pickReaderButtonAction(b: ReaderButton) {
+        val labels = GESTURE_ACTIONS.map { getString(it.second) }.toTypedArray()
+        val cur = readerButtonAction(prefs, b)
+        val idx = GESTURE_ACTIONS.indexOfFirst { it.first == cur }.coerceAtLeast(0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.btn_action_dialog, readerButtonName(this, prefs, b)))
+            .setSingleChoiceItems(labels, idx) { d, which ->
+                prefs.edit().putString(b.key, GESTURE_ACTIONS[which].first).apply()
+                d.dismiss()
+                updateButtonNames()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
     }
 
-    /** Имена кнопок «Пред.»/«След.» для скринридера следуют выбранному шагу
-     *  (msg2471): предложение → «Предыдущее/Следующее предложение», абзац →
-     *  «Предыдущий/Следующий абзац», глава → «Предыдущая/Следующая глава».
-     *  Вызывается в onStart — при старте читалки и после возврата из Настроек
-     *  (там менялся шаг). Видимые короткие подписи «Пред.»/«След.» не трогаем —
-     *  их запрещено растягивать (msg2431). */
-    private fun updateSentenceButtonNames() {
-        val (prev, next) = when (stepMode()) {
-            STEP_PARAGRAPH -> R.string.prev_paragraph to R.string.next_paragraph
-            STEP_CHAPTER -> R.string.prev_chapter to R.string.next_chapter
-            else -> R.string.prev_sentence to R.string.next_sentence
+    /** msg5220: разовый перенос старых настроек в действия кнопок. Шаг «Пред./
+     *  След.» и режим «Кнопки глав» были отдельными настройками — переводим их
+     *  в действие каждой кнопки (поведение сохраняем как было), свайпы, у которых
+     *  стоял «глава по режиму», разворачиваем в тот же конкретный уровень, а
+     *  парные галочки конструктора — в четыре одиночных. KEY_STEP/KEY_CH_NAV
+     *  после этого никто не пишет: KEY_CH_NAV ещё читает ReaderEngine для шага
+     *  «глава» кнопок гарнитуры (их поведение сохраняем как было). */
+    private fun migrateReaderButtons() {
+        if (prefs.getBoolean(KEY_BTN_MIGRATED, false)) return
+        val chMode = prefs.getString(KEY_CH_NAV, CH_NAV_ALL) ?: CH_NAV_ALL
+        val step = prefs.getString(KEY_STEP, STEP_SENTENCE) ?: STEP_SENTENCE
+        fun level(prev: Boolean): String = when (chMode) {
+            CH_NAV_SENT -> if (prev) G_PREV_SENT else G_NEXT_SENT
+            CH_NAV_PARAGRAPH -> if (prev) G_PREV_PARA else G_NEXT_PARA
+            CH_NAV_MAJOR -> if (prev) G_PREV_MAJOR else G_NEXT_MAJOR
+            CH_NAV_CHAPTERS -> if (prev) G_PREV_CH else G_NEXT_CH
+            else -> if (prev) G_PREV_HEADER else G_NEXT_HEADER
         }
-        binding.btnPrevSentence.contentDescription = getString(prev)
-        binding.btnNextSentence.contentDescription = getString(next)
-    }
-
-    /** Имена кнопок «◀ Глава/Глава ▶» для скринридера следуют режиму «Кнопки глав
-     *  шагают» (msg2531/2535/2539): по предложениям → «…предложение», по абзацам →
-     *  «…абзац», по главам → «Предыдущая/Следующая глава», по крупным разделам →
-     *  «…раздел», по всем заголовкам → «…заголовок». Раньше имя всегда было
-     *  «глава», хотя сами кнопки при режимах major/all прыгают по разделам и
-     *  заголовкам, а при sent/paragraph листают по предложениям/абзацам —
-     *  скринридер говорил не то, куда реально ведёт переход.
-     *  Вызывается в onStart вместе с updateSentenceButtonNames. */
-    private fun updateChapterButtonNames() {
-        val (prev, next) = when (chNavMode()) {
-            CH_NAV_SENT -> R.string.prev_sentence to R.string.next_sentence
-            CH_NAV_PARAGRAPH -> R.string.prev_paragraph to R.string.next_paragraph
-            CH_NAV_MAJOR -> R.string.prev_section to R.string.next_section
-            CH_NAV_CHAPTERS -> R.string.prev_chapter to R.string.next_chapter
-            else -> R.string.prev_header to R.string.next_header
+        fun byStep(prev: Boolean): String = when (step) {
+            STEP_PARAGRAPH -> if (prev) G_PREV_PARA else G_NEXT_PARA
+            STEP_CHAPTER -> level(prev)
+            else -> if (prev) G_PREV_SENT else G_NEXT_SENT
         }
-        binding.btnPrevChapter.contentDescription = getString(prev)
-        binding.btnNextChapter.contentDescription = getString(next)
+        val e = prefs.edit()
+        e.putString(KEY_BTN_PREV_SENT, byStep(true))
+        e.putString(KEY_BTN_NEXT_SENT, byStep(false))
+        e.putString(KEY_BTN_PREV_CH, level(true))
+        e.putString(KEY_BTN_NEXT_CH, level(false))
+        // Свайп «глава» означал «по режиму» — разворачиваем в конкретный уровень,
+        // иначе после обновления он бы молча сменил смысл.
+        for (k in listOf(KEY_GESTURE_LEFT, KEY_GESTURE_RIGHT)) {
+            when (prefs.getString(k, null)) {
+                G_PREV_CH -> e.putString(k, level(true))
+                G_NEXT_CH -> e.putString(k, level(false))
+            }
+        }
+        // Конструктор экрана: пары → по одной кнопке.
+        e.putBoolean(KEY_UI_PREV_SENT, prefs.getBoolean(KEY_UI_SENT, true))
+        e.putBoolean(KEY_UI_NEXT_SENT, prefs.getBoolean(KEY_UI_SENT, true))
+        e.putBoolean(KEY_UI_PREV_CH, prefs.getBoolean(KEY_UI_CHAPTERS, true))
+        e.putBoolean(KEY_UI_NEXT_CH, prefs.getBoolean(KEY_UI_CHAPTERS, true))
+        e.putBoolean(KEY_BTN_MIGRATED, true)
+        e.apply()
     }
 
     private fun goTo(ch: Int, s: Int) = ReaderEngine.goTo(ch, s)
@@ -1489,13 +1525,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         fun show(key: String, v: View) {
             v.visibility = if (prefs.getBoolean(key, true)) View.VISIBLE else View.GONE
         }
-        // Стрелки предложений — пара, один ключ на обе.
-        show(KEY_UI_SENT, binding.btnPrevSentence)
-        show(KEY_UI_SENT, binding.btnNextSentence)
+        // msg5220: четыре кнопки прячутся по одной — после переназначения пара
+        // врала бы (строка «главы», а за ней давно оглавление).
+        show(KEY_UI_PREV_SENT, binding.btnPrevSentence)
+        show(KEY_UI_NEXT_SENT, binding.btnNextSentence)
         show(KEY_UI_PLAY, binding.btnPlayPause)
-        // Стрелки глав — пара, один ключ на обе.
-        show(KEY_UI_CHAPTERS, binding.btnPrevChapter)
-        show(KEY_UI_CHAPTERS, binding.btnNextChapter)
+        show(KEY_UI_PREV_CH, binding.btnPrevChapter)
+        show(KEY_UI_NEXT_CH, binding.btnNextChapter)
         show(KEY_UI_SLIDER, binding.seekProgress)
         show(KEY_UI_POSITION, binding.tvPosition)
         show(KEY_UI_STATS, binding.tvStats)
@@ -3174,6 +3210,21 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun dp2px(v: Float): Int = (v * resources.displayMetrics.density).toInt()
 
+    /** Кнопка читалки: где хранится её действие, что стоит по умолчанию,
+     *  как называется её место (для различения дублей) и какой ключ отвечает
+     *  за её показ на экране. Порядок в READER_BUTTONS — как в разметке:
+     *  верхний ряд (крупные шаги), потом нижний (пред./след.).
+     *
+     *  Класс объявлен здесь, а не внутри companion: из другого файла он
+     *  виден как MainActivity.ReaderButton, а вложенный в companion — нет
+     *  (пришлось бы писать MainActivity.Companion.ReaderButton). */
+    internal class ReaderButton(
+        val key: String,
+        val def: String,
+        val posRes: Int,
+        val uiKey: String,
+    )
+
     companion object {
         // Живой ридер, если он открыт — экран настроек через него меняет
         // скорость/голос сразу, а не «на следующий запуск».
@@ -3244,6 +3295,24 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val CH_NAV_MAJOR = "major"
         internal const val CH_NAV_CHAPTERS = "chapters"
         internal const val CH_NAV_ALL = "all"
+
+        // msg5220: у каждой из четырёх кнопок читалки своё действие из общей
+        // палитры (GESTURE_ACTIONS) — назначается долгим нажатием на самой
+        // кнопке (msg5224: строки «шагают по» из «Управления» убраны). KEY_STEP/
+        // KEY_CH_NAV остались только как источник разового переноса
+        // (migrateReaderButtons) и для шага «глава» кнопок гарнитуры — его
+        // читает ReaderEngine.chapterStopIndexes.
+        internal const val KEY_BTN_PREV_SENT = "btn_prev_sent"
+        internal const val KEY_BTN_NEXT_SENT = "btn_next_sent"
+        internal const val KEY_BTN_PREV_CH = "btn_prev_ch"
+        internal const val KEY_BTN_NEXT_CH = "btn_next_ch"
+        internal const val KEY_BTN_MIGRATED = "btn_actions_migrated"
+        // Конструктор экрана (msg5220): четыре кнопки прячутся по одной; старые
+        // парные ключи KEY_UI_SENT/KEY_UI_CHAPTERS — только для переноса.
+        internal const val KEY_UI_PREV_SENT = "ui_prev_sent"
+        internal const val KEY_UI_NEXT_SENT = "ui_next_sent"
+        internal const val KEY_UI_PREV_CH = "ui_prev_ch"
+        internal const val KEY_UI_NEXT_CH = "ui_next_ch"
         internal const val KEY_SCROLL = "scroll_to_current"
         // Портянка (msg4338): прокрутка рукой становится местом чтения. Выкл —
         // прежнее поведение: место двигают только чтение, кнопки и ползунок.
@@ -3359,6 +3428,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val G_NEXT_PARA = "next_para"
         internal const val G_PREV_CH = "prev_ch"
         internal const val G_NEXT_CH = "next_ch"
+        // msg5220: три уровня шага «глава» — раздел (крупные части), глава (без
+        // вложенных подразделов), заголовок (все, включая вложенные).
+        internal const val G_PREV_MAJOR = "prev_major"
+        internal const val G_NEXT_MAJOR = "next_major"
+        internal const val G_PREV_HEADER = "prev_header"
+        internal const val G_NEXT_HEADER = "next_header"
         internal const val G_NONE = "none"
         internal const val G_PLAY = "play"
         internal const val G_PAUSE = "pause"
@@ -3370,10 +3445,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val G_BOOKMARKS = "bookmarks"
         internal const val G_ADD_BM = "add_bm"
 
-        /** Палитра действий для свайпов: id → строка-название для экрана «Жесты». */
+        /** Палитра действий для свайпов и кнопок читалки (msg5220): id → строка.
+         *  Имя кнопки для скринридера берётся отсюда же — «кнопка называется тем,
+         *  что она делает», поэтому список — единственный источник слов. */
         internal val GESTURE_ACTIONS: List<Pair<String, Int>> = listOf(
             G_NEXT_CH to R.string.g_action_next_ch,
             G_PREV_CH to R.string.g_action_prev_ch,
+            G_NEXT_MAJOR to R.string.g_action_next_major,
+            G_PREV_MAJOR to R.string.g_action_prev_major,
+            G_NEXT_HEADER to R.string.g_action_next_header,
+            G_PREV_HEADER to R.string.g_action_prev_header,
             G_NEXT_SENT to R.string.g_action_next_sent,
             G_PREV_SENT to R.string.g_action_prev_sent,
             G_NEXT_PARA to R.string.g_action_next_para,
@@ -3389,5 +3470,57 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_ADD_BM to R.string.g_action_add_bm,
             G_NONE to R.string.g_action_none,
         )
+
+        internal val READER_BUTTONS: List<ReaderButton> = listOf(
+            ReaderButton(KEY_BTN_PREV_CH, G_PREV_HEADER, R.string.btn_pos_top_left, KEY_UI_PREV_CH),
+            ReaderButton(KEY_BTN_NEXT_CH, G_NEXT_HEADER, R.string.btn_pos_top_right, KEY_UI_NEXT_CH),
+            ReaderButton(KEY_BTN_PREV_SENT, G_PREV_SENT, R.string.btn_pos_bottom_left, KEY_UI_PREV_SENT),
+            ReaderButton(KEY_BTN_NEXT_SENT, G_NEXT_SENT, R.string.btn_pos_bottom_right, KEY_UI_NEXT_SENT),
+        )
+
+        /** Действие кнопки читалки (или его значение по умолчанию). */
+        internal fun readerButtonAction(prefs: SharedPreferences, b: ReaderButton): String =
+            prefs.getString(b.key, b.def) ?: b.def
+
+        /** Имя кнопки читалки для скринридера (msg5220): строка действия, а если
+         *  такое же действие стоит ещё на одной кнопке — с местом на конце
+         *  («Оглавление, верхняя левая»). Иначе человек слышит два одинаковых
+         *  имени и не понимает, где именно стоит. */
+        internal fun readerButtonName(
+            ctx: Context,
+            prefs: SharedPreferences,
+            b: ReaderButton,
+        ): String {
+            val act = readerButtonAction(prefs, b)
+            val label = GESTURE_ACTIONS.firstOrNull { it.first == act }
+                ?.let { ctx.getString(it.second) } ?: ""
+            val twin = READER_BUTTONS.any { it !== b && readerButtonAction(prefs, it) == act }
+            return if (twin) ctx.getString(R.string.btn_name_with_pos, label, ctx.getString(b.posRes))
+            else label
+        }
+
+        /** Короткая видимая надпись на кнопке — по её действию (msg5220). */
+        internal fun actionShortRes(act: String): Int = when (act) {
+            G_PREV_SENT -> R.string.btn_short_prev_sent
+            G_NEXT_SENT -> R.string.btn_short_next_sent
+            G_PREV_PARA -> R.string.btn_short_prev_para
+            G_NEXT_PARA -> R.string.btn_short_next_para
+            G_PREV_CH -> R.string.btn_short_prev_ch
+            G_NEXT_CH -> R.string.btn_short_next_ch
+            G_PREV_MAJOR -> R.string.btn_short_prev_major
+            G_NEXT_MAJOR -> R.string.btn_short_next_major
+            G_PREV_HEADER -> R.string.btn_short_prev_header
+            G_NEXT_HEADER -> R.string.btn_short_next_header
+            G_PLAY -> R.string.btn_short_play
+            G_PAUSE -> R.string.btn_short_pause
+            G_REPEAT -> R.string.btn_short_repeat
+            G_POSITION -> R.string.btn_short_position
+            G_SPEED_UP -> R.string.btn_short_speed_up
+            G_SPEED_DOWN -> R.string.btn_short_speed_down
+            G_TOC -> R.string.btn_short_toc
+            G_BOOKMARKS -> R.string.btn_short_bookmarks
+            G_ADD_BM -> R.string.btn_short_add_bm
+            else -> R.string.btn_short_none
+        }
     }
 }

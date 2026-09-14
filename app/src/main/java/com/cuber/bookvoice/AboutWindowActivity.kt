@@ -109,6 +109,7 @@ class AboutWindowActivity : SectionActivity() {
                     R.string.about_press_intro,
                     R.string.about_press_play,
                     R.string.about_press_bookmark,
+                    R.string.about_press_reader_buttons,
                     R.string.about_press_search,
                     R.string.about_press_recent,
                     R.string.about_press_voice_search,
