@@ -403,10 +403,15 @@ object OpdsParser {
                 val first = acq[0]
                 items.add(OpdsItem.Book(
                     title = eTitle,
-                    authors = eAuthors,
+                    // КОПИИ, не сами накопители (msg5443): eAuthors/eGenres — один
+                    // список на весь разбор, его чистит начало следующей записи.
+                    // Передав ссылку, мы отдавали ВСЕМ книгам ленты автора и жанры
+                    // последней записи (Сергей: в списке жанра у всех книг звучал
+                    // один автор, «Мирс Эшли» — как раз последняя запись ленты).
+                    authors = ArrayList(eAuthors),
                     url = ordered.firstOrNull()?.url ?: resolve(first.href),
                     ext = ordered.firstOrNull()?.ext ?: "",
-                    genres = eGenres,
+                    genres = ArrayList(eGenres),
                     annotation = annotationOf(),
                     annotationHtml = annotationHtmlOf(),
                     downloads = ordered,
