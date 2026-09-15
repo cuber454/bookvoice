@@ -462,8 +462,13 @@ class SettingsActivity(private val act: SectionActivity) {
         voicePicker?.shutdownSample()
     }
 
-    /** «Чтение» (msg721): когда начинать чтение и что озвучивать. Переехало из «Голоса». */
+    /** «Чтение» (msg721): когда начинать чтение и что озвучивать. Переехало из «Голоса».
+     *  msg5711: 19 строк — простыня, поэтому раздел размечен заголовками по смыслу,
+     *  как «Кнопки и жесты»: Начало книги / Переходы / Звук и стыки / Прерывания /
+     *  Прокрутка. Порядок строк прежний, кроме «Паузы между фразами»: она ушла из
+     *  «Начала книги» в звуковую группу — она про стык, а не про старт. */
     private fun buildReadingGroup() {
+        addHeading(getString(R.string.reading_section_start))
         addCheck(R.string.chapter_start_title, MainActivity.KEY_SAY_CHAPTER_START, true)
         addCheck(R.string.auto_start_title, MainActivity.KEY_AUTO_START, true)
         // msg2685: книга открывается дольше ~2с — сообщить об этом голосом.
@@ -472,26 +477,24 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg2093: «Отступать назад при старте» — начать на N предложений раньше
         // места остановки, чтобы вспомнить, что было. Выключено по умолчанию.
         startRewindRow = addValueButton { pickStartRewind() }
-        // msg5604: «Пауза между фразами» — сколько тишины, которую движок
-        // дописывает по краям фразы, оставлять на стыке. У сетевых голосов
-        // Google её 0,5–0,7 с на фразу, и это слышно как пауза в чтении.
-        pauseKeepRow = addValueButton { pickPauseKeep() }
+
+        // msg5711: «Переходы» — откуда чтение подхватывает, когда человек сам
+        // ткнул в место книги: касание по тексту, оглавление, закладка, поиск.
+        addHeading(getString(R.string.reading_section_jumps))
         addCheck(R.string.tap_to_play_title, MainActivity.KEY_TAP_TO_PLAY, true)
         addCheck(R.string.toc_play_title, MainActivity.KEY_TOC_PLAY, true)
         addCheck(R.string.bm_play_title, MainActivity.KEY_BM_PLAY, true)
         // Найденное по поиску слово — читать ли с него сразу (как с главы/закладки).
         addCheck(R.string.search_play_title, MainActivity.KEY_SEARCH_PLAY, true)
 
-        // #98 «После звонка»: ряд-резюме + при «Продолжить» — ряд отката.
-        // Оба про поведение при внешнем прерывании, поэтому рядом с #99 ниже.
-        afterCallRow = addValueButton { pickAfterCallMode() }
-        afterCallRewindRow = if (afterCallMode() == MainActivity.AFTER_CALL_CONTINUE) {
-            addValueButton { pickAfterCallRewind() }
-        } else {
-            null
-        }
-        // #99: останавливать чтение, когда отключаются наушники.
-        addCheck(R.string.headphones_pause_title, MainActivity.KEY_PAUSE_HEADSET, true)
+        // msg5711: «Звук и стыки» — как звучит чтение и что происходит на стыке
+        // фраз. «Пауза между фразами» переехала сюда из «Начала книги»: она про
+        // стык, а не про старт.
+        addHeading(getString(R.string.reading_section_sound))
+        // msg5604: «Пауза между фразами» — сколько тишины, которую движок
+        // дописывает по краям фразы, оставлять на стыке. У сетевых голосов
+        // Google её 0,5–0,7 с на фразу, и это слышно как пауза в чтении.
+        pauseKeepRow = addValueButton { pickPauseKeep() }
         // msg5254: галочки «Короткие паузы между предложениями» здесь больше нет
         // (Сергей: «давай уберём эту настройку») — склейка коротких фраз и
         // обрезка тишины по краям работают всегда, как раньше по умолчанию.
@@ -522,6 +525,23 @@ class SettingsActivity(private val act: SectionActivity) {
             logSilence(on)
         }
 
+        // msg5711: «Прерывания» — что делать, когда в чтение влезло что-то извне:
+        // звонок или отключённые наушники. Стоит после звука и до прокрутки:
+        // сначала как звучит, потом что его перебивает, потом место в книге.
+        addHeading(getString(R.string.reading_section_interrupts))
+        // #98 «После звонка»: ряд-резюме + при «Продолжить» — ряд отката.
+        // Оба про поведение при внешнем прерывании, поэтому рядом с #99 ниже.
+        afterCallRow = addValueButton { pickAfterCallMode() }
+        afterCallRewindRow = if (afterCallMode() == MainActivity.AFTER_CALL_CONTINUE) {
+            addValueButton { pickAfterCallRewind() }
+        } else {
+            null
+        }
+        // #99: останавливать чтение, когда отключаются наушники.
+        addCheck(R.string.headphones_pause_title, MainActivity.KEY_PAUSE_HEADSET, true)
+
+        // msg5711: «Прокрутка» — как лента книги связана с голосом.
+        addHeading(getString(R.string.reading_section_scroll))
         // Портянка (msg4372): пара про прокрутку — что она делает с местом и с
         // голосом. Переехала сюда из «Интерфейса»: «Интерфейс» — что видно на
         // экране чтения, «Чтение» — как ведут себя голос и место.
