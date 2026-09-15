@@ -141,26 +141,40 @@ class VoicePicker(
             pickLang?.let { VoicePick.langTitle(ctx, it, VoicePick.voicesOf(voices, it).size) }
                 ?: ctx.getString(R.string.no_voices)
         }
-        val voiceName = host.currentVoice()
-        val voiceText = voiceName?.let { name ->
-            val v = voices.firstOrNull { it.name == name }
-            when {
-                v == null -> name
-                VoicePick.codeOf(v) == pickLang -> VoicePick.voiceLabel(v)
-                // Голос выбран из другого языка, чем открыт список: показываем
-                // его как есть и называем язык — выбор не пропадает молча.
-                else -> ctx.getString(
-                    R.string.voice_lang_other,
-                    VoicePick.voiceLabel(v),
-                    VoicePick.langLabel(VoicePick.codeOf(v)),
-                )
-            }
-        } ?: ctx.getString(R.string.no_voices)
+        val voiceText = voiceText(voices, pkg, host.currentVoice())
 
         engineRow.text = ctx.getString(R.string.voice_row_value, ctx.getString(R.string.voice_engine_row), engineName)
         langRow.text = ctx.getString(R.string.voice_row_value, ctx.getString(R.string.voice_lang_row), langText)
         voiceRow.text = ctx.getString(R.string.voice_row_value, ctx.getString(R.string.voice_voice_row), voiceText)
         refreshPlayLabel()
+    }
+
+    /** Что писать в строке «Голос» (msg5726). Показываем только то, что этот
+     *  движок и правда прочтёт: выбранный голос, если он его знает, иначе голос,
+     *  запомненный за этим движком (он и зазвучит), иначе честное «читает сам
+     *  движок». Имени чужого голоса в строке нет: движок его не знает, и подпись
+     *  врала бы — Сергей видел ровно это (msg5722: движок VIKTORIUS, а в строке
+     *  голос прошлого движка, microsoft_ru-RU-DariyaNeural). */
+    private fun voiceText(voices: List<Voice>, pkg: String?, chosen: String?): String {
+        // Список голосов не приехал — «ещё не знаю», а не «голоса нет» (msg3550):
+        // судить не о чем, показываем записанное как есть.
+        if (voices.isEmpty()) {
+            return chosen ?: ctx.getString(R.string.voice_engine_reads)
+        }
+        val v = voices.firstOrNull { it.name == chosen }
+            ?: voices.firstOrNull { it.name == MainActivity.voiceForEngine(prefs, pkg) }
+            ?: return ctx.getString(R.string.voice_engine_reads)
+        return if (VoicePick.codeOf(v) == pickLang) {
+            VoicePick.voiceLabel(v)
+        } else {
+            // Голос выбран из другого языка, чем открыт список: показываем его
+            // как есть и называем язык — выбор не пропадает молча.
+            ctx.getString(
+                R.string.voice_lang_other,
+                VoicePick.voiceLabel(v),
+                VoicePick.langLabel(VoicePick.codeOf(v)),
+            )
+        }
     }
 
     /** Подпись первой строки отдельно от остальных: читалке она нужна на каждый
@@ -216,6 +230,14 @@ class VoicePicker(
                     val pkg = engines[which].first
                     if (pkg == p.enginePackage) return@setSingleChoiceItems
                     host.toast(ctx.getString(R.string.voice_engine_switch))
+                    // msg5726: уходящий движок забирает свой голос с собой.
+                    // Без этой записи выбор, сделанный до смены движка, потерялся
+                    // бы: у нового движка свой голос, и он переписал бы общий
+                    // KEY_VOICE — вернувшись, человек искал бы голос заново.
+                    val keep = host.currentVoice()
+                    if (keep != null && p.voices.any { it.name == keep }) {
+                        MainActivity.rememberVoiceForEngine(prefs, p.enginePackage, keep)
+                    }
                     // Куда писать движок, решает хост: в читалке — при закрытии
                     // панели (#55/msg2669: выбор «до галочки» не должен
                     // заражать общие настройки), в Настройках — сразу.
@@ -257,9 +279,31 @@ class VoicePicker(
                     )
                 )
             }
+            applyEngineVoice(p)
             refresh()
             host.redraw()
         }
+    }
+
+    /** Какой голос зазвучит у нового движка (msg5726). Годится то, что движок
+     *  знает: сперва текущий выбор (он и был в силе), иначе голос, запомненный
+     *  за ЭТИМ движком, — он и вернётся, когда движок вернётся. Если не годится
+     *  ничего, читает сам движок; об этом говорим вслух, но только когда при
+     *  себе был чужой голос — молчаливая подмена голоса слышна и без слов, а
+     *  вот её причина незрячему не видна. */
+    private fun applyEngineVoice(p: SpeechPlayer) {
+        val cur = host.currentVoice()
+        val saved = MainActivity.voiceForEngine(prefs, p.enginePackage)
+        val v = p.voices.firstOrNull { it.name == cur }
+            ?: p.voices.firstOrNull { it.name == saved }
+        if (v != null) {
+            if (v.name != cur) {
+                p.selectVoice(v.name)
+                host.voiceApplied(v, pickLang)
+            }
+            return
+        }
+        if (cur != null) host.toast(ctx.getString(R.string.voice_engine_reads_toast, cur))
     }
 
     private fun pickLangList() {
@@ -314,6 +358,9 @@ class VoicePicker(
                     d.dismiss()
                     val v = list[which]
                     p.selectVoice(v.name)
+                    // msg5726: голос помним за движком, которому он выбран, —
+                    // вернёшься на этот движок, и голос вернётся сам.
+                    MainActivity.rememberVoiceForEngine(prefs, p.enginePackage, v.name)
                     host.voiceApplied(v, pickLang)
                     refresh()
                     host.redraw()

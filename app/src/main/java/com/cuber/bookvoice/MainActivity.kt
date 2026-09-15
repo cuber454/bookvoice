@@ -3305,6 +3305,30 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
          *  языку, и помнить его надо между запусками: иначе после перезапуска
          *  голос выбран, а язык в строке «Язык» — пусто. Код ISO 639-2 («rus»). */
         internal const val KEY_VOICE_LANG = "voice_lang"
+
+        /** msg5726: голос, выбранный КОНКРЕТНОМУ движку (префикс ключа, дальше
+         *  пакет движка). Раньше голос был один на всё приложение: сменил движок
+         *  — строка «Голос» показывала имя голоса прошлого движка, которого у
+         *  нового нет (Сергей, msg5722: «движок переключил, а на кнопке голоса
+         *  остался голос от прошлого движка»). Тот же выбор, кстати, затирался
+         *  при выборе голоса у нового движка — вернуться к прежнему движку
+         *  означало выбирать голос заново. Теперь у каждого движка своя запись,
+         *  и возврат движка возвращает его голос. */
+        internal const val KEY_VOICE_BY_ENGINE = "voice_by_engine"
+
+        /** Ключ записи «голос этого движка». null-пакет — системный движок. */
+        private fun voiceEngineKey(pkg: String?): String =
+            "$KEY_VOICE_BY_ENGINE:${pkg ?: "system"}"
+
+        /** Голос, который человек подобрал этому движку, или null. */
+        internal fun voiceForEngine(prefs: SharedPreferences, pkg: String?): String? =
+            prefs.getString(voiceEngineKey(pkg), null)
+
+        /** Запомнить голос за движком. По пустому списку голосов не зовётся —
+         *  там «ещё не знаю», а не «голос такой». */
+        internal fun rememberVoiceForEngine(prefs: SharedPreferences, pkg: String?, voice: String) {
+            prefs.edit().putString(voiceEngineKey(pkg), voice).apply()
+        }
         internal const val KEY_AUTO = "auto"
         internal const val KEY_AUTO_START = "auto_start"
         // msg2685: сообщать голосом, если книга открывается дольше ~2 секунд.
