@@ -324,6 +324,9 @@ internal object ReaderEngine {
         // #57: альтернативный способ озвучки — фразу целиком играет движок
         // (проба, по умолчанию выкл). Наш конвейер заготовок при нём молчит.
         sp.altDirect = prefs.getBoolean(MainActivity.KEY_ALT_VOICE, false)
+        // msg5604: сколько тишины оставлять на стыке фраз — строка «Пауза между
+        // фразами» в настройках (по умолчанию как было: 50 мс + 83 мс).
+        sp.pauseKeepMs = prefs.getInt(MainActivity.KEY_PAUSE_KEEP, MainActivity.PAUSE_KEEP_DEFAULT)
         // Чтение всегда непрерывное: кнопка «по одному предложению» убрана.
         continuous = true
         voiceName = prefs.getString(MainActivity.KEY_VOICE, null)
@@ -663,6 +666,30 @@ internal object ReaderEngine {
         }
         startRewindPending = n
         Diag.log(ctx, "activity", "откат при старте вооружён: на $n предл. с места глава $chapterIdx/$sentenceIdx")
+    }
+
+    /** Сменили голос или движок НА ХОДУ (msg5604).
+     *
+     *  Готовые заготовки сделаны прежним голосом: пока они не отыграют (до трёх
+     *  в очереди плюс одна прицепленная встык), новый голос не слышен вовсе —
+     *  Сергей и описал это как «переключаю, а он продолжает читать старым».
+     *  Поэтому выбрасываем заготовки и перечитываем текущее предложение: новый
+     *  голос слышен через доли секунды, ценой повтора первых слов фразы.
+     *
+     *  Ждём готовности движка и списка его голосов: после смены движка голоса
+     *  приезжают не сразу (msg3550), и без ожидания первая фраза ушла бы
+     *  голосом по умолчанию. Пауза/закрытие книги во время ожидания отменяют
+     *  перезапуск — [playing] проверяем на каждом шаге. */
+    fun restartAfterSwitch(attempt: Int = 0) {
+        val p = player ?: return
+        if (!playing || book == null) return
+        if ((!p.isReady || p.voices.isEmpty()) && attempt < 15) { // ~3 с
+            main.postDelayed({ restartAfterSwitch(attempt + 1) }, 200)
+            return
+        }
+        p.dropPrepared()
+        Diag.log(ctx, "sound", "смена голоса/движка на ходу — перечитываю предложение заново")
+        startSpeakingCurrent()
     }
 
     /** Надёжный старт чтения: если движок синтеза не готов, пробуем ещё

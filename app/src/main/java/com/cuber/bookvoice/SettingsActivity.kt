@@ -110,6 +110,9 @@ class SettingsActivity(private val act: SectionActivity) {
     private var afterCallRewindRow: Button? = null
     // Строка-резюме «Отступать назад при старте» (msg2093, раздел «Чтение»).
     private var startRewindRow: Button? = null
+    // msg5604: строка-значение «Пауза между фразами» — сколько тишины движка
+    // оставлять на стыке предложений (раздел «Чтение»).
+    private var pauseKeepRow: Button? = null
     // Строки-кнопки вкладок Библиотеки (#97): id режима → кнопка «<Имя>: показана/скрыта».
     private val tabRowButtons = ArrayList<Pair<Int, Button>>()
     private var resetTabsRow: Button? = null
@@ -407,6 +410,10 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg2093: «Отступать назад при старте» — начать на N предложений раньше
         // места остановки, чтобы вспомнить, что было. Выключено по умолчанию.
         startRewindRow = addValueButton { pickStartRewind() }
+        // msg5604: «Пауза между фразами» — сколько тишины, которую движок
+        // дописывает по краям фразы, оставлять на стыке. У сетевых голосов
+        // Google её 0,5–0,7 с на фразу, и это слышно как пауза в чтении.
+        pauseKeepRow = addValueButton { pickPauseKeep() }
         addCheck(R.string.tap_to_play_title, MainActivity.KEY_TAP_TO_PLAY, true)
         addCheck(R.string.toc_play_title, MainActivity.KEY_TOC_PLAY, true)
         addCheck(R.string.bm_play_title, MainActivity.KEY_BM_PLAY, true)
@@ -1241,6 +1248,8 @@ class SettingsActivity(private val act: SectionActivity) {
         afterCallRow?.text = getString(R.string.after_call_title) + ": " + afterCallLabel()
         afterCallRewindRow?.text = getString(R.string.after_call_rewind_title) + ": " + rewindLabel()
         startRewindRow?.text = getString(R.string.start_rewind_title) + ": " + startRewindLabel()
+        // msg5604: «Пауза между фразами: <значение>».
+        pauseKeepRow?.text = getString(R.string.pause_keep_title) + ": " + pauseKeepLabel()
 
         val hiddenTabs = LibraryActivity.tabsHidden(prefs)
         for ((mode, b) in tabRowButtons) {
@@ -1350,6 +1359,45 @@ class SettingsActivity(private val act: SectionActivity) {
         MainActivity.START_REWIND_2 -> R.string.start_rewind_2
         else -> R.string.start_rewind_5
     })
+
+    /** Значения «Паузы между фразами» (msg5604): мс тишины, которые оставляем
+     *  на стыке. 130 — как было до этой строки (50 мс в голове + 83 мс в
+     *  хвосте), 0 — срезать всё, что движок дописал по краям фразы. */
+    private val pauseKeepValues = intArrayOf(0, 130, 300, 600)
+
+    private fun pickPauseKeep() {
+        val cur = prefs.getInt(MainActivity.KEY_PAUSE_KEEP, MainActivity.PAUSE_KEEP_DEFAULT)
+            .let { v -> pauseKeepValues.indexOf(v).takeIf { it >= 0 } ?: 1 }
+        val labels = arrayOf(
+            getString(R.string.pause_keep_0),
+            getString(R.string.pause_keep_130),
+            getString(R.string.pause_keep_300),
+            getString(R.string.pause_keep_600),
+        )
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.pause_keep_title)
+            .setSingleChoiceItems(labels, cur) { d, which ->
+                val keep = pauseKeepValues[which]
+                prefs.edit().putInt(MainActivity.KEY_PAUSE_KEEP, keep).apply()
+                // Живой плеер открытой книги (как галочка «Бесшовная»): значение
+                // работает для фраз, которые ещё не синтезированы.
+                MainActivity.active?.player?.pauseKeepMs = keep
+                d.dismiss()
+                rebuildCurrentGroup()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Название выбранной паузы — для строки-резюме. */
+    private fun pauseKeepLabel(): String = getString(
+        when (prefs.getInt(MainActivity.KEY_PAUSE_KEEP, MainActivity.PAUSE_KEEP_DEFAULT)) {
+            0 -> R.string.pause_keep_0
+            300 -> R.string.pause_keep_300
+            600 -> R.string.pause_keep_600
+            else -> R.string.pause_keep_130
+        }
+    )
 
     /** Откат после звонка (виден только при «Продолжить чтение»). */
     private fun pickAfterCallRewind() {
@@ -1973,6 +2021,11 @@ class SettingsActivity(private val act: SectionActivity) {
                                 prefs.edit().remove(MainActivity.KEY_ENGINE).apply()
                                 p.setEngine(null) { _ -> act.runOnUiThread { rebuildCurrentGroup() } }
                                 toast("Движок не запустился, вернул системный")
+                            } else if (!temp) {
+                                // msg5604: движок сменили, а книга читается —
+                                // перечитываем текущее предложение новым движком
+                                // (он сам дождётся и движка, и списка голосов).
+                                ReaderEngine.restartAfterSwitch()
                             }
                             // У нового движка свои языки: старый выбор языка больше
                             // ничего не значит — вернём его по выбранному голосу.
@@ -2046,6 +2099,10 @@ class SettingsActivity(private val act: SectionActivity) {
                         .putString(MainActivity.KEY_VOICE_LANG, VoicePick.codeOf(v))
                         .apply()
                     p.selectVoice(v.name)
+                    // msg5604: голос сменили, а книга читается — перечитываем
+                    // текущее предложение новым голосом (готовые заготовки
+                    // сделаны прежним). Без книги [restartAfterSwitch] молчит.
+                    if (!temp) ReaderEngine.restartAfterSwitch()
                     rebuildCurrentGroup()
                 }
                 .setNegativeButton(R.string.toc_close, null)

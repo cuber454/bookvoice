@@ -1648,6 +1648,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         ReaderEngine.player?.gapless = prefs.getBoolean(KEY_GAPLESS, false)
         // #57: альтернативный способ озвучки — подхватываем тем же способом.
         ReaderEngine.player?.altDirect = prefs.getBoolean(KEY_ALT_VOICE, false)
+        // msg5604: строка «Пауза между фразами» — подхватываем так же, на возврате
+        // из «Настроек» (движок уже играющие фразы не переигрывает, значение
+        // работает для следующих заготовок).
+        ReaderEngine.player?.pauseKeepMs =
+            prefs.getInt(KEY_PAUSE_KEEP, PAUSE_KEEP_DEFAULT)
     }
 
     /** Кнопки «Медленнее/Быстрее» (#58): шаг 0.1 по всему диапазону 0.5–4.0
@@ -3119,6 +3124,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                             if (!ok) {
                                 player.setEngine(null) { _ -> handler.post { refreshPick() } }
                                 toast("Движок не запустился, вернул системный")
+                            } else {
+                                // msg5604: движок сменили на ходу — перечитываем
+                                // текущее предложение новым движком. Ждать не
+                                // нужно: restartAfterSwitch сам дождётся и
+                                // готовности движка, и списка его голосов.
+                                ReaderEngine.restartAfterSwitch()
                             }
                             // У нового движка свой набор языков — открываем тот, на
                             // котором говорит текущий голос (или все, если голоса нет).
@@ -3169,6 +3180,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     // выбор до установки галочки заражал все книги без своего голоса.
                     voicePanelDirty = true
                     player.selectVoice(sel)
+                    // msg5604: голос сменили на ходу — готовые заготовки
+                    // сделаны прежним голосом, перечитываем текущее предложение
+                    // новым (иначе новый голос слышен только через 3–4 фразы).
+                    ReaderEngine.restartAfterSwitch()
                     refreshPick()
                 }
                 .setNegativeButton(R.string.toc_close, null)
@@ -3477,6 +3492,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         /** #57: альтернативный способ озвучки — фразу целиком отдаём движку
          *  (проба для сравнения на слух, msg5401/5409). По умолчанию выключено. */
         internal const val KEY_ALT_VOICE = "alt_direct_voice"
+
+        /** msg5604: сколько тишины оставлять на стыке фраз, мс. Значение строки
+         *  «Пауза между фразами»: движок дописывает по краям файла свою тишину
+         *  (у сетевых голосов Google — 0,5–0,7 с на фразу), и раньше мы оставляли
+         *  от неё жёстко 50 мс в голове и 83 мс в хвосте. 130 мс — ровно как
+         *  было; 0 — срезать всё, что дописал движок. */
+        internal const val KEY_PAUSE_KEEP = "pause_keep_ms"
+        internal const val PAUSE_KEEP_DEFAULT = 130
         // msg4721: тихий поток на время чтения — не давать засыпать звуковому каналу
         // (Bluetooth-гарнитура не уходит в сон и не откусывает начало фразы). Эксперимент,
         // поэтому по умолчанию выкл; галочка живёт на экране «Не засыпать».

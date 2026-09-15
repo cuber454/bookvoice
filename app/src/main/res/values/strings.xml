@@ -732,6 +732,15 @@
     <string name="start_rewind_2">На 2 предложения</string>
     <string name="start_rewind_5">На 5 предложений</string>
 
+    <!-- msg5604: «Пауза между фразами» — сколько тишины, которую движок дописывает
+         по краям фразы, оставлять на стыке предложений. Значение в миллисекундах;
+         «Без паузы» срезает всё, что движок добавил сам. -->
+    <string name="pause_keep_title">Пауза между фразами</string>
+    <string name="pause_keep_0">Без паузы (самая плотная)</string>
+    <string name="pause_keep_130">Короткая (как было)</string>
+    <string name="pause_keep_300">Заметная</string>
+    <string name="pause_keep_600">Длинная</string>
+
     <!-- msg1254: тактильное подтверждение действий (единый рубильник, «Управление») -->
     <string name="vibrate_title">Вибрация действий</string>
 
