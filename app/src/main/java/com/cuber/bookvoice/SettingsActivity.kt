@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -76,8 +77,8 @@ class SettingsActivity(private val act: SectionActivity) {
     private var startRow: Button? = null
     private var exitRow: Button? = null
     private var playLongRow: Button? = null  // msg2695/2699: долгое нажатие «▶»
-    private var jumpFwdRow: Button? = null   // msg5234: моталка — число вперёд
-    private var jumpBackRow: Button? = null  // msg5234: моталка — число назад
+    private var jumpFwdRow: Button? = null   // msg5234: прыжок — число вперёд
+    private var jumpBackRow: Button? = null  // msg5234: прыжок — число назад
     private var folderRow: Button? = null
     private var dlFolderRow: Button? = null
     private var dlFormatRow: Button? = null
@@ -103,9 +104,11 @@ class SettingsActivity(private val act: SectionActivity) {
     // Строки-резюме кнопок гарнитуры „назад/вперёд“ (msg2136).
     private var headsetPrevRow: Button? = null
     private var headsetNextRow: Button? = null
-    // msg2527: настройки кнопок гарнитуры собраны в подраздел «Управления» —
-    // в списке раздела строка-переход, открывающая отдельный экран.
-    private var headsetGroupRow: Button? = null
+    // msg5685/5699: «Кнопки и жесты» — подраздел «Управления». В списке раздела
+    // остаётся строка-переход. Раньше так жили только кнопки гарнитуры
+    // (controlsGroupRow), теперь туда же уехали свайпы, действия четырёх кнопок
+    // читалки и прыжок — из «Экрана книги» и из общего списка «Управления».
+    private var controlsGroupRow: Button? = null
     // Строки-резюме блока «После звонка» (#98).
     private var afterCallRow: Button? = null
     private var afterCallRewindRow: Button? = null
@@ -136,10 +139,11 @@ class SettingsActivity(private val act: SectionActivity) {
     // Открытый раздел (null = экран списка групп).
     private var group: Group? = null
 
-    // msg2527: открыт подраздел «Настройки кнопок гарнитуры» внутри «Управления»
-    // (двухуровневая навигация: корень → раздел → подраздел). Пока true, «назад»
-    // ведёт в список «Управления», а не в корень.
-    private var headsetSubOpen = false
+    // msg2527: открыт подраздел внутри раздела (навигация: корень → раздел →
+    // подраздел). Пока true, «назад» ведёт в список «Управления», а не в корень.
+    // msg5685/5699: подраздел теперь один — «Кнопки и жесты»; прежний «Настройки
+    // кнопок гарнитуры» убран, его две строки переехали внутрь нового.
+    private var controlsSubOpen = false
 
     // Фокус на контент уже поставлен после первого показа (вход по нижней полосе
     // или из читалки). Дальше возвраты из пикеров фокус не трогают (msg1652).
@@ -247,17 +251,17 @@ class SettingsActivity(private val act: SectionActivity) {
         // уводит только rootBack из КОРНЯ. Здесь пишем точную ветку + время, чтобы
         // по логу понять: был ли group==null (состояние сбито) или пришло ДВА
         // back-события (две строки подряд с интервалом <0.5с).
-        // msg2527: третий уровень — подраздел кнопок гарнитуры внутри «Управления»:
+        // msg2527: третий уровень — подраздел «Кнопки и жесты» внутри «Управления»:
         // «назад» из него возвращает в список «Управления» (group снова START), а не в корень.
         Diag.log(act, "nav", "Настройки: «назад», " + when {
-            headsetSubOpen -> "в подразделе кнопок гарнитуры (Управление)"
+            controlsSubOpen -> "в подразделе «Кнопки и жесты» (Управление)"
             group == null -> "В КОРНЕ (список разделов)"
             else -> "в разделе ${group!!.name}"
         })
-        if (headsetSubOpen) {
-            headsetSubOpen = false
+        if (controlsSubOpen) {
+            controlsSubOpen = false
             // msg2527: вернуться из подраздела в список «Управления». Перестроить
-            // раздел и поставить фокус на строку «Настройки кнопок гарнитуры»
+            // раздел и поставить фокус на строку «Кнопки и жесты»
             // (как focusGroupButton после «назад» из раздела — msg1468). openGroup
             // здесь не зовём: он объявляет заголовок «Управление» ещё раз.
             binding.tvTitle.text = getString(Group.START.titleRes)
@@ -265,7 +269,7 @@ class SettingsActivity(private val act: SectionActivity) {
             buildStartGroup()
             refreshRows()
             scrollTop()
-            headsetGroupRow?.let { TabNav.refocusAfterRebuild(binding.content, it) }
+            controlsGroupRow?.let { TabNav.refocusAfterRebuild(binding.content, it) }
         } else if (group != null) {
             val from = group
             group = null
@@ -356,9 +360,9 @@ class SettingsActivity(private val act: SectionActivity) {
      *  каталоге (announceFeed, msg1573). Фокус не тащим: он и так на заголовке. */
     private fun openGroup(g: Group) {
         // Свежий вход в раздел всегда показывает его список, а не подраздел
-        // кнопок гарнитуры (msg2527): состояние подраздела живёт только между
-        // openHeadsetSub() и возвратом «назад» внутри «Управления».
-        headsetSubOpen = false
+        // (msg2527): состояние подраздела живёт только между openControlsSub()
+        // и возвратом «назад» внутри «Управления».
+        controlsSubOpen = false
         group = g
         binding.tvTitle.text = getString(g.titleRes)
         content().removeAllViews()
@@ -643,7 +647,7 @@ class SettingsActivity(private val act: SectionActivity) {
         addCheck(R.string.scroll_title, MainActivity.KEY_SCROLL, true)
     }
 
-    /** Диалог выбора числа для моталки (msg5234): готовый ряд чисел, а не ввод с
+    /** Диалог выбора числа для прыжка (msg5234): готовый ряд чисел, а не ввод с
      *  клавиатуры — незрячему выбор из списка дешевле, а нужны круглые значения.
      *  [forward] — какое из двух чисел правим; в названиях пунктов слово
      *  «предложение» стоит в правильной форме (sentencesPhrase). */
@@ -664,7 +668,7 @@ class SettingsActivity(private val act: SectionActivity) {
             .show()
     }
 
-    /** Строка моталки: «Моталка вперёд: 15 предложений» (msg5234). */
+    /** Строка прыжка: «Прыжок вперёд: 15 предложений» (msg5234). */
     private fun jumpRowText(titleRes: Int, key: String): String =
         getString(titleRes) + ": " +
             MainActivity.sentencesPhrase(act, prefs.getInt(key, MainActivity.JUMP_DEFAULT))
@@ -690,6 +694,11 @@ class SettingsActivity(private val act: SectionActivity) {
      *  [MainActivity.READER_BUTTONS] (верхние главы, нижние предложения), поэтому
      *  строки стоят парами и читаются как список кнопок. */
     private fun addReaderActionRows() {
+        // Раздел перестраивается на каждый вход (и на возврате из подраздела) —
+        // список строк надо очистить, иначе старые кнопки остаются в нём навсегда
+        // и refreshRows() пишет текст в мёртвые вьюхи. Та же грабля, что у
+        // readerButtonRows в buildReaderGroup.
+        buttonActionRows.clear()
         for (b in MainActivity.READER_BUTTONS) {
             val pos = getString(b.posRes)
             buttonActionRows.add(
@@ -718,9 +727,10 @@ class SettingsActivity(private val act: SectionActivity) {
     private fun actionRowText(r: ButtonActionRow): String =
         r.title + ": " + gestureLabel(prefs.getString(r.key, r.def) ?: r.def)
 
-    /** Строки кнопок гарнитуры „назад/вперёд“ (msg2136). msg2527: открываются
-     *  в подразделе «Настройки кнопок гарнитуры» (openHeadsetSub), не в общем
-     *  списке «Управления». У каждой кнопки свой выбор шага: „Выключено“ /
+    /** Строки кнопок гарнитуры „назад/вперёд“ (msg2136). msg2527: жили в отдельном
+     *  подразделе (openHeadsetSub); msg5685/5699 подраздел убран — строки стоят
+     *  прямо в «Кнопках и жестах» (openControlsSub), в общей группе кнопок.
+     *  У каждой кнопки свой выбор шага: „Выключено“ /
      *  предложение / абзац / глава. msg2455: серая подсказка над строками убрана —
      *  на экране остаются только сами строки выбора. */
     private fun addHeadsetRows() {
@@ -759,7 +769,7 @@ class SettingsActivity(private val act: SectionActivity) {
                     // что уже есть у свайпов и кнопок читалки.
                     getString(R.string.headset_major),
                     getString(R.string.headset_header),
-                    // msg5250: моталка — направление даёт сама кнопка, поэтому в
+                    // msg5250: прыжок — направление даёт сама кнопка, поэтому в
                     // пункте стоит число ИМЕННО этой кнопки («вперёд» или «назад»).
                     MainActivity.sentencesPhrase(act, headsetJumpCount(key)).let {
                         getString(R.string.headset_sent_n, it)
@@ -776,7 +786,7 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     /** Сколько предложений мотает кнопка гарнитуры [key] (msg5250): у «вперёд» —
-     *  число из настройки «моталка вперёд», у «назад» — из «моталка назад», как и
+     *  число из настройки «прыжок вперёд», у «назад» — из «прыжок назад», как и
      *  на экране чтения. */
     private fun headsetJumpCount(key: String): Int =
         MainActivity.jumpCount(prefs, forward = key == MainActivity.KEY_HS_NEXT)
@@ -788,7 +798,7 @@ class SettingsActivity(private val act: SectionActivity) {
         MainActivity.HS_CHAPTER -> getString(R.string.headset_chapter)
         MainActivity.HS_MAJOR -> getString(R.string.headset_major)
         MainActivity.HS_HEADER -> getString(R.string.headset_header)
-        // msg5250: у моталки в строке видно, на сколько она мотает именно здесь.
+        // msg5250: у прыжка в строке видно, на сколько она мотает именно здесь.
         MainActivity.HS_SENT_N -> getString(
             R.string.headset_sent_n,
             MainActivity.sentencesPhrase(act, headsetJumpCount(key)),
@@ -806,7 +816,7 @@ class SettingsActivity(private val act: SectionActivity) {
      *  читалки он собирается из места кнопки и вида нажатия, а не лежит
      *  отдельным ресурсом на каждую из восьми строк. */
     private fun pickAction(key: String, def: String, title: CharSequence) {
-        // msg5234: название действия собирается общим помощником — у моталки в нём
+        // msg5234: название действия собирается общим помощником — у прыжка в нём
         // стоит число из настроек, поэтому список показываем в момент открытия.
         val labels = MainActivity.GESTURE_ACTIONS
             .map { MainActivity.gestureActionLabel(act, prefs, it.first) }
@@ -906,37 +916,51 @@ class SettingsActivity(private val act: SectionActivity) {
                 .setNegativeButton(R.string.toc_close, null)
                 .show()
         }
+        // msg5685/5699: свайпы, действия четырёх кнопок читалки, кнопки гарнитуры
+        // и прыжок уехали в подраздел «Кнопки и жесты» — всё это про одно: чем
+        // человек управляет чтением, кроме экрана. Раньше свайпы и действия кнопок
+        // лежали здесь вперемешку со стартовым экраном, действия — ещё и в «Экране
+        // книги», а гарнитура — на третьем уровне. В списке «Управления» остаётся
+        // строка-переход (двухуровневая навигация, как из корня в раздел).
+        controlsGroupRow = addMenuRow(
+            getString(R.string.controls_group_title),
+            getString(R.string.controls_group_hint),
+        ) { openControlsSub() }
+    }
+
+    /** msg5685/5699: открыть подраздел «Кнопки и жесты» внутри «Управления».
+     *  Заголовок окна — имя подраздела, контент — четыре группы строк с общим
+     *  заголовком-картой перед каждой: свайпы, действия кнопок читалки, кнопки
+     *  гарнитуры, прыжок. Возврат «назад» ведёт в список «Управления»
+     *  (onBackKey), а не в корень. */
+    private fun openControlsSub() {
+        controlsSubOpen = true
+        binding.tvTitle.text = getString(R.string.controls_group_title)
+        content().removeAllViews()
+        addHeading(getString(R.string.controls_section_swipes))
         addGestureRows()
-        // msg5266: у каждой из четырёх кнопок читалки теперь два действия —
-        // короткое и долгое нажатие; оба выбираются здесь из той же палитры,
-        // что у свайпов. Список по долгому нажатию на самой кнопке убран.
+        // msg5266: у каждой из четырёх кнопок читалки два действия — короткое и
+        // долгое нажатие; оба выбираются здесь из той же палитры, что у свайпов.
+        // Список по долгому нажатию на самой кнопке убран.
+        addHeading(getString(R.string.controls_section_buttons))
         addHint(getString(R.string.reader_actions_hint))
         addReaderActionRows()
-        // msg5234: моталка — шаг сразу на несколько предложений, число выбирается
-        // здесь (своё для «вперёд» и «назад»), а сама моталка появляется пунктом в
+        // msg2527: кнопки гарнитуры жили отдельным подразделом — теперь стоят
+        // строками здесь, третьего уровня в настройках не осталось.
+        addHeading(getString(R.string.controls_section_headset))
+        addHeadsetRows()
+        // msg5234: прыжок — шаг сразу на несколько предложений, число выбирается
+        // здесь (своё для «вперёд» и «назад»), а сам прыжок появляется пунктом в
         // общем списке действий — на кнопке читалки, на свайпе и на кнопке
         // гарнитуры. Подсказка нужна: без неё непонятно, что пункт списка и эта
         // строка связаны.
+        addHeading(getString(R.string.controls_section_jump))
         addHint(getString(R.string.jump_hint))
         jumpFwdRow = addValueButton { pickJumpSteps(MainActivity.KEY_JUMP_FWD, forward = true) }
         jumpBackRow = addValueButton { pickJumpSteps(MainActivity.KEY_JUMP_BACK, forward = false) }
-        // msg2527: настройки кнопок гарнитуры („назад/вперёд“) вынесены в подраздел —
-        // в списке «Управления» остаётся строка-переход, открывающая подраздел
-        // (двухуровневая навигация, как из корня в раздел).
-        headsetGroupRow = addButton(getString(R.string.headset_group_title)) { openHeadsetSub() }
-    }
-
-    /** msg2527: открыть подраздел «Настройки кнопок гарнитуры» внутри «Управления».
-     *  Заголовок окна — имя подраздела, контент — только две строки кнопок гарнитуры.
-     *  Возврат «назад» ведёт в список «Управления» (onBackKey), а не в корень. */
-    private fun openHeadsetSub() {
-        headsetSubOpen = true
-        binding.tvTitle.text = getString(R.string.headset_group_title)
-        content().removeAllViews()
-        addHeadsetRows()
         refreshRows()
         scrollTop()
-        binding.tvTitle.announceForAccessibility(getString(R.string.headset_group_title))
+        binding.tvTitle.announceForAccessibility(getString(R.string.controls_group_title))
     }
 
     private fun buildLibraryGroup() {
@@ -1107,6 +1131,21 @@ class SettingsActivity(private val act: SectionActivity) {
         })
     }
 
+    /** Заголовок группы строк внутри длинного раздела (msg5685). От подсказки
+     *  отличается на слух и на вид: подсказка серая и мелкая, заголовок — крупнее,
+     *  светлее и жирный. Роль кнопки не даём (это не действие), поэтому TalkBack
+     *  читает его как текст и он служит картой: слышно, где кончилась одна группа
+     *  строк и началась другая. */
+    private fun addHeading(text: String) {
+        content().addView(TextView(act).apply {
+            this.text = text
+            textSize = 17f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(0xFFE8EAED.toInt())
+            setPadding(0, dp(12), 0, dp(4))
+        })
+    }
+
     /** Галочка с готовым текстом — нужна конструктору читалки (msg5220): строка
      *  называется действием кнопки, а оно меняется долгим нажатием в читалке,
      *  поэтому текст приходит строкой и обновляется в [refreshRows]. */
@@ -1198,7 +1237,7 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Та же строка, но для пункта, у которого нет раздела-`Group` (msg3907):
      *  «О программе» открывает отдельное окно, а не список настроек, но в корне
      *  должно выглядеть как остальные строки — с подсказкой. */
-    private fun addMenuRow(title: String, hint: String, onClick: () -> Unit) {
+    private fun addMenuRow(title: String, hint: String, onClick: () -> Unit): Button {
         val b = Button(act).apply {
             text = SpannableStringBuilder().apply {
                 append(title)
@@ -1218,6 +1257,7 @@ class SettingsActivity(private val act: SectionActivity) {
             topMargin = dp(2)
             bottomMargin = dp(2)
         })
+        return b
     }
 
     /**
@@ -1272,7 +1312,7 @@ class SettingsActivity(private val act: SectionActivity) {
             gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_HEADER))
         // msg5266: восемь строк действий кнопок читалки — значение следует выбору.
         for (r in buttonActionRows) r.button.text = actionRowText(r)
-        // msg5234: моталка — числа показываем словами («15 предложений»).
+        // msg5234: прыжок — числа показываем словами («15 предложений»).
         jumpFwdRow?.text = jumpRowText(R.string.jump_fwd_title, MainActivity.KEY_JUMP_FWD)
         jumpBackRow?.text = jumpRowText(R.string.jump_back_title, MainActivity.KEY_JUMP_BACK)
 

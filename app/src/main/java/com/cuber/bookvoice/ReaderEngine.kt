@@ -493,7 +493,7 @@ internal object ReaderEngine {
         val target = when (step) {
             MainActivity.HS_SENTENCE -> headsetSentenceTarget(bk, delta)
             MainActivity.HS_PARAGRAPH -> headsetParagraphTarget(bk, delta)
-            MainActivity.HS_SENT_N -> headsetJumpTarget(bk, delta) // msg5250: моталка
+            MainActivity.HS_SENT_N -> headsetJumpTarget(bk, delta) // msg5250: прыжок
             // msg5295: у «главы» три уровня — как у свайпов и кнопок читалки
             // (G_NEXT_CH/MAJOR/HEADER), а не одна настройка на все шаги.
             MainActivity.HS_MAJOR -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_MAJOR)
@@ -522,9 +522,9 @@ internal object ReaderEngine {
         return Place(ch, s)
     }
 
-    /** Моталка (msg5250): сразу N предложений в сторону [delta] — тем же правилом,
+    /** Прыжок (msg5250): сразу N предложений в сторону [delta] — тем же правилом,
      *  что соседний шаг «предложение» (граница главы переходит в следующую). Число
-     *  берётся из настроек моталки: «вперёд» — своё, «назад» — своё. null — на
+     *  берётся из настроек прыжка: «вперёд» — своё, «назад» — своё. null — на
      *  этом краю книги двигаться некуда, шаг не состоялся. */
     private fun headsetJumpTarget(bk: BookDocument, delta: Int): Place? {
         val count = MainActivity.jumpCount(prefs, delta > 0)

@@ -1206,7 +1206,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         when (act) {
             G_PREV_SENT -> jumpAndAnnounce { moveBySentence(-1) }
             G_NEXT_SENT -> jumpAndAnnounce { moveBySentence(+1) }
-            // msg5234: моталка — сразу N предложений в сторону; число у каждого
+            // msg5234: прыжок — сразу N предложений в сторону; число у каждого
             // направления своё (две строки в «Управлении»).
             G_PREV_SENT_N -> jumpAndAnnounce {
                 moveBySentences(-1, jumpCount(prefs, forward = false))
@@ -1263,7 +1263,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         goTo(ch, s)
     }
 
-    /** Моталка (msg5234): шаг сразу на [count] предложений в сторону [delta] — по
+    /** Прыжок (msg5234): шаг сразу на [count] предложений в сторону [delta] — по
      *  книге целиком, сквозь главы, ровно тем же правилом, что «След. предложение»
      *  (граница главы переходит в соседнюю). У края книги останавливаемся там, где
      *  он: доехать на меньшее число предложений лучше, чем не сдвинуться вовсе.
@@ -3461,18 +3461,18 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // (ключ CH_NAV); разовый перенос — migrateHeadsetStep.
         internal const val HS_MAJOR = "major"
         internal const val HS_HEADER = "header"
-        // msg5250: шаг гарнитуры «моталка» — сразу N предложений в сторону кнопки
-        // (сколько именно, берём из настроек моталки: у «вперёд» своё число, у
+        // msg5250: шаг гарнитуры «прыжок» — сразу N предложений в сторону кнопки
+        // (сколько именно, берём из настроек прыжка: у «вперёд» своё число, у
         // «назад» своё). Направление задаёт сама кнопка, как у прочих шагов.
         internal const val HS_SENT_N = "sent_n"
 
-        // msg5234: моталка — шаг сразу на N предложений. Число задаётся человеком
+        // msg5234: прыжок — шаг сразу на N предложений. Число задаётся человеком
         // (две строки в «Управлении»), поэтому в пункте палитры оно подставляется
         // в название, а на кнопке читалки стоит короткая подпись «+15»/«−15».
         internal const val KEY_JUMP_FWD = "jump_fwd"
         internal const val KEY_JUMP_BACK = "jump_back"
         internal const val JUMP_DEFAULT = 10
-        /** Готовый ряд чисел моталки: выбирать из списка незрячему дешевле, чем
+        /** Готовый ряд чисел прыжка: выбирать из списка незрячему дешевле, чем
          *  вводить число с клавиатуры, а нужны всё равно круглые значения. */
         internal val JUMP_STEPS = intArrayOf(1, 2, 3, 5, 10, 15, 20, 30, 50)
 
@@ -3510,7 +3510,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val G_NEXT_MAJOR = "next_major"
         internal const val G_PREV_HEADER = "prev_header"
         internal const val G_NEXT_HEADER = "next_header"
-        // msg5234: моталка — шаг сразу на N предложений (число из настроек).
+        // msg5234: прыжок — шаг сразу на N предложений (число из настроек).
         internal const val G_PREV_SENT_N = "prev_sent_n"
         internal const val G_NEXT_SENT_N = "next_sent_n"
         internal const val G_NONE = "none"
@@ -3536,7 +3536,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_PREV_HEADER to R.string.g_action_prev_header,
             G_NEXT_SENT to R.string.g_action_next_sent,
             G_PREV_SENT to R.string.g_action_prev_sent,
-            // msg5234: моталка — рядом с соседями по смыслу (шаг по предложениям),
+            // msg5234: прыжок — рядом с соседями по смыслу (шаг по предложениям),
             // число в названии подставляется при показе списка (gestureActionLabel).
             G_NEXT_SENT_N to R.string.g_action_next_sent_n,
             G_PREV_SENT_N to R.string.g_action_prev_sent_n,
@@ -3602,7 +3602,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
 
         /** Название действия из палитры — то, что человек слышит в списке и на
-         *  кнопке (msg5220). У моталки (msg5234) в название подставляется число
+         *  кнопке (msg5220). У прыжка (msg5234) в название подставляется число
          *  из настроек, поэтому это не голая строка ресурса, а функция: список
          *  показывается в момент открытия, и число в нём всегда актуальное. */
         internal fun gestureActionLabel(ctx: Context, prefs: SharedPreferences, act: String): String {
@@ -3614,7 +3614,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             }
         }
 
-        /** Короткая видимая надпись на кнопке — по её действию (msg5220). Моталка
+        /** Короткая видимая надпись на кнопке — по её действию (msg5220). Прыжок
          *  подписывается числом («+15»/«−15», msg5234): длинное название растянуло
          *  бы кнопку за прежнюю ширину (msg2431). */
         internal fun actionShort(ctx: Context, prefs: SharedPreferences, act: String): String =
