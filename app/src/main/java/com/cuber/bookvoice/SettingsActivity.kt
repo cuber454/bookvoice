@@ -136,6 +136,20 @@ class SettingsActivity(private val act: SectionActivity) {
     private var cacheRow: Button? = null
     // msg5730: строка «Размер текста» — общая ручка размера для всего приложения.
     private var textScaleRow: Button? = null
+    // msg5730: галочки «что видно на экране книги» — чтобы «простой экран» мог
+    // переставить их НА МЕСТЕ, не пересобирая раздел (пересборка убила бы строку,
+    // на которой стоит человек).
+    private val readerUiBoxes = ArrayList<CheckBox>()
+
+    /** Что остаётся на «простом экране» (msg5730): кнопка чтения, ползунок,
+     *  строка места в книге и «⋮». «⋮» не убираем ни в каком наборе — через него
+     *  достаётся всё остальное, включая сами Настройки. */
+    private val SIMPLE_KEEP = setOf(
+        MainActivity.KEY_UI_PLAY,
+        MainActivity.KEY_UI_SLIDER,
+        MainActivity.KEY_UI_POSITION,
+        MainActivity.KEY_UI_MORE,
+    )
 
     // Открытый раздел (null = экран списка групп).
     private var group: Group? = null
@@ -677,7 +691,45 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg5707: раздел остался ровно про «что видно». Ушли отсюда четыре
         // галочки кнопок-стрелок (к самим кнопкам, в «Кнопки и жесты») и
         // автопрокрутка (к прокрутке, в «Чтение»).
-        readerUi.forEach { (res, key) -> addCheck(res, key, true) }
+        readerUiBoxes.clear()
+        readerUi.forEach { (res, key) -> readerUiBoxes.add(addCheck(res, key, true)) }
+
+        // msg5730: «простой экран» — те же галочки, но разом. Ставим их после
+        // списка: строки действуют на него, и так это слышно по порядку.
+        addReaderPresetRows()
+    }
+
+    /** Строки «простой экран» (msg5730): разом оставить на экране книги самое
+     *  нужное или вернуть всё. Не отдельный режим, а готовый набор тех же
+     *  галочек — сразу после него любую можно вернуть по одной.
+     *
+     *  Почему действием, а не галочкой-состоянием. Галочка разошлась бы с
+     *  списком ниже, как только человек тронул бы одну из десяти: «простой
+     *  экран» горит, а поиск уже вернули. Строка-действие ничего не помнит и
+     *  потому врать не может. */
+    private fun addReaderPresetRows() {
+        addMenuRow(getString(R.string.reader_simple_title), getString(R.string.reader_simple_hint)) { row ->
+            applyReaderPreset(simple = true, row)
+        }
+        addMenuRow(getString(R.string.reader_all_title), getString(R.string.reader_all_hint)) { row ->
+            applyReaderPreset(simple = false, row)
+        }
+    }
+
+    /** Разложить набор по галочкам читалки. Галочки уже на экране — обновляем их
+     *  на месте, а не пересобираем раздел: пересборка убила бы строку, на которой
+     *  стоит человек (msg5005), а сдвинутые галочки TalkBack читает сам. */
+    private fun applyReaderPreset(simple: Boolean, row: Button) {
+        val e = prefs.edit()
+        readerUi.forEach { (_, key) -> e.putBoolean(key, if (simple) key in SIMPLE_KEEP else true) }
+        e.apply()
+        readerUiBoxes.forEachIndexed { i, box -> box.isChecked = prefs.getBoolean(readerUi[i].second, true) }
+        Diag.log(act, "ui", if (simple) "простой экран: лишние кнопки убраны" else "простой экран: все кнопки возвращены")
+        // Читалка применит набор при возврате в книгу (MainActivity.onStart →
+        // applyReaderUi) — здесь его применять не к чему.
+        row.announceForAccessibility(
+            getString(if (simple) R.string.reader_simple_done else R.string.reader_all_done)
+        )
     }
 
     /** Строка «Размер текста» (msg5730): общий размер для всего приложения, а не
@@ -1308,8 +1360,12 @@ class SettingsActivity(private val act: SectionActivity) {
 
     /** Та же строка, но для пункта, у которого нет раздела-`Group` (msg3907):
      *  «О программе» открывает отдельное окно, а не список настроек, но в корне
-     *  должно выглядеть как остальные строки — с подсказкой. */
-    private fun addMenuRow(title: String, hint: String, onClick: () -> Unit): Button {
+     *  должно выглядеть как остальные строки — с подсказкой.
+     *
+     *  [onClick] получает саму строку (msg5730): действие, меняющее соседние
+     *  галочки, проговаривает результат на своей строке — она не пересобирается
+     *  и фокус с неё не сходит. Кому строка не нужна, просто не берет параметр. */
+    private fun addMenuRow(title: String, hint: String, onClick: (Button) -> Unit): Button {
         val b = Button(act).apply {
             text = SpannableStringBuilder().apply {
                 append(title)
@@ -1322,7 +1378,7 @@ class SettingsActivity(private val act: SectionActivity) {
             textSize = 17f
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(6), dp(12), dp(6))
-            setOnClickListener { onClick() }
+            setOnClickListener { onClick(this) }
         }
         asPlainText(b)
         content().addView(b, lp().apply {
