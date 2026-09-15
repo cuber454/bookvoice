@@ -1,5 +1,6 @@
 package com.cuber.bookvoice
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -81,6 +82,13 @@ abstract class SectionActivity : AppCompatActivity() {
     fun requestPermission(permission: String, onResult: (Boolean) -> Unit) {
         permCb = onResult
         requestPerm.launch(permission)
+    }
+
+    /** Размер текста (msg5730) — окна-секции получают его здесь, до создания
+     *  разметки: дальше и надутые из XML экраны, и строки, построенные кодом,
+     *  читают размер из уже поднятой конфигурации. */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(TextScale.wrap(newBase))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

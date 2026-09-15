@@ -1,6 +1,7 @@
 package com.cuber.bookvoice
 
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -56,6 +57,11 @@ class QuotesActivity : AppCompatActivity() {
             if (ok) Vibra.confirm(this) else Vibra.error(this)
         }
         pendingFileText = null
+    }
+
+    /** Размер текста (msg5730) — общая ручка приложения, см. [TextScale]. */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(TextScale.wrap(newBase))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

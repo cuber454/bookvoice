@@ -1,15 +1,35 @@
 package com.cuber.bookvoice
 
+import android.os.Bundle
+
 /** Окно «Настройки» (редизайн msg1676+): открывается ПОВЕРХ полки из меню «⋮»
  *  Библиотеки, как книга (и поверх читалки из её «⋮» — читалка закрывается,
  *  место книги сохранено, как было в модели вкладок). Вернуться = закрыть окно.
  *
  *  Страница настроек строится при каждом открытии окна: вход всегда начинается
- *  с корневого меню разделов (открытый в прошлый раз раздел не держим).
+ *  с корневого меню разделов (открытый в прошлый раз раздел не держим). Единственное
+ *  исключение — пересоздание того же окна (msg5730: смена размера текста): там
+ *  раздел возвращается, иначе человек после выбора оказывался бы в корне.
  */
 class SettingsWindowActivity : SectionActivity() {
 
     private val settings = SettingsActivity(this)
+
+    // msg5730: раздел, открытый до пересоздания окна (смена размера текста).
+    // Пусто — обычный вход, начинаем с корневого меню.
+    private var restoreGroup: String? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // До super: buildSection зовётся из SectionActivity.onCreate, и к этому
+        // моменту имя раздела уже должно быть прочитано.
+        restoreGroup = savedInstanceState?.getString(KEY_GROUP)
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(KEY_GROUP, settings.groupName())
+    }
 
     override fun buildSection(intent: android.content.Intent?) {
         // msg1756: имя окна = «Настройки», а не label приложения. При появлении окно
@@ -17,6 +37,9 @@ class SettingsWindowActivity : SectionActivity() {
         // окне роняет — имя должно жить в самом окне (тот же фикс, что полке 0.3.80).
         setTitle(getString(R.string.settings_title))
         settings.build(container, intent)
+        // Пересоздание после смены размера текста: вернуть тот же раздел, иначе
+        // человек окажется в корне и не поймёт, применилось ли вообще.
+        settings.restoreGroup(restoreGroup)
     }
 
     override fun resumeSection(arrival: Boolean) {
@@ -48,5 +71,10 @@ class SettingsWindowActivity : SectionActivity() {
         // полка покажется «снизу», и её resume это воспринял бы как старт.
         // Страховка поверх rootBack (там флаг ставится раньше, до finish()).
         if (isFinishing) LibraryActivity.suppressNextAutoOpen = true
+    }
+
+    companion object {
+        /** Имя открытого раздела в снимке состояния окна (msg5730). */
+        private const val KEY_GROUP = "settings_group"
     }
 }

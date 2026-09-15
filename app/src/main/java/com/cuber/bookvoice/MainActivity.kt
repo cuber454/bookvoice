@@ -237,6 +237,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // движок (ReaderEngine): там живут haveAudioFocus, pausedByFocusLoss,
     // audioFocusListener, noisyReceiver и их регистрация.
 
+    /** Размер текста (msg5730) — читалка получает его до создания разметки, как
+     *  и окна-секции: поднимается и текст книги, и подписи кнопок. */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(TextScale.wrap(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Diag.header(this)

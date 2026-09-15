@@ -134,6 +134,8 @@ class SettingsActivity(private val act: SectionActivity) {
     private var updateModeRow: Button? = null
     // msg4895: строка «Разобранный текст» — занято из потолка (BookCache).
     private var cacheRow: Button? = null
+    // msg5730: строка «Размер текста» — общая ручка размера для всего приложения.
+    private var textScaleRow: Button? = null
 
     // Открытый раздел (null = экран списка групп).
     private var group: Group? = null
@@ -653,7 +655,13 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     private fun buildReaderGroup() {
-        // Подсказка сверху: эти флажки убирают/возвращают элементы экрана чтения.
+        // msg5730: размер текста — первой строкой раздела. Он про то, КАК экран
+        // выглядит, а не про то, что на нём есть; и он один на всё приложение,
+        // не только на читалку. Ставим его выше галочек, чтобы до самой нужной
+        // слабовидящему настройки было меньше ходов.
+        addTextScaleRow()
+
+        // Подсказка: эти флажки убирают/возвращают элементы экрана чтения.
         addHint(getString(R.string.reader_group_hint))
 
         // Конструктор экрана чтения (#58): какие элементы читалки показывать.
@@ -662,6 +670,45 @@ class SettingsActivity(private val act: SectionActivity) {
         // галочки кнопок-стрелок (к самим кнопкам, в «Кнопки и жесты») и
         // автопрокрутка (к прокрутке, в «Чтение»).
         readerUi.forEach { (res, key) -> addCheck(res, key, true) }
+    }
+
+    /** Строка «Размер текста» (msg5730): общий размер для всего приложения, а не
+     *  только для книги. Меняется сразу и целиком: размер окно берёт при своём
+     *  создании ([TextScale.wrap] в attachBaseContext), поэтому после выбора окно
+     *  пересоздаётся, а открытый раздел возвращается по имени ([restoreGroup]) —
+     *  человек остаётся там же, где выбирал.
+     *
+     *  Выбор из трёх готовых строк, а не ползунок: крайние значения надо слышать
+     *  словами, а середина между «крупным» и «очень крупным» ничего не решает. */
+    private fun addTextScaleRow() {
+        textScaleRow = addValueButton {
+            val cur = TextScale.value(act)
+            val labels = TextScale.VALUES.map { getString(TextScale.labelRes(it)) }.toTypedArray()
+            MaterialAlertDialogBuilder(act)
+                .setTitle(R.string.text_scale_title)
+                .setSingleChoiceItems(labels, TextScale.VALUES.indexOf(cur)) { d, which ->
+                    val v = TextScale.VALUES[which]
+                    d.dismiss()
+                    // Тот же размер — окно не трогаем: пересоздание стоит перехода
+                    // фокуса, а ничего не меняет.
+                    if (v == cur) return@setSingleChoiceItems
+                    TextScale.set(act, v)
+                    Diag.log(act, "ui", "размер текста: $v — окно пересоздаётся")
+                    act.recreate()
+                }
+                .setNegativeButton(R.string.toc_close, null)
+                .show()
+        }
+    }
+
+    /** Имя открытого раздела (null — корень). Окно берёт его перед пересозданием
+     *  (msg5730, смена размера текста), чтобы вернуть человека в тот же раздел. */
+    fun groupName(): String? = group?.name
+
+    /** Вернуть открытый раздел после пересоздания окна. Незнакомое имя — корень. */
+    fun restoreGroup(name: String?) {
+        val g = Group.values().firstOrNull { it.name == name } ?: return
+        openGroup(g)
     }
 
     /** Диалог выбора числа для прыжка (msg5234): готовый ряд чисел, а не ввод с
@@ -1295,6 +1342,12 @@ class SettingsActivity(private val act: SectionActivity) {
 
     /** Обновить тексты строк-резюме (стартовый экран, шаг, папка, сортировка). */
     private fun refreshRows() {
+        // msg5730: резюме строки размера текста — выбранное значение. Строки
+        // может и не быть в этом разделе (тогда ссылка с прошлой сборки мертва,
+        // это безвредно).
+        textScaleRow?.text = getString(R.string.text_scale_title) + ": " +
+            getString(TextScale.labelRes(TextScale.value(act)))
+
         val startLast = prefs.getString(MainActivity.KEY_START, MainActivity.START_LAST) == MainActivity.START_LAST
         startRow?.text = getString(R.string.start_screen_title) + ": " +
             if (startLast) getString(R.string.start_screen_last) else getString(R.string.start_screen_library)
