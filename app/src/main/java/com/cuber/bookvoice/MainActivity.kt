@@ -508,17 +508,28 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     // ---------------- Открытие и сохранение книги ----------------
 
+    /** Плеер, если движок ещё подключён к окну. null — читалка успела закрыться,
+     *  и [ReaderEngine.player] уже обнулён ([ReaderEngine.close]). Отложенные
+     *  хвосты переключения движка обязаны это проверять: msg5857 — книга не
+     *  открылась, окно ушло на полку, а обработчик переключения ещё не сработал,
+     *  и обращение к player уронило приложение. */
+    private val livePlayer: SpeechPlayer?
+        get() = ReaderEngine.player
+
     private fun restoreEngineAndVoice() {
         val savedEngine = prefs.getString(KEY_ENGINE, null)
         val defaultEngine = player.defaultEngine
         if (savedEngine != null && savedEngine != defaultEngine) {
             player.setEngine(savedEngine) { ok ->
                 handler.post {
+                    // Окно могло закрыться, пока движок переключался: голос
+                    // выставится при следующем открытии книги.
+                    val p = livePlayer ?: return@post
                     if (ok) {
-                        voiceName?.let { player.selectVoice(it) }
+                        voiceName?.let { p.selectVoice(it) }
                     } else {
                         prefs.edit().remove(KEY_ENGINE).apply()
-                        player.setEngine(null) { _ -> voiceName?.let { player.selectVoice(it) } }
+                        p.setEngine(null) { _ -> livePlayer?.let { v -> voiceName?.let { v.selectVoice(it) } } }
                     }
                 }
             }
@@ -651,7 +662,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  кнопкой «Понятно» (msg5499). Тост гаснет сам, окно тоста живёт отдельно от
      *  активити, поэтому finish() его не снимает. */
     private fun failOpen(message: String) {
-        Diag.log(this, "activity", "не открылось: $message — возвращаюсь назад")
+        // msg5857: адрес книги в строке отказа — иначе по логу не понять, ЧТО
+        // именно не прочиталось (своя копия, ссылка чужого проводника, файл из
+        // выбранной папки), а это первое, что нужно при разборе.
+        Diag.log(this, "activity", "не открылось: $message — возвращаюсь назад; адрес: $currentUri")
         toast(message)
         Vibra.error(this)
         finish()
@@ -2687,8 +2701,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (player.enginePackage != gEngine) {
             player.setEngine(gEngine) { ok ->
                 handler.post {
+                    // Та же защита, что в restoreEngineAndVoice: окно могло
+                    // закрыться, пока движок переключался.
+                    val p = livePlayer ?: return@post
                     if (ok && gVoice != null) {
-                        player.selectVoice(gVoice)
+                        p.selectVoice(gVoice)
                         voiceName = gVoice
                     }
                     onDone?.invoke()
