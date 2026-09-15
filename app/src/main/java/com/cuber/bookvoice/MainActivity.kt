@@ -11,6 +11,7 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.speech.RecognizerIntent
+import android.speech.tts.Voice
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
