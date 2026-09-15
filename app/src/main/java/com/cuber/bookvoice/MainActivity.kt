@@ -2651,7 +2651,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             // «Язык» в Настройках осталась бы от прежнего голоса (в панели читалки
             // язык — только фильтр списка и в prefs не идёт, а тут его надо
             // вывести из выбранного голоса).
-            list.firstOrNull { it.name == vc }?.let { e.putString(KEY_VOICE_LANG, VoicePick.codeOf(it)) }
+            // msg5622: но НЕ затираем язык, выбранный руками, если движок его
+            // сейчас не знает (в списке был запасной язык) — иначе выбор Сергея
+            // пропадёт молча. Такой выбор ждёт движка, который язык узнает.
+            val want = prefs.getString(KEY_VOICE_LANG, null)
+            list.firstOrNull { it.name == vc }?.let { v ->
+                if (want == null || VoicePick.codeOf(v) == want) {
+                    e.putString(KEY_VOICE_LANG, VoicePick.codeOf(v))
+                }
+            }
         }
         // msg3550: по пустому списку настройку не стираем — «ещё не знаю» ≠
         // «голоса нет»; иначе закрытие панели в неудачный момент сносило
@@ -3061,7 +3069,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Живёт только на время панели и в prefs не уходит: выбор голоса в
         // читалке применяется к глобальным настройкам не в момент клика, а при
         // закрытии панели (#55, msg2669) — это только фильтр списка.
-        var pickLang: String? = VoicePick.langOf(player.voices, voiceName)
+        var pickLang: String? = VoicePick.pickLangFor(
+            player.voices,
+            prefs.getString(KEY_VOICE_LANG, null),
+            voiceName,
+        )
         // Если языка у движка ещё нет в списке (голос не выбран) — показываем все.
         fun refreshPick() {
             val engines = player.engines
@@ -3131,10 +3143,28 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                                 // готовности движка, и списка его голосов.
                                 ReaderEngine.restartAfterSwitch()
                             }
-                            // У нового движка свой набор языков — открываем тот, на
-                            // котором говорит текущий голос (или все, если голоса нет).
-                            pickLang = VoicePick.langOf(player.voices, voiceName)
-                            refreshPick()
+                            // msg5622: выбранный руками язык переживает смену
+                            // движка. Теряется он только если у нового движка
+                            // такого языка нет — тогда говорим вслух, что
+                            // открыли вместо него; сам выбор помним и вернём,
+                            // когда движок снова этот язык узнает.
+                            // Язык решаем, когда движок отдал список голосов: до
+                            // этого список пуст, и «у движка нет языка» было бы
+                            // враньём по неполным данным (msg5622).
+                            ReaderEngine.whenVoicesReady {
+                                val want = pickLang ?: prefs.getString(KEY_VOICE_LANG, null)
+                                pickLang = VoicePick.pickLangFor(player.voices, want, voiceName)
+                                if (want != null && !VoicePick.hasLang(player.voices, want)) {
+                                    toast(
+                                        getString(
+                                            R.string.voice_lang_lost,
+                                            VoicePick.langLabel(want),
+                                            VoicePick.langLabel(pickLang),
+                                        )
+                                    )
+                                }
+                                refreshPick()
+                            }
                         }
                     }
                 }

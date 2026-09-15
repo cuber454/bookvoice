@@ -62,6 +62,21 @@ object VoicePick {
     fun langOf(voices: List<Voice>, voiceName: String?): String? =
         voiceName?.let { name -> voices.firstOrNull { it.name == name }?.let { codeOf(it) } }
 
+    /** Знает ли движок такой язык (msg5622). */
+    fun hasLang(voices: List<Voice>, code: String?): Boolean =
+        code != null && voices.any { codeOf(it) == code }
+
+    /** Язык, который открываем в списке голосов (msg5622). Приоритет:
+     *  1) язык, выбранный Сергеем руками ([want]) — если движок его знает;
+     *  2) язык текущего голоса;
+     *  3) русский, иначе первый по алфавиту.
+     *  Запасной вариант (2/3) ничего не переписывает: [want] остаётся в памяти
+     *  и вернётся сам, когда движок снова узнает этот язык. */
+    fun pickLangFor(voices: List<Voice>, want: String?, voiceName: String?): String? {
+        if (hasLang(voices, want)) return want
+        return langOf(voices, voiceName) ?: defaultLang(voices)
+    }
+
     /** Языки, которые есть у движка: по алфавиту русского названия. [first] —
      *  код, который ставим первым (язык текущего голоса): незрячему важно не
      *  свайпать весь список до своего языка. */

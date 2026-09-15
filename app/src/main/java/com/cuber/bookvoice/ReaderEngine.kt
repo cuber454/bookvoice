@@ -680,16 +680,28 @@ internal object ReaderEngine {
      *  приезжают не сразу (msg3550), и без ожидания первая фраза ушла бы
      *  голосом по умолчанию. Пауза/закрытие книги во время ожидания отменяют
      *  перезапуск — [playing] проверяем на каждом шаге. */
-    fun restartAfterSwitch(attempt: Int = 0) {
-        val p = player ?: return
+    fun restartAfterSwitch() {
         if (!playing || book == null) return
-        if ((!p.isReady || p.voices.isEmpty()) && attempt < 15) { // ~3 с
-            main.postDelayed({ restartAfterSwitch(attempt + 1) }, 200)
+        whenVoicesReady {
+            val p = player ?: return@whenVoicesReady
+            if (!playing || book == null) return@whenVoicesReady
+            p.dropPrepared()
+            Diag.log(ctx, "sound", "смена голоса/движка на ходу — перечитываю предложение заново")
+            startSpeakingCurrent()
+        }
+    }
+
+    /** Позвать [block], когда движок поднялся и отдал список своих голосов
+     *  (msg5622). Список приезжает позже init, а публичного «список готов» в SDK
+     *  нет (msg3550) — спрашиваем опросом. Не дождались за ~3 с — зовём как есть:
+     *  молчание тут хуже, чем решение по неполным данным. */
+    fun whenVoicesReady(attempt: Int = 0, on: SpeechPlayer? = player, block: () -> Unit) {
+        val p = on ?: return
+        if ((!p.isReady || p.voices.isEmpty()) && attempt < 15) {
+            main.postDelayed({ whenVoicesReady(attempt + 1, on, block) }, 200)
             return
         }
-        p.dropPrepared()
-        Diag.log(ctx, "sound", "смена голоса/движка на ходу — перечитываю предложение заново")
-        startSpeakingCurrent()
+        block()
     }
 
     /** Надёжный старт чтения: если движок синтеза не готов, пробуем ещё

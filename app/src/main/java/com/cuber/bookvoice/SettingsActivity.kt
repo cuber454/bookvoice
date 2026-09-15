@@ -2021,16 +2021,39 @@ class SettingsActivity(private val act: SectionActivity) {
                                 prefs.edit().remove(MainActivity.KEY_ENGINE).apply()
                                 p.setEngine(null) { _ -> act.runOnUiThread { rebuildCurrentGroup() } }
                                 toast("Движок не запустился, вернул системный")
-                            } else if (!temp) {
+                                return@runOnUiThread
+                            }
+                            if (!temp) {
                                 // msg5604: движок сменили, а книга читается —
                                 // перечитываем текущее предложение новым движком
                                 // (он сам дождётся и движка, и списка голосов).
                                 ReaderEngine.restartAfterSwitch()
                             }
-                            // У нового движка свои языки: старый выбор языка больше
-                            // ничего не значит — вернём его по выбранному голосу.
-                            prefs.edit().remove(MainActivity.KEY_VOICE_LANG).apply()
-                            rebuildCurrentGroup()
+                            // msg5622: язык, выбранный руками, смену движка
+                            // переживает — больше не стираем его. Если новый
+                            // движок такого языка не знает, говорим вслух, какой
+                            // открыли вместо него; сам выбор остаётся в настройках
+                            // и вернётся, когда движок снова язык узнает.
+                            // Список голосов приезжает позже init: пока он пуст,
+                            // «у движка нет языка» было бы враньём.
+                            ReaderEngine.whenVoicesReady(on = p) {
+                                val want = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
+                                if (want != null && !VoicePick.hasLang(p.voices, want)) {
+                                    val fallback = VoicePick.pickLangFor(
+                                        p.voices,
+                                        null,
+                                        prefs.getString(MainActivity.KEY_VOICE, null),
+                                    )
+                                    toast(
+                                        getString(
+                                            R.string.voice_lang_lost,
+                                            VoicePick.langLabel(want),
+                                            VoicePick.langLabel(fallback),
+                                        )
+                                    )
+                                }
+                                rebuildCurrentGroup()
+                            }
                         }
                     }
                 }
@@ -2077,9 +2100,10 @@ class SettingsActivity(private val act: SectionActivity) {
                 return@withVoiceEngine
             }
             val curVoice = prefs.getString(MainActivity.KEY_VOICE, null)
-            val lang = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
-                ?: VoicePick.langOf(voices, curVoice)
-                ?: VoicePick.defaultLang(voices)
+            // msg5622: язык, выбранный руками, — первый; если движок его не
+            // знает, открываем язык текущего голоса или русский (запасной).
+            val want = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
+            val lang = VoicePick.pickLangFor(voices, want, curVoice)
             // Список — только выбранного языка: чужие языки больше не подмешиваются.
             val list = VoicePick.voicesOf(voices, lang)
             if (list.isEmpty()) {
@@ -2094,10 +2118,15 @@ class SettingsActivity(private val act: SectionActivity) {
                 .setSingleChoiceItems(labels, idx) { d, which ->
                     d.dismiss()
                     val v = list[which]
-                    prefs.edit()
-                        .putString(MainActivity.KEY_VOICE, v.name)
-                        .putString(MainActivity.KEY_VOICE_LANG, VoicePick.codeOf(v))
-                        .apply()
+                    val e = prefs.edit().putString(MainActivity.KEY_VOICE, v.name)
+                    // msg5622: язык голоса пишем, только если он не запасной —
+                    // иначе движок, не знающий выбранного Сергеем языка, стёр бы
+                    // его выбор выбором голоса из чужого языка. Запасной язык
+                    // живёт до ближайшего движка, который язык узнает.
+                    if (want == null || lang == want) {
+                        e.putString(MainActivity.KEY_VOICE_LANG, VoicePick.codeOf(v))
+                    }
+                    e.apply()
                     p.selectVoice(v.name)
                     // msg5604: голос сменили, а книга читается — перечитываем
                     // текущее предложение новым голосом (готовые заготовки
