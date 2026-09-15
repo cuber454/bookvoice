@@ -2,6 +2,8 @@ package com.cuber.bookvoice
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.Voice
 import android.view.Gravity
 import android.view.View
@@ -73,9 +75,9 @@ class VoicePicker(
      *  текущего голоса. */
     private var pickLang: String? = null
 
-    /** Собрать набор в контейнер: кнопка чтения, три строки-значения. */
+    /** Собрать набор в контейнер: кнопка чтения/образца, три строки-значения. */
     fun build(parent: LinearLayout) {
-        if (host.hasBook()) parent.addView(playRow)
+        parent.addView(playRow)
         engineRow.setOnClickListener { pickEngine() }
         langRow.setOnClickListener { pickLangList() }
         voiceRow.setOnClickListener { pickVoice() }
@@ -161,11 +163,20 @@ class VoicePicker(
         refreshPlayLabel()
     }
 
-    /** Подпись кнопки чтения отдельно от строк: читалке она нужна на каждый
-     *  старт/паузу, а пересобирать из-за неё подписи строк незачем. */
+    /** Подпись первой строки отдельно от остальных: читалке она нужна на каждый
+     *  старт/паузу, а пересобирать из-за неё строки-значения незачем.
+     *
+     *  Она же и говорит, что строка сделает (msg5640): книга открыта —
+     *  «Читать/Пауза», книги нет (Настройки) — «Прослушать», образец фразы.
+     *  Одна строка в одном месте, а разное поведение названо вслух, а не
+     *  угадывается. */
     fun refreshPlayLabel() {
-        playRow.text = if (host.isPlaying()) ctx.getString(R.string.pause)
-        else ctx.getString(R.string.voice_read_start)
+        playRow.text = when {
+            host.hasBook() ->
+                if (host.isPlaying()) ctx.getString(R.string.pause)
+                else ctx.getString(R.string.voice_read_start)
+            else -> ctx.getString(R.string.voice_preview)
+        }
     }
 
     /** С какого языка открывать списки: выбранный руками (msg5622), а если
@@ -337,8 +348,12 @@ class VoicePicker(
         }
     }
 
-    /** Кнопка «Читать/Пауза» — действие, поэтому настоящая кнопка: слово
-     *  «кнопка» здесь уместно и отличает её от строк-значений. */
+    /** Первая строка набора — действие, поэтому настоящая кнопка: слово
+     *  «кнопка» здесь уместно и отличает её от строк-значений.
+     *
+     *  Книга открыта — читать/пауза; книги нет (Настройки) — прослушать образец
+     *  фразы (msg5640). Строка одна и та же и стоит на одном и том же месте,
+     *  меняется только её работа и подпись. */
     private fun actionRow(): Button = Button(ctx).apply {
         textSize = 16f
         isAllCaps = false
@@ -351,7 +366,49 @@ class VoicePicker(
             topMargin = dp(2f)
             bottomMargin = dp(6f)
         }
-        setOnClickListener { host.togglePlay() }
+        setOnClickListener {
+            if (host.hasBook()) host.togglePlay() else playSample()
+        }
+    }
+
+    // ---------------- Образец фразы (книги нет) ----------------
+
+    /** Плеер образца. Держим свой, а не просим у хоста: в Настройках хост
+     *  поднимает временный и гасит его при закрытии списка — образец же должен
+     *  звучать по нажатию и не поднимать движок заново на каждый раз. */
+    private var samplePlayer: SpeechPlayer? = null
+    private val main = Handler(Looper.getMainLooper())
+
+    private fun playSample() {
+        // Два голоса разом звучать не должны: читалка точно молчит (книги нет),
+        // но движок мог остаться в чужом окне.
+        ReaderEngine.pausePlayback()
+        val p = samplePlayer ?: SpeechPlayer(ctx.applicationContext).also { samplePlayer = it }
+        if (p.isReady) {
+            speakSample(p)
+            return
+        }
+        p.setEngine(prefs.getString(MainActivity.KEY_ENGINE, null)) { ok ->
+            main.post {
+                if (ok) speakSample(p)
+                else host.toast(ctx.getString(R.string.voice_preview_failed))
+            }
+        }
+    }
+
+    private fun speakSample(p: SpeechPlayer) {
+        p.stop()
+        p.speed = prefs.getFloat(MainActivity.KEY_SPEED, 1f)
+        p.pitch = prefs.getFloat(MainActivity.KEY_PITCH, 1f)
+        p.volume = prefs.getFloat(MainActivity.KEY_VOLUME, 1f)
+        prefs.getString(MainActivity.KEY_VOICE, null)?.let { p.selectVoice(it) }
+        p.speak(ctx.getString(R.string.voice_preview_sample))
+    }
+
+    /** Погасить плеер образца (уход из Настроек). */
+    fun shutdownSample() {
+        samplePlayer?.shutdown()
+        samplePlayer = null
     }
 
     /** Подпись приложения-движка по пакету: движок ради подписи поднимать не надо. */
