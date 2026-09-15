@@ -27,7 +27,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.RadioButton
@@ -275,9 +274,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Открытая шторка держит нижние кнопки видимыми — скорость слышна на лету.
         binding.btnVoice.setOnClickListener { toggleVoicePanel() }
         binding.btnVoiceClose.setOnClickListener { hideVoicePanel() }
-        // #54 (msg2643): кнопка ▶ в полноэкранной панели голоса — послушать
-        // выбранный голос/скорость на тексте книги сразу, ничего не сворачивая.
-        binding.btnVoiceTest.setOnClickListener { togglePlay() }
         binding.btnToc.setOnClickListener { showTocDialog() }
         // Поиск по книге: короткое нажатие — панель (поле, микрофон,
         // Найти/Назад/Далее/Закрыть); долгое — сразу голосовой ввод слова.
@@ -1598,8 +1594,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         (binding.btnPlayPause as? MaterialButton)?.setIconResource(
             if (playing) R.drawable.ic_pause else R.drawable.ic_play,
         )
-        // #54: та же кнопка в полноэкранной панели голоса — «Прослушать»/«Пауза».
-        binding.btnVoiceTest.text = if (playing) "Пауза" else getString(R.string.voice_test_play)
+        // #75 (msg5632): «Читать/Пауза» в панели голоса — первая строка набора
+        // VoicePicker; подпись меняем там же, где и всё остальное в наборе.
+        voicePicker?.refreshPlayLabel()
         MediaSessionService.setPlaying(playing)
     }
 
@@ -2991,6 +2988,78 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // перезаписываем, чтобы простое «открыл-закрыл» не прибивало системный движок.
     private var voicePanelDirty = false
 
+    /** Набор «Голос чтения» открытой панели: общий код с Настройками
+     *  (VoicePicker.kt). Живёт, пока панель открыта. */
+    private var voicePicker: VoicePicker? = null
+
+    /** Хост набора для читалки (msg5618): набор спрашивает состояние и сообщает
+     *  о выборе, а куда и когда писать — решает читалка: движок и голос слышны
+     *  сразу, а в настройки они уходят при закрытии панели (#55, msg2669), когда
+     *  уже известно, стоит ли галочка «Запомнить для этой книги». */
+    private val pickerHost = object : VoicePicker.Host {
+        override fun withPlayer(titleRes: Int, onReady: (SpeechPlayer, Boolean) -> Unit) {
+            // У читалки плеер всегда под рукой — ждать и гасить нечего.
+            onReady(player, false)
+        }
+
+        override fun playerOrNull(): SpeechPlayer? = player
+
+        override fun hasBook(): Boolean = book != null
+
+        override fun isPlaying(): Boolean = playing
+
+        override fun togglePlay() = this@MainActivity.togglePlay()
+
+        override fun currentVoice(): String? = voiceName
+
+        override fun rememberChecked(): Boolean = currentBookRecord()?.let {
+            it.voiceEngine != null || it.voice != null || it.voiceSpeed != null
+        } == true
+
+        override fun rememberChanged(checked: Boolean) {
+            voiceRememberChecked = checked
+            if (checked) {
+                persistPerBookProfile()
+                toast(getString(R.string.voice_book_saved))
+            } else {
+                // Сняли галочку: свой голос книги забываем, движок вернётся на
+                // глобальный — после переключения обновляем список голосов.
+                clearBookVoice {
+                    voicePicker?.resetLang()
+                    voicePicker?.refresh()
+                    toast(getString(R.string.voice_book_cleared))
+                }
+            }
+        }
+
+        override fun engineApplied(pkg: String) {
+            // #55 (msg2669): движок в глобальные настройки в момент клика НЕ
+            // пишем — иначе выбор «до галочки» заражал все книги без своего
+            // голоса (msg2671). Куда писать решает hideVoicePanel при закрытии:
+            // галочка → запись книги, без галочки → глобальные.
+            // Перечитку текущего предложения набор делает сам, уже после того,
+            // как движок действительно сменился (msg5604).
+            voicePanelDirty = true
+        }
+
+        override fun voiceApplied(v: Voice, lang: String?) {
+            voiceName = v.name
+            voicePanelDirty = true
+            // msg5604: голос сменили на ходу — готовые заготовки сделаны прежним
+            // голосом, перечитываем текущее предложение новым.
+            ReaderEngine.restartAfterSwitch()
+        }
+
+        override fun langApplied(code: String) {
+            // Язык в панели читалки — только фильтр списка голосов: в настройки
+            // он уйдёт при закрытии панели вместе с выбранным голосом (#70).
+        }
+
+        override fun redraw() = Unit
+
+        override fun toast(msg: String) = this@MainActivity.toast(msg)
+    }
+
     // msg2679: «Читать» нажали, пока книга ещё открывалась (тяжёлый PDF
     // разбирается в фоне секунды) — намерение не теряем: стартуем сами по
     // готовности книги (см. openBook).
@@ -3013,10 +3082,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     /** «Голос чтения» (кнопка в нижнем ряду и пункт меню «⋮»): #54 (msg2643)
      *  открывает панель voicePanel НА ВЕСЬ ЭКРАН — читалка временно прячется
-     *  (enterVoiceFullscreen). Содержимое прежнее — ползунки скорости/тона/
-     *  громкости, галочка «Запомнить для этой книги» (#102), двухшаговый выбор
-     *  движок → голоса. Кнопка «Прослушать» (▶/⏸) в шапке слушает выбранный
-     *  голос/скорость на тексте книги, не сворачивая панель. */
+     *  (enterVoiceFullscreen). Содержимое — набор VoicePicker (msg5618): первая
+     *  строка «Читать/Пауза» (msg5632 — образцов голоса нет, кнопка запускает
+     *  чтение книги), строки движок/язык/голос, ползунки скорости/тона/громкости
+     *  и галочка «Запомнить для этой книги» (#102). Тот же код, что в Настройках. */
     private fun toggleVoicePanel() {
         if (binding.voicePanel.visibility == View.VISIBLE) {
             hideVoicePanel()
@@ -3034,191 +3103,21 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         voicePanelDirty = false
         body.setPadding(dp2px(4f), dp2px(8f), dp2px(4f), dp2px(8f))
 
-        // #102: «Запомнить для этой книги». Видна, когда открыта книга; включена —
-        // если у книги уже есть запомненный голос/скорость.
-        val hasBook = book != null
-        val rememberCb = CheckBox(this).apply {
-            text = getString(R.string.voice_remember_book)
-            contentDescription = getString(R.string.voice_remember_book_cd)
-            textSize = 16f
-            visibility = if (hasBook) View.VISIBLE else View.GONE
-            isChecked = hasBook && currentBookRecord()?.let {
-                it.voiceEngine != null || it.voice != null || it.voiceSpeed != null
-            } == true
-        }
-        voiceRememberChecked = rememberCb.isChecked
-
-        // #54: кнопка «Прослушать» в шапке панели — только когда открыта книга
-        // (без книги читать нечего). Текст обновляет и updatePlayButton на лету.
-        binding.btnVoiceTest.visibility = if (hasBook) View.VISIBLE else View.GONE
-        binding.btnVoiceTest.text = if (playing) "Пауза" else getString(R.string.voice_test_play)
-
-        // ——— #70 (msg5503/5511): движок / язык / голос — три строки-значения ———
-        // Раньше был двухшаговый визард «движок → голоса», и на втором шаге
-        // вываливались ВСЕ голоса движка: русские, английские, украинские
-        // вперемешку, да ещё сетевые в общей куче. По имени голоса язык не
-        // угадать — у RHVoice «Aleksandr» есть и русский, и английский. Теперь
-        // язык выбирается своей строкой, а в списке голосов — только он.
-        // Строки-значения — тот же вид, что «После звонка» в Настройках: на самой
-        // строке видно, что стоит сейчас, нажатие открывает короткий список.
-        val engineRow = voicePickRow()
-        val langRow = voicePickRow()
-        val voiceRow = voicePickRow()
-
-        // Язык, открытый в списке голосов. По умолчанию — язык текущего голоса.
-        // Живёт только на время панели и в prefs не уходит: выбор голоса в
-        // читалке применяется к глобальным настройкам не в момент клика, а при
-        // закрытии панели (#55, msg2669) — это только фильтр списка.
-        var pickLang: String? = VoicePick.pickLangFor(
-            player.voices,
-            prefs.getString(KEY_VOICE_LANG, null),
-            voiceName,
-        )
-        // Если языка у движка ещё нет в списке (голос не выбран) — показываем все.
-        fun refreshPick() {
-            val engines = player.engines
-            val pkg = player.enginePackage ?: player.defaultEngine
-            val engineName = engines.firstOrNull { it.first == pkg }?.second
-                ?: getString(R.string.voice_engine_system)
-            val voices = player.voices
-            // Язык не выбран (только что сменили движок) — открываем русский, а
-            // если движок его не знает, первый по алфавиту: список голосов не
-            // должен показывать все языки сразу.
-            if (pickLang == null && voices.isNotEmpty()) pickLang = VoicePick.defaultLang(voices)
-            val langText = pickLang
-                ?.let { VoicePick.langTitle(this, it, VoicePick.voicesOf(voices, it).size) }
-                ?: getString(R.string.no_voices)
-            val voiceText = voiceName?.let { name ->
-                val v = voices.firstOrNull { it.name == name }
-                when {
-                    v == null -> name
-                    VoicePick.codeOf(v) == pickLang -> VoicePick.voiceLabel(v)
-                    // Голос выбран из другого языка, чем открыт список: показываем
-                    // его как есть и называем язык — выбор не пропадает молча.
-                    else -> getString(
-                        R.string.voice_lang_other,
-                        VoicePick.voiceLabel(v),
-                        VoicePick.langLabel(VoicePick.codeOf(v)),
-                    )
-                }
-            } ?: getString(R.string.no_voices)
-            engineRow.text = getString(R.string.voice_row_value, getString(R.string.voice_engine_row), engineName)
-            langRow.text = getString(R.string.voice_row_value, getString(R.string.voice_lang_row), langText)
-            voiceRow.text = getString(R.string.voice_row_value, getString(R.string.voice_voice_row), voiceText)
-        }
-
-        fun pickEngine() {
-            val engines = player.engines
-            if (engines.isEmpty()) {
-                toast(getString(R.string.no_engines))
-                return
-            }
-            val defaultEngine = player.defaultEngine
-            val cur = player.enginePackage ?: defaultEngine
-            val labels = engines.map { (pkg, label) ->
-                if (pkg == defaultEngine) "$label (системный)" else label
-            }.toTypedArray()
-            val idx = engines.indexOfFirst { it.first == cur }.coerceAtLeast(0)
-            MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.voice_engine_row)
-                .setSingleChoiceItems(labels, idx) { d, which ->
-                    d.dismiss()
-                    val pkg = engines[which].first
-                    if (pkg == player.enginePackage) return@setSingleChoiceItems
-                    // #55 (msg2669): движок в глобальные настройки в момент клика НЕ
-                    // пишем — иначе выбор «до галочки» заражал все книги без своего
-                    // голоса (msg2671). Куда писать решает hideVoicePanel при
-                    // закрытии: галочка → запись книги, без галочки → глобальные.
-                    voicePanelDirty = true
-                    toast(getString(R.string.voice_engine_switch))
-                    player.setEngine(pkg) { ok ->
-                        handler.post {
-                            if (!ok) {
-                                player.setEngine(null) { _ -> handler.post { refreshPick() } }
-                                toast("Движок не запустился, вернул системный")
-                            } else {
-                                // msg5604: движок сменили на ходу — перечитываем
-                                // текущее предложение новым движком. Ждать не
-                                // нужно: restartAfterSwitch сам дождётся и
-                                // готовности движка, и списка его голосов.
-                                ReaderEngine.restartAfterSwitch()
-                            }
-                            // msg5622: выбранный руками язык переживает смену
-                            // движка. Теряется он только если у нового движка
-                            // такого языка нет — тогда говорим вслух, что
-                            // открыли вместо него; сам выбор помним и вернём,
-                            // когда движок снова этот язык узнает.
-                            // Язык решаем, когда движок отдал список голосов: до
-                            // этого список пуст, и «у движка нет языка» было бы
-                            // враньём по неполным данным (msg5622).
-                            ReaderEngine.whenVoicesReady {
-                                val want = pickLang ?: prefs.getString(KEY_VOICE_LANG, null)
-                                pickLang = VoicePick.pickLangFor(player.voices, want, voiceName)
-                                if (want != null && !VoicePick.hasLang(player.voices, want)) {
-                                    toast(
-                                        getString(
-                                            R.string.voice_lang_lost,
-                                            VoicePick.langLabel(want),
-                                            VoicePick.langLabel(pickLang),
-                                        )
-                                    )
-                                }
-                                refreshPick()
-                            }
-                        }
-                    }
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
-        }
-
-        fun pickLang() {
-            val voices = player.voices
-            if (voices.isEmpty()) {
-                toast(getString(R.string.no_voices))
-                return
-            }
-            val langs = VoicePick.langs(voices, pickLang)
-            val labels = langs.map { VoicePick.langTitle(this, it.code, it.voices.size) }.toTypedArray()
-            val idx = langs.indexOfFirst { it.code == pickLang }.coerceAtLeast(0)
-            MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.voice_pick_lang)
-                .setSingleChoiceItems(labels, idx) { d, which ->
-                    d.dismiss()
-                    pickLang = langs[which].code
-                    refreshPick()
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
-        }
-
-        fun pickVoice() {
-            val voices = VoicePick.voicesOf(player.voices, pickLang)
-            if (voices.isEmpty()) {
-                toast(getString(R.string.no_voices))
-                return
-            }
-            val labels = voices.map { VoicePick.voiceLabel(it) }.toTypedArray()
-            val idx = voices.indexOfFirst { it.name == voiceName }
-            MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.voice_pick_voice)
-                .setSingleChoiceItems(labels, idx) { d, which ->
-                    d.dismiss()
-                    val sel = voices[which].name
-                    voiceName = sel
-                    // #55 (msg2669): голос в глобальные в момент выбора НЕ пишем —
-                    // выбор до установки галочки заражал все книги без своего голоса.
-                    voicePanelDirty = true
-                    player.selectVoice(sel)
-                    // msg5604: голос сменили на ходу — готовые заготовки
-                    // сделаны прежним голосом, перечитываем текущее предложение
-                    // новым (иначе новый голос слышен только через 3–4 фразы).
-                    ReaderEngine.restartAfterSwitch()
-                    refreshPick()
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
-        }
+        // #75 (msg5610/5614/5618): движок / язык / голос / «Читать» и галочка
+        // «Запомнить для этой книги» — ТОТ ЖЕ код, что в Настройках
+        // (VoicePicker.kt). Раньше это были две разные поделки: тут строки
+        // объявлялись «кнопкой», в Настройках — обычным текстом, и «Прослушать»
+        // в двух местах значило разное. Теперь порядок, подписи и элементы
+        // совпадают буквально; отличается только КОГДА выбор уходит в настройки
+        // (тут — при закрытии панели, #55/msg2669; в Настройках — сразу).
+        val picker = VoicePicker(this, prefs, pickerHost)
+        voicePicker = picker
+        picker.build(body)
+        // Галочка могла стоять ещё до открытия панели (у книги уже есть свой
+        // голос) — тогда закрытие панели обязано писать в книгу, а не в общие
+        // настройки. Ставим зеркало ДО addRemember: сама галочка уже в этом
+        // состоянии, и её слушатель сработал бы зря.
+        voiceRememberChecked = pickerHost.rememberChecked()
 
         // Ползунки — как Настройки → «Голос»: скорость, тон, громкость.
         // Скорость: применяем к плееру сразу (новую слышно на лету), но в
@@ -3241,53 +3140,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             if (player.isReady) player.volume = v
         }
 
-        // Галочка «Запомнить для этой книги».
-        val rememberRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 0, 0, dp2px(4f))
-        }
-        rememberRow.addView(rememberCb)
-        body.addView(rememberRow)
-        // #55 (msg2669): статичная подсказка под галочкой — что будет с выбранным
-        // голосом при закрытии панели. Одна фраза на обе стороны, чтобы незрячему
-        // не приходилось угадывать по названию галочки (msg2659/msg2671).
-        body.addView(TextView(this).apply {
-            text = getString(R.string.voice_remember_hint)
-            textSize = 14f
-            setTextColor(0xFF9AA0A6.toInt())
-            setPadding(dp2px(4f), 0, dp2px(4f), dp2px(8f))
-        })
-        rememberCb.setOnCheckedChangeListener { _, checked ->
-            voiceRememberChecked = checked
-            if (checked) {
-                persistPerBookProfile()
-                toast(getString(R.string.voice_book_saved))
-            } else {
-                // Сняли галочку: свой голос книги забываем, движок вернётся на
-                // глобальный — после переключения обновляем список голосов.
-                clearBookVoice {
-                    // Голос книги забыт, вернулись к глобальному — открываем его язык.
-                    pickLang = null
-                    refreshPick()
-                    toast(getString(R.string.voice_book_cleared))
-                }
-            }
-        }
+        // Галочка «Запомнить для этой книги» с подсказкой — тоже из набора.
+        picker.addRemember(body)
 
-        engineRow.setOnClickListener { pickEngine() }
-        langRow.setOnClickListener { pickLang() }
-        voiceRow.setOnClickListener { pickVoice() }
-        body.addView(engineRow)
-        body.addView(langRow)
-        body.addView(voiceRow)
-        refreshPick()
 
         // #54 (msg2643): панель голоса «на весь экран» — прячем остальную
-        // читалку, а не показываем шторку над списком. Кнопка «Прослушать»
-        // (▶/⏸) в шапке слушает выбранный голос/скорость на тексте книги прямо
-        // из панели. Скролл внутри занимает весь экран, поэтому галочка
-        // «Запомнить для этой книги» (msg2639) больше не обрезается невидимым
-        // краем шторки — до неё всегда можно доскроллить.
+        // читалку, а не показываем шторку над списком. Скролл внутри занимает
+        // весь экран, поэтому галочка «Запомнить для этой книги» (msg2639)
+        // больше не обрезается невидимым краем шторки — до неё всегда можно
+        // доскроллить.
         enterVoiceFullscreen()
         binding.voicePanel.visibility = View.VISIBLE
         binding.voicePanel.post {
@@ -3321,6 +3182,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
         voiceRememberChecked = false
         voicePanelDirty = false
+        // Панель закрыта — набору больше нечего перерисовывать (updatePlayButton
+        // дёргает его подпись; без панели строк на экране нет).
+        voicePicker = null
     }
 
     /** #54: развернуть панель голоса на весь экран. Прячем всех соседей voiceArea
@@ -3362,26 +3226,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
-    }
-
-    /** Строка-значение в панели голоса (#70): «Движок: RHVoice». Нажатие
-     *  открывает короткий список, текст строки обновляет вызывающий. Тот же вид
-     *  и та же механика, что у строк-значений в Настройках («После звонка»). */
-    private fun voicePickRow(): Button {
-        val b = Button(this).apply {
-            textSize = 16f
-            isAllCaps = false
-            gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
-            setPadding(dp2px(12f), 0, dp2px(12f), 0)
-        }
-        b.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-        ).apply {
-            topMargin = dp2px(2f)
-            bottomMargin = dp2px(2f)
-        }
-        return b
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()

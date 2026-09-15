@@ -269,14 +269,8 @@
                 android:textAppearance="?attr/textAppearanceTitleMedium"
                 android:textColor="#E8EAED" />
 
-            <Button
-                android:id="@+id/btnVoiceTest"
-                android:layout_width="wrap_content"
-                android:layout_height="44dp"
-                android:layout_marginStart="4dp"
-                android:minWidth="44dp"
-                android:text="@string/voice_test_play"
-                android:textSize="14sp" />
+            <!-- msg5632: кнопки «Прослушать» в шапке панели больше нет —
+                 «Читать/Пауза» стала первой строкой набора VoicePicker. -->
 
             <Button
                 android:id="@+id/btnVoiceClose"

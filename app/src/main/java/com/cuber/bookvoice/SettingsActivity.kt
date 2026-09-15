@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
+import android.speech.tts.Voice
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
@@ -123,9 +124,9 @@ class SettingsActivity(private val act: SectionActivity) {
     private var gaplessBox: CheckBox? = null
     // #70 (msg5503/5511): движок, язык и голос — три строки-значения вместо одной
     // кнопки «Голос и движок» с визардом и плоским списком всех голосов движка.
-    private var engineRow: Button? = null
-    private var voiceLangRow: Button? = null
-    private var voiceRow: Button? = null
+    // #75 (msg5618): строки больше не свои — их держит общий набор VoicePicker,
+    // тот же самый, что в панели читалки: один код, один вид, одни списки.
+    private var voicePicker: VoicePicker? = null
     private var backupAutoRow: Button? = null
     // Режим авто-проверки обновлений (0.3.91): «Автоматически» / «Вручную».
     private var updateModeRow: Button? = null
@@ -376,12 +377,21 @@ class SettingsActivity(private val act: SectionActivity) {
 
     private fun buildVoiceGroup() {
         // «Голос» (msg721 + msg1102): только параметры звука. Тон — сюда же
-        // (msg1096: «пропал ползунок тона»), движок и голос — кнопкой ниже,
-        // тем же выбором, что и в читалке.
-        // msg4091: «Прослушать» — ПЕРВОЙ строкой раздела, как «Прослушать»
-        // в панели голоса читалки (она там тоже выше ползунков). Порядок строк в
-        // обоих местах одинаковый — Сергей просил не путаться между ними.
-        addButton(getString(R.string.voice_preview)) { previewVoice() }
+        // (msg1096: «пропал ползунок тона»).
+        //
+        // #75 (msg5610/5614/5618): движок / язык / голос — общий с читалкой
+        // набор VoicePicker. Сергей упёрся в то, что в двух местах это выглядело
+        // по-разному: в панели читалки строки объявлялись «кнопкой», тут —
+        // обычным текстом, а «Прослушать» значило разное (запуск чтения против
+        // пробы голоса). Теперь это буквально один код: строки-значения читаются
+        // как текст и там, и тут, списки и подписи одни и те же.
+        // msg5632: образца голоса больше нет — «Прослушать» в наборе запускает
+        // чтение книги и живёт только там, где книга открыта (в Настройках
+        // читать нечего, поэтому строки «Читать/Пауза» тут не появляется).
+        val picker = VoicePicker(act, prefs, pickerHost)
+        voicePicker = picker
+        picker.build(content())
+
         addRateSlider(MainActivity.KEY_SPEED, R.string.speed_value, "Скорость", RateSteps.SPEED) {
             MainActivity.active?.player?.speed = it
         }
@@ -390,14 +400,56 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         // Громкость чтения (0..100%) — общий KEY_VOLUME (тот же, что был в окне «Голос и речь»).
         addVolumeSlider()
+    }
 
-        // #70 (msg5503/5511): движок → язык → голос тремя строками-значениями —
-        // как «После звонка» и прочие выбиралки. Раньше тут была кнопка «Голос и
-        // движок»: открывался визард, и на шаге голосов вываливались ВСЕ голоса
-        // движка — русские, английские, украинские вперемешку.
-        engineRow = addValueButton { pickEngine() }
-        voiceLangRow = addValueButton { pickVoiceLang() }
-        voiceRow = addValueButton { pickVoice() }
+    /** Что набор спрашивает у Настроек (msg5618). Здесь всё пишется в общие
+     *  настройки сразу, в момент выбора: книги, за которой можно было бы
+     *  запомнить голос отдельно, в этом окне нет. */
+    private val pickerHost = object : VoicePicker.Host {
+        override fun withPlayer(titleRes: Int, onReady: (SpeechPlayer, Boolean) -> Unit) =
+            withVoiceEngine(titleRes, onReady)
+
+        override fun playerOrNull(): SpeechPlayer? = MainActivity.active?.player
+
+        /** Книги тут нет: «Читать/Пауза» и «Запомнить для этой книги» — не про
+         *  это окно. Живую книгу настраивают в панели читалки, там же и галочка. */
+        override fun hasBook(): Boolean = false
+        override fun isPlaying(): Boolean = false
+        override fun togglePlay() = Unit
+        override fun rememberChecked(): Boolean = false
+        override fun rememberChanged(checked: Boolean) = Unit
+
+        override fun currentVoice(): String? = prefs.getString(MainActivity.KEY_VOICE, null)
+
+        override fun engineApplied(pkg: String) {
+            prefs.edit().putString(MainActivity.KEY_ENGINE, pkg).apply()
+            // Перечитку текущего предложения (msg5604) набор делает сам — уже
+            // после того, как движок действительно сменился.
+        }
+
+        override fun voiceApplied(v: Voice, lang: String?) {
+            val e = prefs.edit().putString(MainActivity.KEY_VOICE, v.name)
+            // msg5622: язык голоса пишем, только если он не запасной — иначе
+            // движок, не знающий выбранного руками языка, стёр бы этот выбор
+            // выбором голоса из чужого языка. Запасной язык вернётся сам, когда
+            // попадётся движок, который его знает.
+            val want = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
+            if (want == null || lang == want) {
+                e.putString(MainActivity.KEY_VOICE_LANG, VoicePick.codeOf(v))
+            }
+            e.apply()
+            if (MainActivity.active?.player?.isReady == true) {
+                MainActivity.active?.player?.selectVoice(v.name)
+            }
+            ReaderEngine.restartAfterSwitch()
+        }
+
+        override fun langApplied(code: String) {
+            prefs.edit().putString(MainActivity.KEY_VOICE_LANG, code).apply()
+        }
+
+        override fun redraw() = refreshRows()
+        override fun toast(msg: String) = this@SettingsActivity.toast(msg)
     }
 
     /** «Чтение» (msg721): когда начинать чтение и что озвучивать. Переехало из «Голоса». */
@@ -1227,24 +1279,10 @@ class SettingsActivity(private val act: SectionActivity) {
                 prefs.getString(MainActivity.KEY_HS_NEXT, MainActivity.HS_SENTENCE),
                 MainActivity.KEY_HS_NEXT,
             )
-        // #70: движок, язык и голос — строки-значения раздела «Голос».
-        engineRow?.text = getString(
-            R.string.voice_row_value,
-            getString(R.string.voice_engine_row),
-            engineSummary(),
-        )
-        voiceLangRow?.text = getString(
-            R.string.voice_row_value,
-            getString(R.string.voice_lang_row),
-            prefs.getString(MainActivity.KEY_VOICE_LANG, null)?.let { VoicePick.langLabel(it) }
-                ?: getString(R.string.voice_lang_unset),
-        )
-        voiceRow?.text = getString(
-            R.string.voice_row_value,
-            getString(R.string.voice_voice_row),
-            prefs.getString(MainActivity.KEY_VOICE, null)
-                ?: getString(R.string.voice_engine_system),
-        )
+        // #75: движок, язык и голос — строки общего набора (тот же код, что в
+        // панели читалки). Раздела «Голос» на экране нет — набору нечего
+        // перерисовывать, но вызов дешёвый и без ветвлений.
+        voicePicker?.refresh()
         afterCallRow?.text = getString(R.string.after_call_title) + ": " + afterCallLabel()
         afterCallRewindRow?.text = getString(R.string.after_call_rewind_title) + ": " + rewindLabel()
         startRewindRow?.text = getString(R.string.start_rewind_title) + ": " + startRewindLabel()
@@ -1892,58 +1930,8 @@ class SettingsActivity(private val act: SectionActivity) {
     private fun dlFormatIndex(): Int =
         OPDS_READABLE_FORMATS.indexOfFirst { it.first == dlFormatKey() }.coerceAtLeast(0)
 
-    // ---------------- Диалог «Голос и движок» ----------------
+    // ---------------- Плеер для списков голоса ----------------
 
-    // ---------------- Проба голоса из настроек (msg4087) ----------------
-
-    /** Пробный движок для кнопки «Прослушать». Отдельный от читалки: у него нет
-     *  книги и связи с циклом предложений, поэтому проба не может «продвинуть»
-     *  настоящее чтение. Если книга читается — на время пробы ставим её на паузу,
-     *  иначе два голоса звучали бы одновременно. */
-    private var previewPlayer: SpeechPlayer? = null
-
-    /** Движок поднимается: повторные нажатия ждут его, а не запускают заново. */
-    private var previewWaiting = false
-
-    private fun previewVoice() {
-        if (previewWaiting) return
-        val p = previewPlayer ?: SpeechPlayer(act.applicationContext).also { previewPlayer = it }
-        // Пауза — через движок (MainActivity.pausePlayback приватный, а движок
-        // умеет паузу и без открытого окна). Без открытой книги просто ничего не делает.
-        ReaderEngine.pausePlayback()
-        if (p.isReady) {
-            speakPreview(p)
-            return
-        }
-        previewWaiting = true
-        p.setEngine(prefs.getString(MainActivity.KEY_ENGINE, null)) { ok ->
-            runOnUiThread {
-                previewWaiting = false
-                if (ok) speakPreview(p) else toast(getString(R.string.voice_preview_failed))
-            }
-        }
-    }
-
-    /** Проговорить образец теми настройками, что сейчас стоят в prefs. */
-    private fun speakPreview(p: SpeechPlayer) {
-        p.speed = prefs.getFloat(MainActivity.KEY_SPEED, 1f)
-        p.pitch = prefs.getFloat(MainActivity.KEY_PITCH, 1f)
-        p.volume = prefs.getFloat(MainActivity.KEY_VOLUME, 1f)
-        prefs.getString(MainActivity.KEY_VOICE, null)?.let { p.selectVoice(it) }
-        Diag.log(act, "voice", "«прослушать»: проба голоса из настроек")
-        p.speak(getString(R.string.voice_preview_sample))
-    }
-
-    /** Окно настроек закрывается — пробный движок больше не нужен. */
-    fun shutdownPreview() {
-        previewWaiting = false
-        previewPlayer?.shutdown()
-        previewPlayer = null
-    }
-
-    /** Движок/голос меняем через живой плеер открытой книги (если она есть).
-     *  Из библиотеки (без книги) предложить открыть книгу — голос выбирать
-     *  не на чем. */
     /** #70: выбор движка, языка и голоса работает и без открытой книги. У живой
      *  книги это её плеер (выбор слышен сразу), без книги на время списка
      *  поднимаем временный движок и гасим его, когда список закрыли: выбор всё
@@ -1951,7 +1939,10 @@ class SettingsActivity(private val act: SectionActivity) {
      *  (MainActivity читает KEY_ENGINE / KEY_VOICE / KEY_VOICE_LANG). Раньше на
      *  это место был тост «сначала открой книгу» — Сергей упёрся в него в 0.3.40
      *  (msg766). [onReady] получает плеер и признак «временный»: временный надо
-     *  погасить самому, когда диалог закрылся. */
+     *  погасить самому, когда диалог закрылся.
+     *
+     *  #75 (msg5618): это же и `VoicePicker.Host.withPlayer` — списки движка,
+     *  языка и голоса открывает общий набор. */
     private fun withVoiceEngine(titleRes: Int, onReady: (SpeechPlayer, Boolean) -> Unit) {
         val live = MainActivity.active?.player
         if (live != null && live.isReady) {
@@ -1982,163 +1973,6 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
-    /** Имя выбранного движка для строки-резюме: подпись приложения движка из
-     *  пакета — движок ради подписи поднимать не нужно. Не выбран — «системный». */
-    private fun engineSummary(): String {
-        val pkg = prefs.getString(MainActivity.KEY_ENGINE, null)
-            ?: return getString(R.string.voice_engine_system)
-        val label = runCatching {
-            val pm = act.packageManager
-            pm.getApplicationInfo(pkg, 0).loadLabel(pm).toString()
-        }.getOrNull()
-        return label?.takeIf { it.isNotBlank() } ?: pkg
-    }
-
-    private fun pickEngine() {
-        withVoiceEngine(R.string.voice_engine_row) { p, temp ->
-            val engines = p.engines
-            if (engines.isEmpty()) {
-                toast(getString(R.string.no_engines))
-                if (temp) p.shutdown()
-                return@withVoiceEngine
-            }
-            val defaultEngine = p.defaultEngine
-            val cur = p.enginePackage ?: defaultEngine
-            val labels = engines.map { (pkg, label) ->
-                if (pkg == defaultEngine) "$label (системный)" else label
-            }.toTypedArray()
-            val idx = engines.indexOfFirst { it.first == cur }.coerceAtLeast(0)
-            val dlg = MaterialAlertDialogBuilder(act)
-                .setTitle(R.string.voice_engine_row)
-                .setSingleChoiceItems(labels, idx) { d, which ->
-                    d.dismiss()
-                    val pkg = engines[which].first
-                    if (pkg == p.enginePackage) return@setSingleChoiceItems
-                    prefs.edit().putString(MainActivity.KEY_ENGINE, pkg).apply()
-                    p.setEngine(pkg) { ok ->
-                        act.runOnUiThread {
-                            if (!ok) {
-                                prefs.edit().remove(MainActivity.KEY_ENGINE).apply()
-                                p.setEngine(null) { _ -> act.runOnUiThread { rebuildCurrentGroup() } }
-                                toast("Движок не запустился, вернул системный")
-                                return@runOnUiThread
-                            }
-                            if (!temp) {
-                                // msg5604: движок сменили, а книга читается —
-                                // перечитываем текущее предложение новым движком
-                                // (он сам дождётся и движка, и списка голосов).
-                                ReaderEngine.restartAfterSwitch()
-                            }
-                            // msg5622: язык, выбранный руками, смену движка
-                            // переживает — больше не стираем его. Если новый
-                            // движок такого языка не знает, говорим вслух, какой
-                            // открыли вместо него; сам выбор остаётся в настройках
-                            // и вернётся, когда движок снова язык узнает.
-                            // Список голосов приезжает позже init: пока он пуст,
-                            // «у движка нет языка» было бы враньём.
-                            ReaderEngine.whenVoicesReady(on = p) {
-                                val want = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
-                                if (want != null && !VoicePick.hasLang(p.voices, want)) {
-                                    val fallback = VoicePick.pickLangFor(
-                                        p.voices,
-                                        null,
-                                        prefs.getString(MainActivity.KEY_VOICE, null),
-                                    )
-                                    toast(
-                                        getString(
-                                            R.string.voice_lang_lost,
-                                            VoicePick.langLabel(want),
-                                            VoicePick.langLabel(fallback),
-                                        )
-                                    )
-                                }
-                                rebuildCurrentGroup()
-                            }
-                        }
-                    }
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
-            if (temp) dlg.setOnDismissListener { p.shutdown() }
-        }
-    }
-
-    private fun pickVoiceLang() {
-        withVoiceEngine(R.string.voice_pick_lang) { p, temp ->
-            val voices = p.voices
-            if (voices.isEmpty()) {
-                toast(getString(R.string.no_voices))
-                if (temp) p.shutdown()
-                return@withVoiceEngine
-            }
-            // Открытым держим язык выбранного голоса; если он ещё не выбран —
-            // язык глобального голоса из настроек.
-            val cur = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
-                ?: VoicePick.langOf(voices, prefs.getString(MainActivity.KEY_VOICE, null))
-            val langs = VoicePick.langs(voices, cur)
-            val labels = langs.map { VoicePick.langTitle(act, it.code, it.voices.size) }.toTypedArray()
-            val idx = langs.indexOfFirst { it.code == cur }.coerceAtLeast(0)
-            val dlg = MaterialAlertDialogBuilder(act)
-                .setTitle(R.string.voice_pick_lang)
-                .setSingleChoiceItems(labels, idx) { d, which ->
-                    d.dismiss()
-                    prefs.edit().putString(MainActivity.KEY_VOICE_LANG, langs[which].code).apply()
-                    rebuildCurrentGroup()
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
-            if (temp) dlg.setOnDismissListener { p.shutdown() }
-        }
-    }
-
-    private fun pickVoice() {
-        withVoiceEngine(R.string.voice_pick_voice) { p, temp ->
-            val voices = p.voices
-            if (voices.isEmpty()) {
-                toast(getString(R.string.no_voices))
-                if (temp) p.shutdown()
-                return@withVoiceEngine
-            }
-            val curVoice = prefs.getString(MainActivity.KEY_VOICE, null)
-            // msg5622: язык, выбранный руками, — первый; если движок его не
-            // знает, открываем язык текущего голоса или русский (запасной).
-            val want = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
-            val lang = VoicePick.pickLangFor(voices, want, curVoice)
-            // Список — только выбранного языка: чужие языки больше не подмешиваются.
-            val list = VoicePick.voicesOf(voices, lang)
-            if (list.isEmpty()) {
-                toast(getString(R.string.no_voices))
-                if (temp) p.shutdown()
-                return@withVoiceEngine
-            }
-            val labels = list.map { VoicePick.voiceLabel(it) }.toTypedArray()
-            val idx = list.indexOfFirst { it.name == curVoice }
-            val dlg = MaterialAlertDialogBuilder(act)
-                .setTitle(R.string.voice_pick_voice)
-                .setSingleChoiceItems(labels, idx) { d, which ->
-                    d.dismiss()
-                    val v = list[which]
-                    val e = prefs.edit().putString(MainActivity.KEY_VOICE, v.name)
-                    // msg5622: язык голоса пишем, только если он не запасной —
-                    // иначе движок, не знающий выбранного Сергеем языка, стёр бы
-                    // его выбор выбором голоса из чужого языка. Запасной язык
-                    // живёт до ближайшего движка, который язык узнает.
-                    if (want == null || lang == want) {
-                        e.putString(MainActivity.KEY_VOICE_LANG, VoicePick.codeOf(v))
-                    }
-                    e.apply()
-                    p.selectVoice(v.name)
-                    // msg5604: голос сменили, а книга читается — перечитываем
-                    // текущее предложение новым голосом (готовые заготовки
-                    // сделаны прежним). Без книги [restartAfterSwitch] молчит.
-                    if (!temp) ReaderEngine.restartAfterSwitch()
-                    rebuildCurrentGroup()
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
-            if (temp) dlg.setOnDismissListener { p.shutdown() }
-        }
-    }
 
     // ---------------- Диагностика ----------------
 
