@@ -85,12 +85,11 @@ class SettingsActivity(private val act: SectionActivity) {
     // Строки-резюме назначенных жестов (#77).
     private var gestureRightRow: Button? = null
     private var gestureLeftRow: Button? = null
-    // msg5220: четыре строки конструктора читалки — галочка прячет кнопку, а
-    // текст строки следует её действию (кнопка и строка зовутся одинаково).
-    private val readerButtonRows = ArrayList<Pair<MainActivity.ReaderButton, CheckBox>>()
     // msg5266: восемь строк действий кнопок читалки — по две на кнопку (короткое
     // и долгое нажатие). Подпись постоянная («нижняя левая: долгое нажатие»),
     // меняется только значение, поэтому храним её рядом с кнопкой.
+    // msg5707: галочки «кнопка видна» в этот список не входят — у них подпись
+    // постоянная (по месту кнопки), обновлять в refreshRows нечего.
     private val buttonActionRows = ArrayList<ButtonActionRow>()
 
     /** Строка-резюме одного действия кнопки читалки (msg5266): ключ настройки,
@@ -533,6 +532,11 @@ class SettingsActivity(private val act: SectionActivity) {
         // каждом движении пальца и не успевал договорить слово (msg4450/4452 —
         // Сергей попросил убрать, вариант «по отпусканию» остаётся).
         addHint(getString(R.string.scroll_group_hint))
+        // msg5707: «Прокручивать к читаемому предложению» переехала сюда из
+        // «Экрана книги» — прокрутка это поведение чтения, а не «что видно».
+        // Строка стоит первой в тройке: она главная (идёт ли прокрутка вообще),
+        // две нижние уточняют, что прокрутка делает с местом и с голосом.
+        addCheck(R.string.scroll_title, MainActivity.KEY_SCROLL, true)
         addCheck(R.string.scroll_place_title, MainActivity.KEY_SCROLL_PLACE, true)
         addCheck(R.string.scroll_follow_title, MainActivity.KEY_SCROLL_FOLLOW, true)
     }
@@ -634,17 +638,10 @@ class SettingsActivity(private val act: SectionActivity) {
 
         // Конструктор экрана чтения (#58): какие элементы читалки показывать.
         // Применяется в MainActivity.onStart (applyReaderUi) при возврате в книгу.
+        // msg5707: раздел остался ровно про «что видно». Ушли отсюда четыре
+        // галочки кнопок-стрелок (к самим кнопкам, в «Кнопки и жесты») и
+        // автопрокрутка (к прокрутке, в «Чтение»).
         readerUi.forEach { (res, key) -> addCheck(res, key, true) }
-        // msg5220: четыре кнопки читалки — по одной строке каждая; строка
-        // называется действием кнопки (оно меняется долгим нажатием в читалке),
-        // поэтому текст обновляем в refreshRows, а не берём из ресурса.
-        readerButtonRows.clear()
-        for (b in MainActivity.READER_BUTTONS) {
-            readerButtonRows.add(b to addCheckText(readerButtonTitle(b), b.uiKey, true))
-        }
-        // Автопрокрутка текста (#318) — переехала из «Управления» (msg721): тоже
-        // про поведение экрана чтения, не про звук или запуск.
-        addCheck(R.string.scroll_title, MainActivity.KEY_SCROLL, true)
     }
 
     /** Диалог выбора числа для прыжка (msg5234): готовый ряд чисел, а не ввод с
@@ -688,19 +685,25 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
-    /** Восемь строк действий кнопок читалки (msg5266): на каждую кнопку — строка
-     *  короткого нажатия и строка долгого. Подпись строки постоянная и называет
-     *  место кнопки на экране; значение — выбранное действие. Идём по порядку
-     *  [MainActivity.READER_BUTTONS] (верхние главы, нижние предложения), поэтому
-     *  строки стоят парами и читаются как список кнопок. */
-    private fun addReaderActionRows() {
+    /** Четыре кнопки читалки по три строки (msg5266/msg5707): видна ли кнопка,
+     *  что делает по короткому нажатию, что по долгому. Подписи постоянные и
+     *  называют место кнопки на экране («нижняя левая: долгое нажатие»); значение
+     *  — выбранное действие. Идём по порядку [MainActivity.READER_BUTTONS]
+     *  (верхние главы, нижние предложения), поэтому тройки идут подряд и
+     *  читаются как список кнопок. */
+    private fun addReaderButtonRows() {
         // Раздел перестраивается на каждый вход (и на возврате из подраздела) —
         // список строк надо очистить, иначе старые кнопки остаются в нём навсегда
-        // и refreshRows() пишет текст в мёртвые вьюхи. Та же грабля, что у
-        // readerButtonRows в buildReaderGroup.
+        // и refreshRows() пишет текст в мёртвые вьюхи.
         buttonActionRows.clear()
         for (b in MainActivity.READER_BUTTONS) {
             val pos = getString(b.posRes)
+            // msg5707: галочка «видна» встала к своей же кнопке — тремя строками
+            // подряд: показывает ли кнопку экран, что она делает по касанию, что
+            // по удержанию. Раньше «видна» жила в «Экране книги», а действие здесь,
+            // и связать их на слух было нечем. Место в названии галочки, а не
+            // действие: действие и так в двух строках ниже.
+            addCheckText(getString(R.string.btn_visible_title, pos), b.uiKey, true)
             buttonActionRows.add(
                 addActionRow(
                     b.key, b.def,
@@ -942,9 +945,10 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg5266: у каждой из четырёх кнопок читалки два действия — короткое и
         // долгое нажатие; оба выбираются здесь из той же палитры, что у свайпов.
         // Список по долгому нажатию на самой кнопке убран.
+        // msg5707: сюда же переехала галочка «видна» — три строки на кнопку.
         addHeading(getString(R.string.controls_section_buttons))
         addHint(getString(R.string.reader_actions_hint))
-        addReaderActionRows()
+        addReaderButtonRows()
         // msg2527: кнопки гарнитуры жили отдельным подразделом — теперь стоят
         // строками здесь, третьего уровня в настройках не осталось.
         addHeading(getString(R.string.controls_section_headset))
@@ -1164,13 +1168,6 @@ class SettingsActivity(private val act: SectionActivity) {
         return cb
     }
 
-    /** Подпись строки конструктора: «Кнопка „<действие кнопки>“» — та же формула,
-     *  по которой кнопка зовёт себя в читалке (msg5220). */
-    private fun readerButtonTitle(b: MainActivity.ReaderButton): String = getString(
-        R.string.ui_reader_button,
-        MainActivity.readerButtonName(act, prefs, b),
-    )
-
     /** [onChange] — для галочек, которые надо не только запомнить, но и применить
      *  сразу: тихий поток живёт в движке, а не в prefs (msg5067). Параметр
      *  последний, поэтому трейлинг-лямбда попадает в него, а не в [def]. */
@@ -1285,10 +1282,6 @@ class SettingsActivity(private val act: SectionActivity) {
         val exitLibrary = prefs.getString(MainActivity.KEY_EXIT, MainActivity.EXIT_LIBRARY) == MainActivity.EXIT_LIBRARY
         exitRow?.text = getString(R.string.exit_title) + ": " +
             if (exitLibrary) getString(R.string.exit_library) else getString(R.string.exit_desktop)
-
-        // msg5220: строки «шагают по» убраны, но подписи четырёх строк
-        // конструктора читалки следуют действию кнопки — обновляем их здесь.
-        for ((b, row) in readerButtonRows) row.text = readerButtonTitle(b)
 
         playLongRow?.text = getString(R.string.play_long_title) + ": " + getString(
             if (prefs.getString(MainActivity.KEY_PLAY_LONG, MainActivity.PLAY_LONG_SLEEP) == MainActivity.PLAY_LONG_OFF)
