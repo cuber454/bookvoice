@@ -1560,7 +1560,7 @@ class LibraryActivity(private val act: SectionActivity) {
         fun makeRow(text: String, muted: Boolean = false): TextView = TextView(act).apply {
             this.text = text
             textSize = 16f
-            setTextColor(if (muted) 0xFF9AA0A6.toInt() else 0xFFE8EAED.toInt())
+            setTextColor(if (muted) Palette.DIM else Palette.INK)
             setLineSpacing(0f, 1.15f)
             isFocusable = true
             setPadding(0, dp(8), 0, dp(4))
@@ -1570,7 +1570,7 @@ class LibraryActivity(private val act: SectionActivity) {
             text = getString(R.string.book_info_annotation_title)
             textSize = 18f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(0xFF8AB4F8.toInt())
+            setTextColor(Palette.ACCENT)
             isFocusable = true
             setPadding(0, dp(14), 0, dp(4))
         }

@@ -1,5 +1,36 @@
 <resources>
+    <!-- Обычная тема. Значения цветов — имена из colors.xml, чтобы контрастная
+         тема ниже отличалась от неё ровно значениями, а не набором атрибутов. -->
     <style name="Theme.BookVoice" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="android:windowBackground">#101418</item>
+        <item name="android:windowBackground">@color/bv_bg</item>
+        <item name="bvBg">@color/bv_bg</item>
+        <item name="bvPanel">@color/bv_panel</item>
+        <item name="bvInk">@color/bv_ink</item>
+        <item name="bvDim">@color/bv_dim</item>
+        <item name="bvAccent">@color/bv_accent</item>
+        <item name="bvTrack">@color/bv_track</item>
+        <item name="bvDanger">@color/bv_danger</item>
+        <item name="bvSelCurrent">@color/bv_sel_current</item>
+        <item name="bvSelAnchor">@color/bv_sel_anchor</item>
+        <item name="bvSelRange">@color/bv_sel_range</item>
+    </style>
+
+    <!-- Высокая контрастность (msg5730): та же тема, другие значения. От
+         Theme.BookVoice наследуется по имени (точка в имени стиля), поэтому
+         перечислены только цвета — новый атрибут достаточно добавить выше,
+         сюда он приедет сам. Окно выбирает её до создания разметки, см.
+         Palette.applyTo. -->
+    <style name="Theme.BookVoice.Contrast">
+        <item name="android:windowBackground">@color/bv_bg_hc</item>
+        <item name="bvBg">@color/bv_bg_hc</item>
+        <item name="bvPanel">@color/bv_panel_hc</item>
+        <item name="bvInk">@color/bv_ink_hc</item>
+        <item name="bvDim">@color/bv_dim_hc</item>
+        <item name="bvAccent">@color/bv_accent_hc</item>
+        <item name="bvTrack">@color/bv_track_hc</item>
+        <item name="bvDanger">@color/bv_danger_hc</item>
+        <item name="bvSelCurrent">@color/bv_sel_current_hc</item>
+        <item name="bvSelAnchor">@color/bv_sel_anchor_hc</item>
+        <item name="bvSelRange">@color/bv_sel_range_hc</item>
     </style>
 </resources>

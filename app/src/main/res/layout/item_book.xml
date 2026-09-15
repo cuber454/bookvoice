@@ -13,5 +13,5 @@
     android:paddingTop="13dp"
     android:paddingEnd="8dp"
     android:paddingBottom="13dp"
-    android:textColor="#E8EAED"
+    android:textColor="?attr/bvInk"
     android:textSize="18sp" />

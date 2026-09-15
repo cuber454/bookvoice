@@ -92,6 +92,9 @@ abstract class SectionActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // msg5730: тема окна (обычная или контрастная) выбирается до создания
+        // разметки — и разметка, и построенные кодом строки берут цвета у неё.
+        Palette.applyTo(this)
         super.onCreate(savedInstanceState)
         container = FrameLayout(this)
         setContentView(container)

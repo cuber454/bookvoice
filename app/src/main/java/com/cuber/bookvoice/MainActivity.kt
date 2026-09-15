@@ -244,6 +244,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // msg5730: тема окна (обычная или контрастная) — до создания разметки.
+        Palette.applyTo(this)
         super.onCreate(savedInstanceState)
         Diag.header(this)
         // Живой инстанс ридера: экран настроек достаёт через него плеер,
@@ -2208,7 +2210,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     // именно закладку уберёт действие, иначе в списке их не различить.
                     contentDescription = getString(R.string.bm_remove_cd, bm.label)
                     textSize = 16f
-                    setTextColor(0xFFEF9A9A.toInt())
+                    setTextColor(Palette.DANGER)
                     setPadding(dp2px(10f), dp2px(10f), dp2px(2f), dp2px(10f))
                     isClickable = true
                     isFocusable = true
@@ -2911,7 +2913,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val label = TextView(this).apply {
             text = getString(labelRes, rateLabel(startV))
             textSize = 17f
-            setTextColor(0xFFE8EAED.toInt())
+            setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp2px(2f))
         }
         container.addView(label)
@@ -2948,7 +2950,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val label = TextView(this).apply {
             text = getString(R.string.volume_value, startP)
             textSize = 17f
-            setTextColor(0xFFE8EAED.toInt())
+            setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp2px(2f))
         }
         container.addView(label)

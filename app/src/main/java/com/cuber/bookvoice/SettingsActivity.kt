@@ -585,7 +585,7 @@ class SettingsActivity(private val act: SectionActivity) {
         val label = TextView(act).apply {
             text = getString(labelRes, rateLabel(startV))
             textSize = 17f
-            setTextColor(0xFFE8EAED.toInt())
+            setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp(2))
         }
         content().addView(label)
@@ -623,7 +623,7 @@ class SettingsActivity(private val act: SectionActivity) {
         val label = TextView(act).apply {
             text = getString(R.string.volume_value, startP)
             textSize = 17f
-            setTextColor(0xFFE8EAED.toInt())
+            setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp(2))
         }
         content().addView(label)
@@ -660,6 +660,14 @@ class SettingsActivity(private val act: SectionActivity) {
         // не только на читалку. Ставим его выше галочек, чтобы до самой нужной
         // слабовидящему настройки было меньше ходов.
         addTextScaleRow()
+
+        // msg5730: высокая контрастность — тоже про то, КАК экран выглядит. Тема
+        // выбирается при создании окна, поэтому галочка сразу пересоздаёт окно
+        // (как и размер текста), а раздел возвращается по имени.
+        addCheck(R.string.contrast_title, Palette.KEY, false) {
+            Diag.log(act, "ui", "высокая контрастность: $it — окно пересоздаётся")
+            act.recreate()
+        }
 
         // Подсказка: эти флажки убирают/возвращают элементы экрана чтения.
         addHint(getString(R.string.reader_group_hint))
@@ -1196,7 +1204,7 @@ class SettingsActivity(private val act: SectionActivity) {
         content().addView(TextView(act).apply {
             this.text = text
             textSize = 15f
-            setTextColor(0xFF9AA0A6.toInt())
+            setTextColor(Palette.DIM)
             setLineSpacing(0f, 1.1f)
             setPadding(0, dp(2), 0, dp(10))
         })
@@ -1212,7 +1220,7 @@ class SettingsActivity(private val act: SectionActivity) {
             this.text = text
             textSize = 17f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(0xFFE8EAED.toInt())
+            setTextColor(Palette.INK)
             setPadding(0, dp(12), 0, dp(4))
         })
     }
@@ -1309,7 +1317,7 @@ class SettingsActivity(private val act: SectionActivity) {
                 val hintStart = length
                 append(hint)
                 setSpan(RelativeSizeSpan(0.76f), hintStart, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                setSpan(ForegroundColorSpan(0xFF9AA0A6.toInt()), hintStart, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(ForegroundColorSpan(Palette.DIM), hintStart, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             textSize = 17f
             gravity = Gravity.START or Gravity.CENTER_VERTICAL

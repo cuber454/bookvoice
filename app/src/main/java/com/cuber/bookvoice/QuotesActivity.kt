@@ -65,6 +65,8 @@ class QuotesActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // msg5730: тема окна (обычная или контрастная) — до создания разметки.
+        Palette.applyTo(this)
         super.onCreate(savedInstanceState)
         // msg1763: имя окна = «Цитаты» (window title), а не label приложения — при
         // появлении окно объявляет свой window title (тот же фикс, что окнам 0.3.81).
@@ -138,7 +140,7 @@ class QuotesActivity : AppCompatActivity() {
             content.addView(TextView(this).apply {
                 text = getString(R.string.quotes_empty)
                 textSize = 16f
-                setTextColor(0xFF9AA0A6.toInt())
+                setTextColor(Palette.DIM)
                 setLineSpacing(0f, 1.2f)
                 isFocusable = true
                 setPadding(0, dp(16), 0, dp(4))
@@ -164,7 +166,7 @@ class QuotesActivity : AppCompatActivity() {
             content.addView(TextView(this).apply {
                 text = getString(R.string.quotes_read_hint)
                 textSize = 14f
-                setTextColor(0xFF9AA0A6.toInt())
+                setTextColor(Palette.DIM)
                 isFocusable = true
                 setPadding(0, dp(8), 0, dp(2))
             })
@@ -183,7 +185,7 @@ class QuotesActivity : AppCompatActivity() {
         text = label
         textSize = 15f
         setTypeface(typeface, android.graphics.Typeface.BOLD)
-        setTextColor(0xFF8AB4F8.toInt())
+        setTextColor(Palette.ACCENT)
         isFocusable = true
         isClickable = true
         background = selectableItemBackground()
@@ -199,7 +201,7 @@ class QuotesActivity : AppCompatActivity() {
         val tv = TextView(this).apply {
             text = "$book — «$preview»"
             textSize = 16f
-            setTextColor(0xFFE8EAED.toInt())
+            setTextColor(Palette.INK)
             setLineSpacing(0f, 1.15f)
             isFocusable = true
             isClickable = true
@@ -310,7 +312,7 @@ class QuotesActivity : AppCompatActivity() {
         content.addView(TextView(this).apply {
             text = if (author != null) "$book — $author" else book
             textSize = 15f
-            setTextColor(0xFF9AA0A6.toInt())
+            setTextColor(Palette.DIM)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             isFocusable = true
             setPadding(0, dp(8), 0, dp(10))
@@ -322,7 +324,7 @@ class QuotesActivity : AppCompatActivity() {
             content.addView(TextView(this).apply {
                 text = part
                 textSize = 18f
-                setTextColor(0xFFE8EAED.toInt())
+                setTextColor(Palette.INK)
                 setLineSpacing(0f, 1.25f)
                 isFocusable = true
                 setPadding(0, dp(3), 0, dp(7))
@@ -333,7 +335,7 @@ class QuotesActivity : AppCompatActivity() {
         content.addView(TextView(this).apply {
             text = getString(R.string.quotes_actions_hint)
             textSize = 13f
-            setTextColor(0xFF9AA0A6.toInt())
+            setTextColor(Palette.DIM)
             isFocusable = true
             setPadding(0, dp(16), 0, dp(4))
         })

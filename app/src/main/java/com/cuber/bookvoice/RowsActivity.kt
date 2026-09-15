@@ -38,7 +38,7 @@ abstract class RowsActivity : SectionActivity() {
         val tv = TextView(this).apply {
             this.text = text
             textSize = 15f
-            setTextColor(HINT_COLOR)
+            setTextColor(Palette.DIM)
             setLineSpacing(0f, 1.1f)
             setPadding(dp(4), dp(2), dp(4), dp(10))
         }
@@ -163,7 +163,7 @@ abstract class RowsActivity : SectionActivity() {
                 val start = length
                 append(hint)
                 setSpan(RelativeSizeSpan(0.76f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                setSpan(ForegroundColorSpan(HINT_COLOR), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(ForegroundColorSpan(Palette.DIM), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         }
 
@@ -174,8 +174,8 @@ abstract class RowsActivity : SectionActivity() {
          *  [KeepAwake] читают этот же файл. */
         private const val PREFS = "reader"
 
-        /** Цвет пояснения второй строкой — тот же, что у строк Настроек
-         *  (не `const`: литерал с `toInt()` константой не считается). */
-        private val HINT_COLOR = 0xFF9AA0A6.toInt()
+        // msg5730: цвет пояснения второй строкой — тот же, что у строк Настроек.
+        // Константы больше нет: он берётся у палитры на месте, иначе окно,
+        // открытое после смены контраста, осталось бы с прежним цветом.
     }
 }

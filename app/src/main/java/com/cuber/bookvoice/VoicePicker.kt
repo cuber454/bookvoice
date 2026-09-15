@@ -110,7 +110,7 @@ class VoicePicker(
         parent.addView(TextView(ctx).apply {
             text = ctx.getString(R.string.voice_remember_hint)
             textSize = 14f
-            setTextColor(0xFF9AA0A6.toInt())
+            setTextColor(Palette.DIM)
             setPadding(dp(4f), 0, dp(4f), dp(8f))
         })
         cb.setOnCheckedChangeListener { _, checked -> host.rememberChanged(checked) }

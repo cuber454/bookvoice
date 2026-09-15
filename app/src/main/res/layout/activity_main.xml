@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#101418"
+    android:background="?attr/bvBg"
     android:orientation="vertical"
     android:padding="6dp">
 
@@ -44,7 +44,7 @@
                 android:paddingBottom="2dp"
                 android:text="@string/no_book"
                 android:textAppearance="?attr/textAppearanceTitleLarge"
-                android:textColor="#E8EAED" />
+                android:textColor="?attr/bvInk" />
 
             <TextView
                 android:id="@+id/tvHeaderAuthor"
@@ -58,7 +58,7 @@
                 android:paddingEnd="4dp"
                 android:paddingBottom="2dp"
                 android:textAppearance="?attr/textAppearanceLabelLarge"
-                android:textColor="#9AA0A6"
+                android:textColor="?attr/bvDim"
                 android:visibility="gone" />
         </LinearLayout>
 
@@ -153,8 +153,8 @@
                 android:importantForAutofill="no"
                 android:inputType="text"
                 android:maxLines="1"
-                android:textColor="#E8EAED"
-                android:textColorHint="#9AA0A6"
+                android:textColor="?attr/bvInk"
+                android:textColorHint="?attr/bvDim"
                 android:textSize="16sp" />
 
             <Button
@@ -184,7 +184,7 @@
             android:paddingTop="2dp"
             android:paddingBottom="2dp"
             android:textAppearance="?attr/textAppearanceLabelMedium"
-            android:textColor="#9AA0A6" />
+            android:textColor="?attr/bvDim" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -242,7 +242,7 @@
             android:id="@+id/voicePanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#1A232B"
+        android:background="?attr/bvPanel"
         android:orientation="vertical"
         android:paddingStart="4dp"
         android:paddingTop="4dp"
@@ -267,7 +267,7 @@
                 android:maxLines="1"
                 android:text="@string/voice_settings"
                 android:textAppearance="?attr/textAppearanceTitleMedium"
-                android:textColor="#E8EAED" />
+                android:textColor="?attr/bvInk" />
 
             <!-- msg5632: кнопки «Прослушать» в шапке панели больше нет —
                  «Читать/Пауза» стала первой строкой набора VoicePicker. -->
@@ -315,7 +315,7 @@
         android:paddingTop="2dp"
         android:paddingBottom="2dp"
         android:textAppearance="?attr/textAppearanceLabelMedium"
-        android:textColor="#9AA0A6" />
+        android:textColor="?attr/bvDim" />
 
     <!-- msg2431: зону перемотки сделали выше (мин. 48dp), чтобы палец при
          перемотке не соскальзывал на кнопки «Медленнее/Быстрее» под слайдером.
@@ -339,7 +339,7 @@
         android:paddingTop="2dp"
         android:paddingBottom="2dp"
         android:textAppearance="?attr/textAppearanceLabelMedium"
-        android:textColor="#9AA0A6" />
+        android:textColor="?attr/bvDim" />
 
     <!-- Ряд кнопок скорости (#58): прячется/возвращается конструктором экрана. -->
     <LinearLayout
@@ -366,7 +366,7 @@
             android:minWidth="90dp"
             android:text="@string/speed_default"
             android:textAppearance="?attr/textAppearanceLabelMedium"
-            android:textColor="#E8EAED" />
+            android:textColor="?attr/bvInk" />
 
         <Button
             android:id="@+id/btnSpeedUp"

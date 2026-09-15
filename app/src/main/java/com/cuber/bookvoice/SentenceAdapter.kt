@@ -173,9 +173,9 @@ class SentenceAdapter(
                 val isAnchor = position == anchor
                 holder.tv.setBackgroundColor(
                     when {
-                        isCurrent -> 0xFF33404C.toInt()
-                        isAnchor -> 0xFF4B3A66.toInt()
-                        inSel -> 0xFF37415C.toInt()
+                        isCurrent -> Palette.SEL_CURRENT
+                        isAnchor -> Palette.SEL_ANCHOR
+                        inSel -> Palette.SEL_RANGE
                         else -> android.graphics.Color.TRANSPARENT
                     }
                 )

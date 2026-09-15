@@ -2,7 +2,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#101418"
+    android:background="?attr/bvBg"
     android:orientation="vertical"
     android:padding="6dp">
 
@@ -35,7 +35,7 @@
             android:maxLines="1"
             android:text="@string/quotes_title"
             android:textAppearance="?attr/textAppearanceTitleLarge"
-            android:textColor="#E8EAED" />
+            android:textColor="?attr/bvInk" />
 
         <Button
             android:id="@+id/btnExport"

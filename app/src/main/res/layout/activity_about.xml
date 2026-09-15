@@ -7,7 +7,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#101418"
+    android:background="?attr/bvBg"
     android:orientation="vertical"
     android:padding="6dp">
 
@@ -41,7 +41,7 @@
             android:maxLines="1"
             android:text="@string/about_title"
             android:textAppearance="?attr/textAppearanceTitleLarge"
-            android:textColor="#E8EAED" />
+            android:textColor="?attr/bvInk" />
 
         <!-- msg4669: «⋮» как в остальных окнах — настроек программы отсюда не
              было, а справка открывается из «⋮» полки. -->

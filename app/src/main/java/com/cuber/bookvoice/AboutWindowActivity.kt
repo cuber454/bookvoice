@@ -143,7 +143,7 @@ class AboutWindowActivity : SectionActivity() {
         }.getOrElse { "?" }
         val tv = TextView(this)
         tv.text = getString(R.string.about_version, version)
-        tv.setTextColor(0xFF9AA0A6.toInt())
+        tv.setTextColor(Palette.DIM)
         tv.textSize = 14f
         tv.setPadding(4.dp(), 16.dp(), 4.dp(), 4.dp())
         // Не цель навигации свайпами, но озвучивается тапом (importantForAccessibility

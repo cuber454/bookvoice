@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#101418"
+    android:background="?attr/bvBg"
     android:orientation="vertical"
     android:padding="6dp">
 
@@ -40,7 +40,7 @@
             android:maxLines="1"
             android:text="@string/catalog_title"
             android:textAppearance="?attr/textAppearanceTitleLarge"
-            android:textColor="#E8EAED" />
+            android:textColor="?attr/bvInk" />
 
         <Button
             android:id="@+id/btnSearch"
@@ -87,8 +87,8 @@
             android:importantForAutofill="no"
             android:inputType="text"
             android:maxLines="1"
-            android:textColor="#E8EAED"
-            android:textColorHint="#9AA0A6"
+            android:textColor="?attr/bvInk"
+            android:textColorHint="?attr/bvDim"
             android:textSize="16sp" />
 
         <Button

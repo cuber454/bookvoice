@@ -18,8 +18,9 @@ import androidx.core.view.ViewCompat
  */
 object TabNav {
 
-    private val ACCENT = 0xFF8AB4F8.toInt()
-    private val INK = 0xFFE8EAED.toInt()
+    // msg5730: цвета берём у палитры на каждом обращении, а не один раз при
+    // инициализации объекта — иначе окно, открытое после смены контраста,
+    // осталось бы с прежними.
     private val CLEAR = 0x00000000.toInt()
 
     /** Озвучка роли «вкладка»: «Название, вкладка[, выбрана]». Для вкладок-
@@ -31,9 +32,9 @@ object TabNav {
      *  Активная — акцентным цветом и жирным, с полоской снизу. Для вкладок-
      *  фильтров библиотеки. */
     fun styleTab(label: TextView, ind: View?, selected: Boolean) {
-        label.setTextColor(if (selected) ACCENT else INK)
+        label.setTextColor(if (selected) Palette.ACCENT else Palette.INK)
         label.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
-        ind?.setBackgroundColor(if (selected) ACCENT else CLEAR)
+        ind?.setBackgroundColor(if (selected) Palette.ACCENT else CLEAR)
     }
 
     /** Первый видимый кликабельный потомок [root] в порядке обхода сверху вниз

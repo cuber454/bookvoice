@@ -3,4 +3,35 @@
     <!-- msg2819: фон адаптивной иконки приложения — тёмно-синий, совпадает с
          синим квадратом мастер-арта (вариант 2 «книга с наушниками»). -->
     <color name="ic_launcher_background">#1A2A46</color>
+
+    <!-- Палитра интерфейса (msg5730). Значения — те же литералы, что были
+         зашиты в разметке и коде; имена собраны, чтобы у контрастной темы был
+         один список того, что она переопределяет, а у обычной — одна точка
+         правки цвета. -->
+    <color name="bv_bg">#101418</color>
+    <color name="bv_panel">#1A232B</color>
+    <color name="bv_ink">#E8EAED</color>
+    <color name="bv_dim">#9AA0A6</color>
+    <color name="bv_accent">#8AB4F8</color>
+    <color name="bv_track">#3C4043</color>
+    <color name="bv_danger">#EF9A9A</color>
+    <color name="bv_sel_current">#33404C</color>
+    <color name="bv_sel_anchor">#4B3A66</color>
+    <color name="bv_sel_range">#37415C</color>
+
+    <!-- Высокая контрастность (msg5730): чёрный фон, белый текст. Приглушённый
+         цвет здесь СВЕТЛЕЕ основного цвета обычной темы — в этом и смысл: серая
+         подсказка #9AA0A6 на тёмном фоне читается хуже всего, и слабовидящий
+         спотыкается именно на ней. Акцент и подсветки тоже подняты по яркости,
+         чтобы выделение было видно, а не угадывалось. -->
+    <color name="bv_bg_hc">#000000</color>
+    <color name="bv_panel_hc">#1F1F1F</color>
+    <color name="bv_ink_hc">#FFFFFF</color>
+    <color name="bv_dim_hc">#E8E8E8</color>
+    <color name="bv_accent_hc">#AECBFA</color>
+    <color name="bv_track_hc">#8A8A8A</color>
+    <color name="bv_danger_hc">#FF8A80</color>
+    <color name="bv_sel_current_hc">#3E5262</color>
+    <color name="bv_sel_anchor_hc">#5E4A80</color>
+    <color name="bv_sel_range_hc">#44506E</color>
 </resources>

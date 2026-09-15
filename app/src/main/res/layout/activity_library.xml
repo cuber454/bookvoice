@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#101418"
+    android:background="?attr/bvBg"
     android:orientation="vertical"
     android:padding="6dp">
 
@@ -35,7 +35,7 @@
             android:maxLines="1"
             android:text="@string/go_library"
             android:textAppearance="?attr/textAppearanceTitleLarge"
-            android:textColor="#E8EAED" />
+            android:textColor="?attr/bvInk" />
 
         <Button
             android:id="@+id/btnMore"
@@ -63,7 +63,7 @@
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
-        android:background="#3C4043" />
+        android:background="?attr/bvTrack" />
 
     <TextView
         android:id="@+id/tvEmpty"
@@ -72,7 +72,7 @@
         android:gravity="center"
         android:padding="28dp"
         android:text="@string/books_empty"
-        android:textColor="#9AA0A6"
+        android:textColor="?attr/bvDim"
         android:textSize="18sp"
         android:visibility="gone" />
 

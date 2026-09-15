@@ -1212,7 +1212,7 @@ class CatalogActivity(private val act: SectionActivity) {
             text = label
             contentDescription = cd
             textSize = 17f
-            setTextColor(0xFFE8EAED.toInt())
+            setTextColor(Palette.INK)
             setPadding(dp(12), dp(11), dp(12), dp(11))
             setBackgroundResource(R.drawable.list_row_divider)
             isFocusable = true
@@ -1497,7 +1497,7 @@ class CatalogActivity(private val act: SectionActivity) {
         content().addView(TextView(act).apply {
             this.text = text
             textSize = 16f
-            setTextColor(0xFFE8EAED.toInt())
+            setTextColor(Palette.INK)
             setLineSpacing(0f, 1.15f)
             isFocusable = true
             setPadding(dp(4), dp(4), dp(4), dp(10))
@@ -1518,7 +1518,7 @@ class CatalogActivity(private val act: SectionActivity) {
                 content().addView(TextView(act).apply {
                     text = spanned
                     textSize = 16f
-                    setTextColor(0xFFE8EAED.toInt())
+                    setTextColor(Palette.INK)
                     setLineSpacing(0f, 1.2f)
                     movementMethod = LinkMovementMethod.getInstance()
                     isFocusable = true
@@ -1796,7 +1796,7 @@ class CatalogActivity(private val act: SectionActivity) {
             this.text = text
             textSize = 19f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(0xFF8AB4F8.toInt())
+            setTextColor(Palette.ACCENT)
             setPadding(dp(4), dp(16), dp(4), dp(4))
         })
     }
@@ -1805,7 +1805,7 @@ class CatalogActivity(private val act: SectionActivity) {
         content().addView(TextView(act).apply {
             this.text = text
             textSize = 15f
-            setTextColor(0xFF9AA0A6.toInt())
+            setTextColor(Palette.DIM)
             setPadding(dp(4), dp(2), dp(4), dp(10))
         })
     }
@@ -1813,7 +1813,7 @@ class CatalogActivity(private val act: SectionActivity) {
     private fun addHintRow(text: String): TextView = TextView(act).apply {
         this.text = text
         textSize = 15f
-        setTextColor(0xFF9AA0A6.toInt())
+        setTextColor(Palette.DIM)
         setPadding(dp(4), dp(10), dp(4), dp(10))
     }.also { content().addView(it, lp()) }
 
