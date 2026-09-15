@@ -207,7 +207,15 @@ class MediaSessionService : Service() {
      *  (msg4629). Ведёт в окно читалки к той же книге: движок узнаёт её по uri и
      *  переподключает окно к живому состоянию ([MainActivity] → rejoinLiveReading).
      *  Нужно именно потому, что карточка теперь висит и без окна — иначе из
-     *  шторки в книгу было бы не вернуться. */
+     *  шторки в книгу было бы не вернуться.
+     *
+     *  FLAG_UPDATE_CURRENT обязателен (msg5867): система узнаёт PendingIntent по
+     *  (код запроса, компонент), а extras в опознание НЕ входят. Без флага
+     *  возвращался тот же самый объект, собранный когда-то с ПЕРВОЙ книгой, и
+     *  подмены «книга в extra» не происходило: касание карточки в шторке вело
+     *  в старую книгу. В diag.log Сергея (02:14:45) оно бросило живую «Томас
+     *  Тредд. Мёртвый ход» и полезло открывать давно забытый файл из /Books,
+     *  которого уже нет, — «формат не поддерживается или файл повреждён». */
     private fun bookOpenIntent(): PendingIntent =
         PendingIntent.getActivity(
             this,
@@ -219,7 +227,7 @@ class MediaSessionService : Service() {
                         Intent.FLAG_ACTIVITY_SINGLE_TOP or
                         Intent.FLAG_ACTIVITY_CLEAR_TOP
                 ),
-            PendingIntent.FLAG_IMMUTABLE,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
     /** Активность сессии: система использует её для «вернуться к плееру» (в т.ч.
