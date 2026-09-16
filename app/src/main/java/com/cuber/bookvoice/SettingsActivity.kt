@@ -119,6 +119,9 @@ class SettingsActivity(private val act: SectionActivity) {
     // #85 (msg5919): строка-переключатель «Останавливать чтение» — выключено /
     // при включении экрана / при разблокировке (раздел «Чтение» → «Прерывания»).
     private var pauseOnScreenRow: Button? = null
+    // msg5931: строка «Системные кнопки» в разделе «Экран книги» — показывать /
+    // скрывать во время чтения / скрывать, пока открыта книга.
+    private var readerBarsRow: Button? = null
     // Строки-кнопки вкладок Библиотеки (#97): id режима → кнопка «<Имя>: показана/скрыта».
     private val tabRowButtons = ArrayList<Pair<Int, Button>>()
     private var resetTabsRow: Button? = null
@@ -706,6 +709,11 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg5730: «простой экран» — те же галочки, но разом. Ставим их после
         // списка: строки действуют на него, и так это слышно по порядку.
         addReaderPresetRows()
+
+        // msg5923/5931: системные кнопки («назад/домой/недавние») — тоже про то,
+        // что видно на экране книги. Строка последняя в разделе: на список выше
+        // она не действует, а после «простого экрана» читается как отдельная тема.
+        readerBarsRow = addValueButton { cycleReaderBars() }
     }
 
     /** Строки «простой экран» (msg5730): разом оставить на экране книги самое
@@ -1475,6 +1483,7 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg5604: «Пауза между фразами: <значение>».
         pauseKeepRow?.text = getString(R.string.pause_keep_title) + ": " + pauseKeepLabel()
         pauseOnScreenRow?.text = getString(R.string.pause_on_screen_title) + ": " + pauseOnScreenLabel()
+        readerBarsRow?.text = getString(R.string.reader_bars_title) + ": " + readerBarsLabel()
 
         val hiddenTabs = LibraryActivity.tabsHidden(prefs)
         for ((mode, b) in tabRowButtons) {
@@ -1663,6 +1672,56 @@ class SettingsActivity(private val act: SectionActivity) {
         val text = getString(R.string.pause_on_screen_title) + ": " + pauseOnScreenLabel()
         row.text = text
         row.announceForAccessibility(text)
+    }
+
+    // ---------------- «Системные кнопки» (msg5931) ----------------
+    // Та же механика: касание переводит на следующее состояние по кругу, текст
+    // правится НА МЕСТЕ (msg5005). Дополнительно проговариваем подсказку о том,
+    // как панель вернуть: для скрытых состояний это не мелочь, а единственный
+    // способ узнать про смахивание от нижнего края, если человек его не знает.
+
+    /** Порядок перебора: показывать → во время чтения → пока открыта книга. */
+    private val readerBarsValues = intArrayOf(
+        MainActivity.BARS_SHOW,
+        MainActivity.BARS_HIDE_READING,
+        MainActivity.BARS_HIDE_BOOK,
+    )
+
+    private fun readerBarsMode(): Int = prefs.getInt(
+        MainActivity.KEY_READER_BARS, MainActivity.BARS_SHOW
+    ).takeIf { it in readerBarsValues } ?: MainActivity.BARS_SHOW
+
+    private fun readerBarsLabel(): String = getString(
+        when (readerBarsMode()) {
+            MainActivity.BARS_HIDE_READING -> R.string.reader_bars_reading
+            MainActivity.BARS_HIDE_BOOK -> R.string.reader_bars_book
+            else -> R.string.reader_bars_show
+        }
+    )
+
+    /** Подсказка о возврате панели — своя на каждое скрытое состояние (для
+     *  «показывать» её нет: возвращать нечего). */
+    private fun readerBarsHint(): String? = when (readerBarsMode()) {
+        MainActivity.BARS_HIDE_READING -> getString(R.string.reader_bars_hint_reading)
+        MainActivity.BARS_HIDE_BOOK -> getString(R.string.reader_bars_hint_book)
+        else -> null
+    }
+
+    private fun cycleReaderBars() {
+        val next = readerBarsValues[
+            (readerBarsValues.indexOf(readerBarsMode()) + 1) % readerBarsValues.size
+        ]
+        prefs.edit().putInt(MainActivity.KEY_READER_BARS, next).apply()
+        // Применяем сразу: выбрали на ходу — панель уходит или возвращается, не
+        // дожидаясь следующего старта чтения.
+        ReaderBars.sync()
+        Diag.log(act, "ui", "системные кнопки: ${readerBarsLabel()}")
+        val row = readerBarsRow ?: return
+        val text = getString(R.string.reader_bars_title) + ": " + readerBarsLabel()
+        row.text = text
+        row.announceForAccessibility(
+            listOfNotNull(text, readerBarsHint()).joinToString(". ")
+        )
     }
 
     /** Откат после звонка (виден только при «Продолжить чтение»). */

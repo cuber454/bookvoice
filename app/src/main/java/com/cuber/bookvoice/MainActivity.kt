@@ -542,7 +542,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // чтобы понять, успевает ли setTitle до объявления окна скринридером.
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) Diag.log(this, "a11y", "окно читалки в фокусе; window title = «${title}»")
+        if (hasFocus) {
+            Diag.log(this, "a11y", "окно читалки в фокусе; window title = «${title}»")
+            // msg5931: система вправе вернуть системные кнопки сама (уход в фон и
+            // возврат) — решение принимаем заново, а не помним с прошлого раза.
+            ReaderBars.reapply()
+        }
     }
 
     private fun restoreSession() {
@@ -809,6 +814,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 }
                 currentUri = uri.toString()
                 book = doc
+                // msg5931: книга открылась — в режиме «скрывать, пока открыта
+                // книга» системная полоса уходит вместе с ней.
+                ReaderBars.bookOpened()
                 if (prog != null) {
                     chapterStart = prog.first
                     cumWords = prog.second
@@ -1028,6 +1036,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // гасит сессию, отдаёт фокус и глушит авто-продолжение (см.
         // ReaderEngine.close): медиа-кнопки не должны остаться у нас, а чтение не
         // должно «ожить» без окна.
+        // msg5931: окно читалки уходит — «книга открыта» больше не верно (до
+        // сброса active: применять решение можно только к живому окну).
+        ReaderBars.bookClosed()
         if (active === this) active = null
         when {
             ReaderEngine.playing -> ReaderEngine.windowGoneWhilePlaying()
@@ -3474,6 +3485,23 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
         /** Останавливать, когда сняли замок (ACTION_USER_PRESENT). */
         internal const val PAUSE_SCREEN_UNLOCK = 2
+
+        // msg5923/5931: прятать системные кнопки («назад/домой/недавние») в окне
+        // книги. Три состояния, как у соседней строки: показывать (default) /
+        // скрывать во время чтения / скрывать, пока открыта книга. Default —
+        // «показывать»: скрытая панель возвращается только смахиванием от нижнего
+        // края, и человек, который этого не знает, вышел бы из книги только через
+        // «Выход» в шторке (см. ReaderBars).
+        internal const val KEY_READER_BARS = "reader_bars"
+
+        /** Панель на месте — по умолчанию. */
+        internal const val BARS_SHOW = 0
+
+        /** Панель уходит на время чтения и сама возвращается на паузе. */
+        internal const val BARS_HIDE_READING = 1
+
+        /** Панели нет всё время, пока открыта книга. */
+        internal const val BARS_HIDE_BOOK = 2
 
         // #98: что делать после настоящего звонка — «Остановиться» (как сейчас)
         // или «Продолжить чтение»; при продолжении — откат на N предложений.

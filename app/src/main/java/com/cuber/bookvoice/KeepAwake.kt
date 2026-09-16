@@ -60,6 +60,9 @@ object KeepAwake {
         // msg5895 (#85): сторож разблокировки встаёт ровно на время чтения —
         // тот же интервал, что и у блокировки (как тихий поток ниже).
         ScreenOnPause.start(c)
+        // msg5931: «идёт чтение» — тот же момент, что у блокировки; в этом
+        // состоянии прячутся системные кнопки (см. ReaderBars).
+        ReaderBars.readingStarted()
         lock?.let { if (it.isHeld) return }
         appCtx = c.applicationContext
         val pm = c.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
@@ -89,6 +92,9 @@ object KeepAwake {
         // #85: чтение встало — сторож разблокировки тоже (даже если блокировку
         // процессора уже отпустили раньше: чтение и есть его условие).
         appCtx?.let { ScreenOnPause.stop(it) }
+        // msg5931: чтение встало — системные кнопки возвращаются (режим
+        // «скрывать во время чтения» отпускает их именно здесь).
+        ReaderBars.readingStopped()
         val l = lock ?: return
         val c = appCtx ?: return
         runCatching {

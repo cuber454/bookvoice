@@ -27,6 +27,12 @@ fun ComponentActivity.edgeToEdge(root: View) {
     var baseTop = 0
     var baseRight = 0
     var baseBottom = 0
+    // msg5931: навигационная полоса может СКРЫВАТЬСЯ (настройка «Системные
+    // кнопки», см. ReaderBars), и тогда её инсет приходит нулём — разметка
+    // подтянулась бы вниз ровно на высоту полосы, на каждом «пауза/играть».
+    // Помним самую большую виденную полосу и держим отступ по ней: полоса
+    // уходит, а текст остаётся на месте.
+    var navBottom = 0
     ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
         if (first) {
             baseLeft = v.paddingLeft
@@ -36,7 +42,8 @@ fun ComponentActivity.edgeToEdge(root: View) {
             first = false
         }
         val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-        v.setPadding(baseLeft, baseTop + bars.top, baseRight, baseBottom + bars.bottom)
+        navBottom = maxOf(navBottom, bars.bottom)
+        v.setPadding(baseLeft, baseTop + bars.top, baseRight, baseBottom + navBottom)
         WindowInsetsCompat.CONSUMED
     }
 }
