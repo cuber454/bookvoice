@@ -3457,6 +3457,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // большинство плееров, и это осознанное изменение.
         internal const val KEY_PAUSE_HEADSET = "pause_when_headphones_out"
 
+        // #85 (msg5895/5899): останавливать чтение, когда экран разблокировали
+        // (ACTION_USER_PRESENT). Одного включения экрана мало — вспышку от
+        // уведомления от нажатия кнопки питания не отличить (msg5911/5915).
+        // Default ВЫКЛ — поведение менялось бы у всех, кто уже привык к чтению
+        // под погашенным экраном.
+        internal const val KEY_PAUSE_ON_UNLOCK = "pause_when_unlocked"
+
         // #98: что делать после настоящего звонка — «Остановиться» (как сейчас)
         // или «Продолжить чтение»; при продолжении — откат на N предложений.
         internal const val KEY_AFTER_CALL = "after_call"

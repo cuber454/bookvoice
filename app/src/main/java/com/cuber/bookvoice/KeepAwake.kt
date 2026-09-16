@@ -57,6 +57,9 @@ object KeepAwake {
     /** Взять блокировку — зовётся на каждом старте чтения. Повторные вызовы
      *  безвредны: держим одну и ту же блокировку. */
     fun acquire(c: Context) {
+        // msg5895 (#85): сторож разблокировки встаёт ровно на время чтения —
+        // тот же интервал, что и у блокировки (как тихий поток ниже).
+        ScreenOnPause.start(c)
         lock?.let { if (it.isHeld) return }
         appCtx = c.applicationContext
         val pm = c.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
@@ -83,6 +86,9 @@ object KeepAwake {
 
     /** Отпустить — пауза, конец книги, закрытие читалки. */
     fun release() {
+        // #85: чтение встало — сторож разблокировки тоже (даже если блокировку
+        // процессора уже отпустили раньше: чтение и есть его условие).
+        appCtx?.let { ScreenOnPause.stop(it) }
         val l = lock ?: return
         val c = appCtx ?: return
         runCatching {
