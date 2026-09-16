@@ -85,6 +85,50 @@
     <string name="lib_filter_all">Все</string>
     <string name="lib_filter_empty">Книг в этой категории пока нет.</string>
 
+    <!-- msg5939/5943/5947: меню «⋮» → «Удалить всё из категории» — чистит
+         ОТКРЫТУЮ вкладку (что видно на полке, то и убираем). На «Избранном»
+         это снятие метки, а не удаление: книги остаются на полке. Галочка про
+         файлы каждый раз снята — состояние не запоминаем, на разрушающем
+         действии выбор делается заново. -->
+    <string name="cat_clear">Удалить всё из „%1$s“ (%2$d)</string>
+    <string name="cat_unfav">Убрать все книги из „%1$s“ (%2$d)</string>
+    <plurals name="cat_clear_title">
+        <item quantity="one">Удалить %1$d книгу из категории „%2$s“?</item>
+        <item quantity="few">Удалить %1$d книги из категории „%2$s“?</item>
+        <item quantity="many">Удалить %1$d книг из категории „%2$s“?</item>
+        <item quantity="other">Удалить %1$d книг из категории „%2$s“?</item>
+    </plurals>
+    <string name="cat_clear_msg">Книги уйдут с полки, файлы останутся на телефоне.</string>
+    <string name="cat_clear_files">Удалить и файлы — безвозвратно</string>
+    <string name="cat_clear_yes">Удалить</string>
+    <plurals name="cat_unfav_title">
+        <item quantity="one">Убрать %1$d книгу из избранного?</item>
+        <item quantity="few">Убрать %1$d книги из избранного?</item>
+        <item quantity="many">Убрать %1$d книг из избранного?</item>
+        <item quantity="other">Убрать %1$d книг из избранного?</item>
+    </plurals>
+    <string name="cat_unfav_msg">Книги останутся на полке — снимем только метку «Избранное».</string>
+    <string name="cat_unfav_yes">Убрать</string>
+    <plurals name="cat_cleared">
+        <item quantity="one">Удалена %1$d книга из категории „%2$s“</item>
+        <item quantity="few">Удалено %1$d книги из категории „%2$s“</item>
+        <item quantity="many">Удалено %1$d книг из категории „%2$s“</item>
+        <item quantity="other">Удалено %1$d книг из категории „%2$s“</item>
+    </plurals>
+    <plurals name="cat_cleared_files">
+        <item quantity="one">Удалена %1$d книга из категории „%2$s“ вместе с файлом</item>
+        <item quantity="few">Удалено %1$d книги из категории „%2$s“ вместе с файлами</item>
+        <item quantity="many">Удалено %1$d книг из категории „%2$s“ вместе с файлами</item>
+        <item quantity="other">Удалено %1$d книг из категории „%2$s“ вместе с файлами</item>
+    </plurals>
+    <plurals name="cat_unfav_done">
+        <item quantity="one">Из избранного убрана %1$d книга</item>
+        <item quantity="few">Из избранного убрано %1$d книги</item>
+        <item quantity="many">Из избранного убрано %1$d книг</item>
+        <item quantity="other">Из избранного убрано %1$d книг</item>
+    </plurals>
+    <string name="cat_cleared_empty">В категории „%1$s“ больше нет книг</string>
+
     <!-- Меню «Ещё» (⋮) в библиотеке (msg646/649): все действия полки вместо
          четырёх кнопок в шапке. Открыть файл — прежнее «Добавить». -->
     <string name="lib_more">Ещё</string>

@@ -56,6 +56,11 @@ class LibraryActivity(private val act: SectionActivity) {
     private fun getString(resId: Int, vararg formatArgs: Any): String =
         act.getString(resId, *formatArgs)
 
+    /** Склонение по числу книг (msg5947): «1 книга / 2 книги / 5 книг». Первый
+     *  аргумент подстановки — само число, дальше идут остальные (%2$s и т.д.). */
+    private fun plurals(resId: Int, count: Int, vararg formatArgs: Any): String =
+        act.resources.getQuantityString(resId, count, count, *formatArgs)
+
     private fun getDrawable(id: Int): Drawable? = act.getDrawable(id)
     private fun runOnUiThread(block: () -> Unit) = act.runOnUiThread(block)
     private fun startActivity(intent: Intent) = act.startActivity(intent)
@@ -885,32 +890,125 @@ class LibraryActivity(private val act: SectionActivity) {
     private fun showMoreMenu() {
         val tree = treeUri()
         val qCount = QuoteStore.all(act).size
-        val items = arrayOf(
-            getString(R.string.catalog_title),   // msg1676+: «Каталоги» окном поверх.
-            getString(R.string.lib_menu_open_file),
-            getString(if (tree == null) R.string.choose_folder else R.string.lib_menu_scan),
-            getString(R.string.lib_menu_sort),
-            getString(R.string.lib_menu_view),
-            getString(R.string.quotes_section, qCount),
-            // msg4693: «Настройки» — прямо перед «Выходом» (одно место во всех
-            // меню): в конце списка её и ищут, а не в шапке.
-            getString(R.string.settings_title),  // msg1676+: «Настройки» окном поверх.
-            getString(R.string.app_exit),  // msg1278: Выход из приложения — последним.
-        )
+        // msg5939/5947: меню одно на всю полку, поэтому пункт «Удалить всё из
+        // категории» берёт АКТИВНУЮ вкладку — отдельное меню на каждую вкладку
+        // не нужно, подпись и число книг подставляются при каждом открытии.
+        // Пункта нет на «Все» (это вся полка — чистим по одной) и на пустой
+        // вкладке: удалять нечего.
+        val clearCount = if (filterMode == FILTER_ALL) 0 else shownRecords.size
+        val labels = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+        fun item(label: String, action: () -> Unit) {
+            labels.add(label)
+            actions.add(action)
+        }
+
+        // msg1676+: «Каталоги», «Настройки» — окнами поверх.
+        item(getString(R.string.catalog_title)) {
+            startActivity(Intent(act, CatalogWindowActivity::class.java))
+        }
+        item(getString(R.string.lib_menu_open_file)) {
+            act.openDocPicker(arrayOf("*/*")) { uri -> if (uri != null) onBookPicked(uri) }
+        }
+        item(getString(if (tree == null) R.string.choose_folder else R.string.lib_menu_scan)) {
+            onFolderButton()
+        }
+        item(getString(R.string.lib_menu_sort)) { showGlobalSortDialog() }
+        item(getString(R.string.lib_menu_view)) { showViewDialog() }
+        item(getString(R.string.quotes_section, qCount)) {
+            startActivity(Intent(act, QuotesActivity::class.java))
+        }
+        if (clearCount > 0) {
+            val label = getString(LibraryActivity.tabLabelRes(filterMode))
+            // На «Избранном» удалять нечего — там метка: пункт снимает её, книги
+            // остаются на полке и файлы целы.
+            item(getString(
+                if (filterMode == FILTER_FAV) R.string.cat_unfav else R.string.cat_clear,
+                label, clearCount
+            )) { confirmClearCategory() }
+        }
+        // msg4693: «Настройки» — прямо перед «Выходом» (одно место во всех
+        // меню): в конце списка её и ищут, а не в шапке. msg5939: «Удаление из
+        // категории» — строкой выше: место редких разрушающих действий внизу,
+        // рядом с «Выходом».
+        item(getString(R.string.settings_title)) {
+            startActivity(Intent(act, SettingsWindowActivity::class.java))
+        }
+        item(getString(R.string.app_exit)) { exitApp() }  // msg1278: последним.
+
         MaterialAlertDialogBuilder(act)
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> startActivity(Intent(act, CatalogWindowActivity::class.java))
-                    1 -> act.openDocPicker(arrayOf("*/*")) { uri -> if (uri != null) onBookPicked(uri) }
-                    2 -> onFolderButton()
-                    3 -> showGlobalSortDialog()
-                    4 -> showViewDialog()
-                    5 -> startActivity(Intent(act, QuotesActivity::class.java))
-                    6 -> startActivity(Intent(act, SettingsWindowActivity::class.java))
-                    7 -> exitApp()
-                }
-            }
+            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
             .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».
+    }
+
+    /** msg5939/5947: подтверждение очистки категории. Галочка «удалить и файлы»
+     *  — пунктом списка с флажком (setMultiChoiceItems), а не голым квадратиком
+     *  в вёрстке: скринридер проговаривает «отмечено/не отмечено», и сам выбор
+     *  слышен. Состояние НЕ запоминаем: каждый раз снята, иначе привычное
+     *  «Удалить» однажды снесёт файлы по инерции от прошлого раза. */
+    private fun confirmClearCategory() {
+        val recs = shownRecords.toList()
+        if (recs.isEmpty()) return
+        val label = getString(LibraryActivity.tabLabelRes(filterMode))
+        if (filterMode == FILTER_FAV) {
+            MaterialAlertDialogBuilder(act)
+                .setTitle(plurals(R.plurals.cat_unfav_title, recs.size))
+                .setMessage(R.string.cat_unfav_msg)
+                .setPositiveButton(R.string.cat_unfav_yes) { _, _ -> unfavoriteAll(recs) }
+                .setNegativeButton(getString(R.string.dialog_cancel), null)
+                .show()
+            return
+        }
+        val files = booleanArrayOf(false)
+        MaterialAlertDialogBuilder(act)
+            .setTitle(plurals(R.plurals.cat_clear_title, recs.size, label))
+            .setMessage(R.string.cat_clear_msg)
+            .setMultiChoiceItems(arrayOf(getString(R.string.cat_clear_files)), files) { _, which, on ->
+                files[which] = on
+            }
+            .setPositiveButton(R.string.cat_clear_yes) { _, _ -> clearCategory(recs, files[0]) }
+            .setNegativeButton(getString(R.string.dialog_cancel), null)
+            .show()
+    }
+
+    /** Очистка открытой вкладки (msg5947): убираем ровно то, что видно на полке
+     *  — список берём тот же, что отдан адаптеру ([shownRecords]). Файлы трогаем
+     *  только по галочке; без неё книгу всё равно прячем от скана, иначе
+     *  автоскан вернёт её на полку следующей же строкой. */
+    private fun clearCategory(recs: List<BookRecord>, withFiles: Boolean) {
+        recs.forEach { removeBook(it, withFiles) }
+        val label = getString(LibraryActivity.tabLabelRes(filterMode))
+        Diag.log(
+            act, "lib",
+            "очищена категория $label: ${recs.size} книг, файлы ${if (withFiles) "стёрты" else "оставлены"}"
+        )
+        afterCategoryCleared(plurals(
+            if (withFiles) R.plurals.cat_cleared_files else R.plurals.cat_cleared,
+            recs.size, label
+        ))
+    }
+
+    /** «Избранное»: снять метку у всех книг вкладки. Книги и файлы на месте. */
+    private fun unfavoriteAll(recs: List<BookRecord>) {
+        recs.forEach { BookStore.upsert(act, it.copy(favorite = false)) }
+        Diag.log(act, "lib", "снята метка «Избранное»: ${recs.size} книг")
+        afterCategoryCleared(plurals(R.plurals.cat_unfav_done, recs.size))
+    }
+
+    /** Итог очистки категории [msg]: тост (как у одиночного удаления) плюс
+     *  announce на шапке — тост скринридеры озвучивают не всегда, а после
+     *  удаления пачки молчание читается как «не сработало». Вкладка опустела —
+     *  договариваем это и уводим фокус на строку-подсказку: в пустом списке
+     *  фокусировать больше нечего. */
+    private fun afterCategoryCleared(msg: String) {
+        val label = getString(LibraryActivity.tabLabelRes(filterMode))
+        refresh()
+        toast(msg)
+        Vibra.confirm(act)
+        val empty = shownRecords.isEmpty()
+        val spoken = if (empty) msg + " " + getString(R.string.cat_cleared_empty, label) else msg
+        binding.tvTitle.announceForAccessibility(spoken)
+        if (empty) TabNav.a11yFocus(binding.tvEmpty) else TabNav.focusHeader(binding.tvTitle)
     }
 
     /** msg1278: «Выход из приложения» из библиотеки. Общий для вкладок выход —
@@ -1650,17 +1748,33 @@ class LibraryActivity(private val act: SectionActivity) {
      *  вышло (нет прав/чужой провайдер) — прячем его от скана, чтобы книга не
      *  вернулась следующей строкой. */
     private fun deleteBook(rec: BookRecord) {
+        val deleted = removeBook(rec, withFiles = true)
+        Diag.log(act, "lib", "удалена книга ${rec.name}: файл ${if (deleted) "стёрт" else "не стёрт — скрыт от скана"}")
+        toast(getString(R.string.book_deleted))
+        Vibra.confirm(act)
+        refresh()
+    }
+
+    /** Ядро удаления (msg1351, msg5947): стереть файл, если [withFiles], и убрать
+     *  запись с полки. Без тостов и озвучки — их зовёт вызывающий: одиночное
+     *  удаление говорит про одну книгу, очистка категории — про пачку одним
+     *  итогом. Возвращает «файл действительно стёрт».
+     *
+     *  [withFiles] = false — файл остаётся на диске, но книгу ВСЁ РАВНО прячем
+     *  от скана (и запись, и путь): иначе автоскан папки вернёт её на полку
+     *  следующей же строкой, и «очистка» окажется пустой. */
+    private fun removeBook(rec: BookRecord, withFiles: Boolean): Boolean {
         var deleted = false
         val uri = runCatching { Uri.parse(rec.uri) }.getOrNull()
         val tp = treeResolver()
-        if (uri != null && uri.scheme == "file") {
+        if (withFiles && uri != null && uri.scheme == "file") {
             deleted = try {
                 uri.path?.let { File(it).delete() } ?: false
             } catch (_: Exception) {
                 false
             }
         }
-        if (!deleted && uri != null && uri.scheme == "content") {
+        if (withFiles && !deleted && uri != null && uri.scheme == "content") {
             if (tp != null) {
                 val p = diskPathOf(rec.uri, tp)
                 if (p != null) {
@@ -1679,7 +1793,8 @@ class LibraryActivity(private val act: SectionActivity) {
         // Убираем саму запись и её близнеца-дубль (другой адрес того же файла),
         // чтобы после удаления файла не осталось записи-сироты.
         BookStore.remove(act, rec.uri)
-        // msg3081+: разобранный кэш книги больше не нужен — файл удалён.
+        // msg3081+: разобранный кэш книги больше не нужен — книги на полке нет
+        // (при withFiles = false файл остаётся, но запись тоже уходит).
         BookCache.remove(act, Uri.parse(rec.uri))
         if (path != null) {
             BookStore.all(act).forEach { r ->
@@ -1690,13 +1805,11 @@ class LibraryActivity(private val act: SectionActivity) {
             }
         }
         hideFromScan(rec.uri)
-        // Файл не стёрся (нет прав/чужой провайдер) — прячем от скана, чтобы
-        // книга не вернулась следующей строкой.
-        if (!deleted && path != null) hidePathFromScan(path)
-        Diag.log(act, "lib", "удалена книга ${rec.name}: файл ${if (deleted) "стёрт" else "не стёрт — скрыт от скана"}")
-        toast(getString(R.string.book_deleted))
-        Vibra.confirm(act)
-        refresh()
+        // Файл остался на диске — не стёрся (нет прав/чужой провайдер) или его
+        // и не трогали (withFiles = false): прячем и путь, чтобы автоскан не
+        // вернул книгу под другим адресом.
+        if ((!withFiles || !deleted) && path != null) hidePathFromScan(path)
+        return deleted
     }
 
     /** Проигравший дубль (msg1333/1336): файл-копию убираем с диска, а uri
