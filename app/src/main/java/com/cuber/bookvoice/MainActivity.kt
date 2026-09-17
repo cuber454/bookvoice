@@ -1981,7 +1981,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun onSearchLongPress() {
         if (book == null) return
-        startVoiceSearch()
+        // msg6179: как и в каталоге (msg6175) — сперва глушим диктора. Своё
+        // объявление кнопки («Поиск», жест долгого нажатия) он читает в тот же
+        // миг, и этот голос уходил в микрофон вместо слова владельца. Пауза
+        // 400 мс — чтобы interrupt() попал в речь, а не до неё.
+        A11y.hush(this)
+        Diag.log(this, "voice", "долгое нажатие 🔍 в книге: глушу диктора, микрофон через 400 мс")
+        binding.root.postDelayed({
+            if (!isFinishing && book != null) startVoiceSearch()
+        }, 400)
     }
 
     private fun searchPanelOpen(): Boolean =
@@ -2106,6 +2114,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Чтение мешало бы распознаванию — ставим на паузу, фокус держим.
         if (playing) pausePlayback(keepFocus = true)
         hideKeyboard()
+        // msg6179: любой вход в голосовой ввод начинается с тишины — диктор не
+        // должен говорить в микрофон (кнопка-микрофон в панели, долгое нажатие 🔍).
+        A11y.hush(this)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,

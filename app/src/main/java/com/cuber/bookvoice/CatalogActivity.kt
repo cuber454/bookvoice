@@ -21,7 +21,6 @@ import android.text.method.LinkMovementMethod
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -255,11 +254,11 @@ class CatalogActivity(private val act: SectionActivity) {
         binding.btnSearch.setOnLongClickListener {
             val s = currentFeedSession()?.takeIf { it.searchTemplate != null }
             if (s == null) false else {
-                hushScreenReader()
+                A11y.hush(act)
                 Diag.log(act, "voice", "долгое нажатие 🔍: глушу диктора, микрофон через 400 мс")
                 binding.root.postDelayed({
                     if (currentFeedSession() === s) {
-                        hushScreenReader()
+                        A11y.hush(act)
                         startVoiceSearch(s)
                     }
                 }, 400)
@@ -1663,23 +1662,12 @@ class CatalogActivity(private val act: SectionActivity) {
      *
      *  Перед распознаванием тихо ставим фоновое чтение на паузу и убираем
      *  клавиатуру: TTS и стук клавиш в микрофоне испортили бы распознавание. */
-    /** Оборвать текущую речь экранного диктора (msg6175). Нужна там, где мы
-     *  открываем микрофон: диктор объявляет нажатую кнопку словами, и без этого
-     *  его голос попадает в микрофон и глушит начало фразы владельца.
-     *  interrupt() — штатный публичный API, гасит текущую озвучку; диктор,
-     *  который его не слушает, просто продолжит говорить (хуже не станет). */
-    private fun hushScreenReader() {
-        val am = act.getSystemService(Context.ACCESSIBILITY_SERVICE)
-            as? AccessibilityManager ?: return
-        runCatching { am.interrupt() }
-    }
-
     private fun startVoiceSearch(s: FeedSession) {
         MediaSessionService.pause()
         hideKeyboard()
         // msg6175: любой вход в голосовой поиск начинается с тишины — диктор
         // не должен говорить в открытый микрофон (кнопка 🎤, долгое нажатие 🔍).
-        hushScreenReader()
+        A11y.hush(act)
         // Своего распознавателя на устройстве нет — остаётся системное окно.
         if (!SpeechRecognizer.isRecognitionAvailable(act)) {
             startDialogRecognition(s)
@@ -1715,7 +1703,7 @@ class CatalogActivity(private val act: SectionActivity) {
                 // Микрофон реально слушает — только теперь зовём говорить.
                 // msg6175: диктор мог начать озвучку уже после нажатия — гасим
                 // ещё раз, чтобы его голос не попал в открытый микрофон.
-                hushScreenReader()
+                A11y.hush(act)
                 SoundFx.listen(act)
                 Diag.log(act, "voice", "микрофон слушает")
             }
