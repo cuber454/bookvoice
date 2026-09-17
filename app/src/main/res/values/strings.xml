@@ -903,14 +903,14 @@
     <string name="sync_dir_title">Папка синхронизации</string>
     <string name="sync_dir_none">не выбрана</string>
     <string name="sync_dir_cloud">в облаке</string>
-    <string name="sync_dir_local">на телефоне, между устройствами не поедет</string>
+    <string name="sync_dir_local">на телефоне</string>
     <string name="sync_dir_saved">Папка синхронизации выбрана</string>
     <string name="sync_dir_pick">Выбрать папку для синхронизации</string>
     <string name="sync_dir_change">Сменить папку синхронизации</string>
     <string name="sync_now">Синхронизировать сейчас</string>
     <string name="sync_last_title">Последняя синхронизация</string>
     <string name="sync_last_never">ещё не было</string>
-    <string name="sync_hint">Переносятся места чтения, закладки, цитаты и избранное. Книги и голоса не переносятся: книги должны быть на обоих устройствах, а голоса у каждого телефона свои. Папка должна быть одна и та же на обоих устройствах.</string>
+    <string name="sync_hint">Переносятся места чтения, закладки, цитаты и избранное. Книги и голоса не переносятся: книги должны быть на обоих устройствах, а голоса у каждого телефона свои. Папка должна быть одна и та же на обоих устройствах. Файл поедет сам, если это папка облака; папку в памяти телефона на второе устройство переносит только отдельная программа синхронизации.</string>
     <string name="sync_counts">Отправил: %1$d, забрал: %2$d</string>
     <string name="sync_same">Всё уже совпадает</string>
     <string name="sync_err_no_dir">Папка синхронизации не выбрана</string>
