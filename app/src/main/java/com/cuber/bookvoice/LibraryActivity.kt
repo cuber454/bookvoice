@@ -1076,15 +1076,32 @@ class LibraryActivity(private val act: SectionActivity) {
             .show()
     }
 
-    /** Применить вид к полке: сетка — две колонки карточек, список — строки.
+    /** Применить вид к полке: сетка — колонки карточек, список — строки.
      *  Зовётся при первом показе и при смене в меню «Ещё». */
     private fun applyViewMode() {
         adapter.viewMode = viewMode
         binding.bookList.layoutManager = if (viewMode == BookAdapter.VIEW_GRID) {
-            GridLayoutManager(act, GRID_COLUMNS)
+            GridLayoutManager(act, gridColumns())
         } else {
             LinearLayoutManager(act)
         }
+    }
+
+    /** Сколько колонок в сетке (msg6191). Раньше было жёстко две, и при крупном
+     *  шрифте колонка становилась такой узкой, что название книги ломалось на
+     *  пять строк, а половина его всё равно не влезала. Колонок столько,
+     *  сколько влезает карточек шириной не меньше [GRID_MIN_CARD_DP] — ширину
+     *  меряем в dp, а порог умножаем на поднятый шрифт (fontScale
+     *  уже включает и системный множитель, и нашу ручку «Размер текста»: текст
+     *  крупнее — значит, карточке нужно больше места). Телефон при обычном
+     *  тексте — две колонки, при крупном — одна, планшет — до трёх.
+     *  Список вида не касается: там строка всегда во всю ширину. */
+    private fun gridColumns(): Int {
+        val cfg = act.resources.configuration
+        val fontScale = if (cfg.fontScale > 0f) cfg.fontScale else 1f
+        val minCardDp = GRID_MIN_CARD_DP * fontScale
+        return (cfg.screenWidthDp / minCardDp).toInt()
+            .coerceIn(1, GRID_MAX_COLUMNS)
     }
 
     /** Озвучка карточки-сетки: то, что видно на карточке (название, автор), и
@@ -2231,7 +2248,10 @@ class LibraryActivity(private val act: SectionActivity) {
         private const val KEY_HIDDEN_PATHS = "hidden_paths"
         private const val KEY_LIB_FILTER = "lib_filter"
         private const val KEY_LIB_VIEW = "lib_view"
-        private const val GRID_COLUMNS = 2
+        /** Минимальная ширина карточки сетки в dp при обычном шрифте (msg6191).
+         *  От неё считается число колонок — см. [gridColumns]. */
+        private const val GRID_MIN_CARD_DP = 150
+        private const val GRID_MAX_COLUMNS = 3
 
         // Ставит MainActivity перед «назад в библиотеку»: полка не должна
         // перехватывать onResume как «запуск с рабочего стола» и прыгать
