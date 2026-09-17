@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -41,6 +42,16 @@ object SyncStore {
 
     const val KEY_ON = "sync_on"
     const val KEY_DIR = "sync_dir"
+
+    /** Переносить и книги (msg6130). Отдельная галочка: заливка полки занимает
+     *  место на Диске и время в сети, включать её вместе с местами чтения молча
+     *  нельзя. По умолчанию выключена. */
+    const val KEY_BOOKS = "sync_books"
+
+    /** Сколько книг лежит на Диске, которых у нас нет (для строки на экране).
+     *  -1 — ещё не считали; счёт обновляется при каждом плане и прогоне. */
+    private const val KEY_DISK_N = "sync_disk_n"
+
     private const val KEY_LAST_AT = "sync_last_at"
     private const val KEY_LAST_RESULT = "sync_last_result"
     /** Что мы знаем о других устройствах (msg6086). Нужно ручному пути: файл
@@ -73,6 +84,16 @@ object SyncStore {
 
     fun setDir(c: Context, tree: Uri) {
         prefs(c).edit().putString(KEY_DIR, tree.toString()).apply()
+    }
+
+    /** Переносим ли и книги, или только места чтения. */
+    fun booksOn(c: Context): Boolean = prefs(c).getBoolean(KEY_BOOKS, false)
+
+    /** Сколько книг на Диске нет у нас. -1 — ещё не считали. */
+    fun diskNew(c: Context): Int = prefs(c).getInt(KEY_DISK_N, -1)
+
+    private fun setDiskNew(c: Context, n: Int) {
+        prefs(c).edit().putInt(KEY_DISK_N, n).apply()
     }
 
     fun lastAt(c: Context): Long = prefs(c).getLong(KEY_LAST_AT, 0L)
@@ -117,6 +138,8 @@ object SyncStore {
         val quotes: Int,
         /** null — получилось; иначе причина, которую показываем владельцу. */
         val error: String?,
+        /** Сколько книг уехало на Диск в этом прогоне (msg6130). */
+        val booksUp: Int = 0,
     )
 
     // ---------------- Прогон ----------------
@@ -157,8 +180,165 @@ object SyncStore {
         val (got, sent) = apply(c, merged, remote?.first ?: emptyList())
         val body = root(merged, unionQuotes(QuoteStore.all(c), remote?.second ?: emptyList()))
         YandexDisk.write(c, body.toString())?.let { return finish(c, Result(0, 0, 0, it)) }
-        return finish(c, Result(got, sent, remote?.second?.let { rq -> countNewQuotes(c, rq) } ?: 0, null))
+        // Книги (msg6130): заливаем то, чего на Диске ещё нет. Забор книг сюда не
+        // входит — он тянет десятки мегабайт и на чужом тарифе, и это решение
+        // владельца, а не фоновая подробность: книги забираются кнопкой.
+        var booksUp = 0
+        if (booksOn(c)) {
+            val plan = planBooks(c)
+            val err = plan.error
+            if (err != null) {
+                Diag.log(c, "sync", "список книг на Диске не получен: $err")
+            } else {
+                val (n, upErr) = pushBooks(c, plan)
+                booksUp = n
+                if (upErr != null) Diag.log(c, "sync", "книга не залилась: $upErr")
+            }
+        }
+        return finish(c, Result(got, sent, remote?.second?.let { rq -> countNewQuotes(c, rq) } ?: 0, null, booksUp))
     }
+
+    // ---------------- Книги (msg6130) ----------------
+    //
+    // Места чтения уезжают файлом в несколько килобайт, книги — это сотни
+    // мегабайт. Поэтому книги лежат отдельно, в папке `app:/books` на Диске, и
+    // едут по своей воле: заливка — по галочке владельца (и то после того, как
+    // он увидит объём), забор — только кнопкой. Сопоставление по имени файла,
+    // как и у мест чтения: две разные книги с одинаковым именем сольются. Это
+    // ограничение у нас уже объявлено вслух и остаётся тем же.
+
+    /** Один перенос книг за раз: заливка и забор долгие, а запустить их могут
+     *  и кнопка, и автосинхронизация. */
+    private val moving = AtomicBoolean(false)
+
+    /** Что поедет и что приедет. Считается ДО переноса: молча вывалить на Диск
+     *  сотни мегабайт нельзя, владелец должен увидеть объём. */
+    data class BookPlan(
+        /** Книги, которых на Диске нет (или они там другого размера). */
+        val up: List<BookRecord> = emptyList(),
+        val upBytes: Long = 0L,
+        /** Имена книг, которые лежат на Диске, а у нас их нет. */
+        val down: List<String> = emptyList(),
+        val downBytes: Long = 0L,
+        val error: String? = null,
+    )
+
+    /** Считаем перенос: список Диска и размеры своих книг. Ничего не качаем. */
+    fun planBooks(c: Context): BookPlan {
+        val items = YandexDisk.listBooks(c)
+        val listErr = items.error
+        if (listErr != null) return BookPlan(error = listErr)
+        val remote = items.list.associateBy { key(it.name) }
+        val local = BookStore.all(c)
+        val localKeys = local.map { key(it.name) }.toHashSet()
+        val up = ArrayList<BookRecord>()
+        var upBytes = 0L
+        for (rec in local) {
+            val size = sizeOf(c, rec.uri)
+            val there = remote[key(rec.name)]
+            // Размер сравниваем и на заливке: книга, не доехавшая в прошлый раз,
+            // лежит на Диске огрызком, и её надо перезалить, а не считать готовой.
+            if (there == null || (size > 0 && there.size > 0 && size != there.size)) {
+                up.add(rec)
+                if (size > 0) upBytes += size
+            }
+        }
+        val down = items.list.filter { key(it.name) !in localKeys }
+        var downBytes = 0L
+        down.forEach { downBytes += it.size }
+        setDiskNew(c, down.size)
+        return BookPlan(up, upBytes, down.map { it.name }, downBytes)
+    }
+
+    /** Заливаем книги на Диск. Возвращает (сколько залито, причина отказа). */
+    fun pushBooks(c: Context, plan: BookPlan): Pair<Int, String?> {
+        if (plan.up.isEmpty()) return 0 to null
+        if (!moving.compareAndSet(false, true)) return 0 to c.getString(R.string.sync_books_busy)
+        try {
+            YandexDisk.ensureBooks(c)?.let { return 0 to it }
+            var done = 0
+            for (rec in plan.up) {
+                val src = uploadSource(c, rec)
+                    ?: return done to c.getString(R.string.sync_books_no_read, rec.name)
+                val err = YandexDisk.uploadBook(c, rec.name, src.file)
+                src.temp?.delete()
+                if (err != null) return done to c.getString(R.string.sync_books_up_fail, rec.name, err)
+                done++
+                Diag.log(c, "sync", "книга залита на Диск: ${rec.name}")
+            }
+            return done to null
+        } finally {
+            moving.set(false)
+        }
+    }
+
+    /** Забираем с Диска книги, которых у нас нет. Кладём во внутреннюю папку
+     *  приложения — туда же, куда качает каталог, чтобы книга сразу нашлась на
+     *  полке. Места чтения и закладки подтянутся следующей синхронизацией: ключ
+     *  тот же (имя файла), а записи в файле синхронизации уже лежат. */
+    fun pullBooks(c: Context, plan: BookPlan): Pair<Int, String?> {
+        if (plan.down.isEmpty()) return 0 to null
+        if (!moving.compareAndSet(false, true)) return 0 to c.getString(R.string.sync_books_busy)
+        try {
+            val dir = File(c.filesDir, "books").apply { mkdirs() }
+            var done = 0
+            for (name in plan.down) {
+                val dest = File(dir, name)
+                // Файл уже лежит (забрали раньше, а запись потерялась) — заводим
+                // запись и идём дальше: те же мегабайты второй раз не тянем.
+                if (!dest.isFile || dest.length() == 0L) {
+                    val err = YandexDisk.downloadBook(c, name, dest)
+                    if (err != null) return done to c.getString(R.string.sync_books_down_fail, name, err)
+                }
+                BookStore.upsert(c, BookRecord(
+                    uri = Uri.fromFile(dest).toString(),
+                    name = dest.name,
+                    addedAt = System.currentTimeMillis(),
+                ))
+                done++
+                Diag.log(c, "sync", "книга забрана с Диска: $name")
+            }
+            return done to null
+        } finally {
+            moving.set(false)
+        }
+    }
+
+    /** Откуда брать файл книги для заливки. Своя книга (file://) уходит прямо со
+     *  своего места; чужая (content:// из выбранной папки) — копией в кэше: тело
+     *  запроса Диска читается из файла, а из чужого потока — нельзя. */
+    private class Src(val file: File, val temp: File?)
+
+    private fun uploadSource(c: Context, rec: BookRecord): Src? {
+        val uri = Uri.parse(rec.uri)
+        if (rec.uri.startsWith("file:")) {
+            val own = uri.path?.let { File(it) }
+            if (own != null && own.isFile) return Src(own, null)
+        }
+        val tmp = File(c.cacheDir, "sync_up.tmp")
+        val ok = runCatching {
+            c.contentResolver.openInputStream(uri)?.use { ins ->
+                tmp.outputStream().use { out -> ins.copyTo(out) }
+            } != null
+        }.getOrDefault(false)
+        if (!ok || !tmp.isFile || tmp.length() == 0L) {
+            tmp.delete()
+            return null
+        }
+        return Src(tmp, tmp)
+    }
+
+    /** Размер книги на телефоне: у своей — длина файла, у чужой — столбец SIZE.
+     *  Не узнали — 0: тогда размер не сравниваем, решает имя. */
+    private fun sizeOf(c: Context, uri: String): Long = runCatching {
+        if (uri.startsWith("file:")) {
+            File(Uri.parse(uri).path ?: "").length()
+        } else {
+            c.contentResolver.query(
+                Uri.parse(uri), arrayOf(OpenableColumns.SIZE), null, null, null,
+            )?.use { cur -> if (cur.moveToFirst()) cur.getLong(0) else 0L } ?: 0L
+        }
+    }.getOrDefault(0L)
 
     // ---------------- Ручной путь: файл уносим сами (msg6086) ----------------
     //
@@ -208,10 +388,15 @@ object SyncStore {
     }
 
     private fun finish(c: Context, r: Result): Result {
-        val text = when {
+        var text = when {
             r.error != null -> r.error
-            r.got == 0 && r.sent == 0 -> c.getString(R.string.sync_same)
+            r.got == 0 && r.sent == 0 && r.booksUp == 0 -> c.getString(R.string.sync_same)
             else -> c.getString(R.string.sync_counts, r.sent, r.got)
+        }
+        // Книги — отдельной строкой: «отправил 3, забрал 1» про места чтения, и
+        // молчать о залитых книгах нельзя (владелец ждёт их появления на Диске).
+        if (r.error == null && r.booksUp > 0) {
+            text += " " + c.getString(R.string.sync_books_pushed, r.booksUp)
         }
         prefs(c).edit()
             .putLong(KEY_LAST_AT, System.currentTimeMillis())

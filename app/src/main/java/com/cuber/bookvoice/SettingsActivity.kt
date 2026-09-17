@@ -130,6 +130,8 @@ class SettingsActivity(private val act: SectionActivity) {
     private var syncLastRow: TextView? = null
     // msg6114: строка входа в Яндекс.Диск — рекомендованный путь синхронизации.
     private var yandexRow: Button? = null
+    private var booksBox: CheckBox? = null
+    private var booksRow: Button? = null
     // #57: галочка «Бесшовная передача» — при альтернативном способе озвучки
     // становится недоступной (она в этом режиме не работает).
     // #70 (msg5503/5511): движок, язык и голос — три строки-значения вместо одной
@@ -1187,6 +1189,15 @@ class SettingsActivity(private val act: SectionActivity) {
         // заводится сама, выбирать папку не нужно, облачное приложение на телефоне
         // не нужно тоже. Строка ниже (папка) остаётся для тех, у кого аккаунта нет.
         yandexRow = addValueButton { yandexAction() }
+        // Книги (msg6130): своя галочка, отдельная от мест чтения — это мегабайты
+        // и время. Включается только с уже выполненным входом и только после
+        // того, как владелец увидит объём. Строка ниже — забор книг на этом
+        // устройстве: его делаем рукой, автоматически не тянем.
+        booksBox = addCheck(R.string.sync_books_title, SyncStore.KEY_BOOKS, false) { on ->
+            onBooksToggle(on)
+        }
+        booksRow = addValueButton { pullBooksAction() }
+        addHint(getString(R.string.sync_books_hint))
         syncDirRow = addValueButton { pickSyncDir() }
         addButton(getString(R.string.sync_now)) { runSyncNow() }
         // Ручной путь (msg6086): облака на телефоне может не быть вовсе, и без
@@ -1522,6 +1533,7 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg6114: при выполненном входе в Яндекс папка не нужна вовсе — говорим
         // об этом прямо, иначе человек пойдёт выбирать папку, которая не работает.
         yandexRow?.text = yandexLabel()
+        booksRow?.text = booksLabel()
         syncDirRow?.text = getString(R.string.sync_dir_title) + ": " +
             if (YandexDisk.connected(act)) getString(R.string.sync_dir_yandex) else syncDirLabel()
         syncLastRow?.text = getString(R.string.sync_last_title) + ": " +
@@ -1977,6 +1989,138 @@ class SettingsActivity(private val act: SectionActivity) {
             toast(getString(R.string.yandex_no_browser))
         }
     }
+
+    // ---------------- Перенос книг (msg6130) ----------------
+
+    /** Строка «Книги на Диске»: сколько там книг, которых у нас нет. Число берём
+     *  из памяти прошлой проверки — лезть в сеть на каждой перерисовке экрана
+     *  нельзя. Ещё не считали — так и говорим: «нажми, чтобы проверить». */
+    private fun booksLabel(): String {
+        val n = SyncStore.diskNew(act)
+        return when {
+            n < 0 -> getString(R.string.sync_books_check)
+            n == 0 -> getString(R.string.sync_books_none)
+            else -> getString(R.string.sync_books_get, n)
+        }
+    }
+
+    /** Включение переноса книг. Сначала считаем объём и спрашиваем: молча вывалить
+     *  на Диск сотни мегабайт нельзя. Без входа в Яндекс переносить некуда —
+     *  галочку возвращаем назад и говорим почему. */
+    private fun onBooksToggle(on: Boolean) {
+        if (!on) return
+        if (!YandexDisk.connected(act)) {
+            toast(getString(R.string.sync_books_need_yandex))
+            booksBox?.isChecked = false // вернёт и галочку, и память
+            return
+        }
+        toast(getString(R.string.sync_books_counting))
+        Thread {
+            val plan = SyncStore.planBooks(act)
+            runOnUiThread {
+                val err = plan.error
+                when {
+                    err != null -> {
+                        toast(getString(R.string.sync_books_list_fail, err))
+                        booksBox?.isChecked = false
+                    }
+                    plan.up.isEmpty() -> {
+                        toast(getString(R.string.sync_books_all_there))
+                        refreshRows()
+                    }
+                    else -> askBooksPush(plan)
+                }
+            }
+        }.start()
+    }
+
+    /** Подтверждение заливки: сколько книг и сколько это мегабайт. */
+    private fun askBooksPush(plan: SyncStore.BookPlan) {
+        val what = getString(R.string.sync_books_what, qty(R.plurals.sync_books_n, plan.up.size), booksSize(plan.upBytes))
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.sync_books_title)
+            .setMessage(what + "\n\n" + getString(R.string.sync_books_ask))
+            .setPositiveButton(R.string.sync_books_go) { _, _ -> startBooksPush(plan) }
+            .setNegativeButton(R.string.dialog_cancel) { _, _ -> booksBox?.isChecked = false }
+            .setOnCancelListener { booksBox?.isChecked = false }
+            .show()
+    }
+
+    private fun startBooksPush(plan: SyncStore.BookPlan) {
+        toast(getString(R.string.sync_books_pushing, plan.up.size))
+        Thread {
+            val (n, err) = SyncStore.pushBooks(act, plan)
+            runOnUiThread {
+                toast(
+                    if (err != null) getString(R.string.sync_books_push_fail, err)
+                    else getString(R.string.sync_books_pushed, n)
+                )
+                refreshRows()
+            }
+        }.start()
+    }
+
+    /** Забор книг с Диска. Всегда рукой владельца: это десятки мегабайт из
+     *  мобильной сети, и решать про них должен он, а не фоновая синхронизация. */
+    private fun pullBooksAction() {
+        if (!YandexDisk.connected(act)) {
+            toast(getString(R.string.sync_books_need_yandex))
+            return
+        }
+        toast(getString(R.string.sync_books_checking))
+        Thread {
+            val plan = SyncStore.planBooks(act)
+            runOnUiThread {
+                val err = plan.error
+                when {
+                    err != null -> toast(getString(R.string.sync_books_list_fail, err))
+                    plan.down.isEmpty() -> {
+                        toast(getString(R.string.sync_books_none_toast))
+                        refreshRows()
+                    }
+                    else -> askBooksPull(plan)
+                }
+            }
+        }.start()
+    }
+
+    private fun askBooksPull(plan: SyncStore.BookPlan) {
+        val what = getString(R.string.sync_books_what, qty(R.plurals.sync_books_n, plan.down.size), booksSize(plan.downBytes))
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.sync_books_title)
+            .setMessage(getString(R.string.sync_books_pull_ask, what))
+            .setPositiveButton(R.string.sync_books_pull_go) { _, _ -> startBooksPull(plan) }
+            .setNegativeButton(R.string.dialog_cancel, null)
+            .show()
+    }
+
+    private fun startBooksPull(plan: SyncStore.BookPlan) {
+        toast(getString(R.string.sync_books_pulling, plan.down.size))
+        Thread {
+            val (n, err) = SyncStore.pullBooks(act, plan)
+            // Забрали — сразу и синхронизация: в файле уже лежат места чтения этих
+            // книг, их надо применить (и заодно залить новое, если галочка стоит).
+            if (err == null) SyncStore.sync(act)
+            val fresh = SyncStore.planBooks(act) // сколько осталось — для строки
+            runOnUiThread {
+                toast(
+                    if (err != null) getString(R.string.sync_books_pull_fail, err)
+                    else getString(R.string.sync_books_pulled, n)
+                )
+                if (fresh.error == null) refreshRows()
+            }
+        }.start()
+    }
+
+    /** Склонённое число книг: «23 книги», «21 книга». */
+    private fun qty(resId: Int, n: Int): String = act.resources.getQuantityString(resId, n, n)
+
+    /** Размер для диалога. Слова те же, что у строки кэша ([sizeText]): «480 МБ» —
+     *  одно написание мегабайт на весь экран. Ноль здесь значит «размер узнать
+     *  не вышло» (книга из чужой папки может не отдавать столбец размера), и
+     *  тогда честнее сказать это словами, чем показать «меньше 1 МБ». */
+    private fun booksSize(bytes: Long): String =
+        if (bytes <= 0L) getString(R.string.sync_books_size_unknown) else sizeText(bytes)
 
     /** Смена папки синхронизации. Папка нужна ровно одна на оба устройства, и
      *  её выбор обойти нельзя: Android не даёт писать в чужое облако без

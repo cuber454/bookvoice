@@ -916,7 +916,7 @@
     <string name="sync_bad_file">Это не файл синхронизации BookVoice</string>
     <string name="sync_last_title">Последняя синхронизация</string>
     <string name="sync_last_never">ещё не было</string>
-    <string name="sync_hint">Переносятся места чтения, закладки, цитаты и избранное. Книги и голоса не переносятся: книги должны быть на обоих устройствах, а голоса у каждого телефона свои. Папка должна быть одна и та же на обоих устройствах. Файл поедет сам, если это папка облака; папку в памяти телефона на второе устройство переносит только отдельная программа синхронизации.</string>
+    <string name="sync_hint">Переносятся места чтения, закладки, цитаты и избранное. Книги поедут только с галочкой «Переносить и книги», а голоса не переносятся вовсе: у каждого телефона свои. Папка должна быть одна и та же на обоих устройствах. Файл поедет сам, если это папка облака; папку в памяти телефона на второе устройство переносит только отдельная программа синхронизации.</string>
     <string name="sync_counts">Отправил: %1$d, забрал: %2$d</string>
     <string name="sync_same">Всё уже совпадает</string>
     <string name="sync_err_no_dir">Папка синхронизации не выбрана</string>
@@ -937,6 +937,43 @@
     <string name="yandex_need_login">Яндекс требует войти заново — нажми строку «Яндекс.Диск»</string>
     <string name="yandex_err">Яндекс.Диск: %1$s</string>
     <string name="yandex_used">Синхронизация идёт через Яндекс.Диск — папка не нужна</string>
+
+    <!-- Перенос книг (msg6130). Отдельная галочка от мест чтения: книги — это
+         мегабайты, и решать про них владелец должен сам. Строка «Книги на
+         Диске» — забор; он всегда рукой владельца, автоматически не тянем. -->
+    <string name="sync_books_title">Переносить и книги</string>
+    <string name="sync_books_hint">Книги уходят в папку приложения на Яндекс.Диске и заливаются по одной — при слабой сети это долго. Забрать книги на втором устройстве можно строкой ниже; места чтения подтянутся сами.</string>
+    <string name="sync_books_need_yandex">Сначала войди в Яндекс.Диск — без него книги не поедут</string>
+    <string name="sync_books_counting">Считаю книги…</string>
+    <string name="sync_books_checking">Смотрю, что есть на Диске…</string>
+    <string name="sync_books_check">Книги на Диске: нажми, чтобы проверить</string>
+    <string name="sync_books_none">Книги на Диске: новых нет</string>
+    <string name="sync_books_get">Книги на Диске: %1$d, забрать</string>
+    <string name="sync_books_all_there">Все твои книги уже на Диске — заливать нечего</string>
+    <string name="sync_books_none_toast">Новых книг на Диске нет</string>
+    <string name="sync_books_list_fail">Список книг не получен: %1$s</string>
+    <string name="sync_books_ask">Залить на Диск? Книги уходят по одной — при слабой сети это долго.</string>
+    <string name="sync_books_go">Залить</string>
+    <string name="sync_books_what">%1$s, всего %2$s</string>
+    <string name="sync_books_pushing">Заливаю книг: %1$d</string>
+    <string name="sync_books_pushed">Залито книг: %1$d</string>
+    <string name="sync_books_push_fail">Не вышло залить: %1$s</string>
+    <string name="sync_books_up_fail">книга «%1$s»: %2$s</string>
+    <string name="sync_books_no_read">книга «%1$s» не читается с телефона</string>
+    <string name="sync_books_pull_ask">Забрать с Диска? %1$s</string>
+    <string name="sync_books_size_unknown">размер неизвестен</string>
+    <string name="sync_books_pull_go">Забрать</string>
+    <string name="sync_books_pulling">Забираю книг: %1$d</string>
+    <string name="sync_books_pulled">Забрано книг: %1$d</string>
+    <string name="sync_books_pull_fail">Не вышло забрать: %1$s</string>
+    <string name="sync_books_down_fail">книга «%1$s»: %2$s</string>
+    <string name="sync_books_busy">Перенос книг уже идёт — подожди</string>
+    <plurals name="sync_books_n">
+        <item quantity="one">%1$d книга</item>
+        <item quantity="few">%1$d книги</item>
+        <item quantity="many">%1$d книг</item>
+        <item quantity="other">%1$d книг</item>
+    </plurals>
 
     <!-- 0.3.42: отмена перехода — меню «⋮ Ещё» в читалке (#101) -->
     <string name="reader_more_cd">Ещё</string>

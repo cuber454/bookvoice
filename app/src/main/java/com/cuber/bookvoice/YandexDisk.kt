@@ -8,8 +8,10 @@ import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.File
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
@@ -50,12 +52,17 @@ object YandexDisk {
     /** Тот же файл, что и в облачной папке: одно содержимое, два способа добраться. */
     private val PATH = "app:/" + SyncStore.FILE_NAME
 
+    /** Папка книг внутри папки приложения (msg6130). Диск сам родительскую папку
+     *  не создаёт — [ensureBooks] вызывается перед первой заливкой. */
+    private const val BOOKS_DIR = "app:/books"
+
     private const val KEY_TOKEN = "yandex_token"
     private const val KEY_USER = "yandex_user"
     private const val KEY_VERIFIER = "yandex_verifier"
     private const val KEY_STATE = "yandex_state"
 
     private val JSON = "application/json".toMediaType()
+    private val OCTET = "application/octet-stream".toMediaType()
 
     private val client by lazy {
         OkHttpClient.Builder()
@@ -152,7 +159,7 @@ object YandexDisk {
     fun read(c: Context): Text {
         val t = token(c) ?: return Text(error = c.getString(R.string.yandex_no_token))
         return try {
-            val link = downloadHref(c, t)
+            val link = fileLink(c, t, "download", PATH, missingOk = true)
             when {
                 link.error != null -> Text(error = link.error)
                 link.body == null -> Text()
@@ -173,19 +180,9 @@ object YandexDisk {
     fun write(c: Context, text: String): String? {
         val t = token(c) ?: return c.getString(R.string.yandex_no_token)
         return try {
-            val upUrl = Uri.parse("$API/upload").buildUpon()
-                .appendQueryParameter("path", PATH)
-                .appendQueryParameter("overwrite", "true")
-                .build()
-                .toString()
-            val req = Request.Builder().url(upUrl).header("Authorization", "OAuth $t").build()
-            val href = client.newCall(req).execute().use { resp ->
-                val body = resp.body?.string().orEmpty()
-                if (resp.code == 401) return c.getString(R.string.yandex_need_login)
-                if (!resp.isSuccessful) return c.getString(R.string.yandex_err, reason(body, resp.code))
-                runCatching { JSONObject(body).optString("href") }.getOrNull()
-            }
-            if (href.isNullOrBlank()) return c.getString(R.string.yandex_err, "нет ссылки на загрузку")
+            val link = fileLink(c, t, "upload", PATH, missingOk = false)
+            if (link.error != null) return link.error
+            val href = link.body ?: return c.getString(R.string.yandex_err, "нет ссылки на загрузку")
             val put = Request.Builder().url(href).put(text.toRequestBody(JSON)).build()
             client.newCall(put).execute().use { resp ->
                 if (!resp.isSuccessful) return c.getString(R.string.yandex_err, "HTTP ${resp.code}")
@@ -196,17 +193,143 @@ object YandexDisk {
         }
     }
 
-    /** Ссылка на скачивание. 404 — файла ещё нет (первый прогон), это не ошибка. */
-    private fun downloadHref(c: Context, token: String): Text {
-        val url = Uri.parse("$API/download").buildUpon()
-            .appendQueryParameter("path", PATH)
+    // ---------------- Книги в папке приложения (msg6130) ----------------
+    //
+    // Книги едут тем же путём, что и файл синхронизации: кладём их в папку
+    // `app:/books` внутри папки приложения. Сопоставление — по ИМЕНИ файла, как
+    // и у мест чтения: на каждом устройстве книга лежит по своему адресу, а имя
+    // у неё одно и то же.
+
+    /** Одна книга в папке приложения. */
+    class Entry(val name: String, val size: Long)
+
+    /** Содержимое папки книг. Пустой список — «книг там ещё нет»: это не ошибка,
+     *  папка появляется с первой заливкой. [error] — причина для владельца. */
+    class Items(val list: List<Entry> = emptyList(), val error: String? = null)
+
+    /** Что лежит в папке книг. Только имена и размеры — за самими файлами идём
+     *  отдельно и по одному. */
+    fun listBooks(c: Context): Items {
+        val t = token(c) ?: return Items(error = c.getString(R.string.yandex_no_token))
+        return try {
+            // limit по умолчанию — 20, для полки этого мало; 1000 — потолок Диска.
+            // fields сужает ответ до имени и размера: полный список тянет ещё и
+            // ссылки на каждый файл, а они нам здесь не нужны.
+            val url = Uri.parse(API).buildUpon()
+                .appendQueryParameter("path", BOOKS_DIR)
+                .appendQueryParameter("limit", "1000")
+                .appendQueryParameter("fields", "_embedded.items.name,_embedded.items.size")
+                .build()
+                .toString()
+            val req = Request.Builder().url(url).header("Authorization", "OAuth $t").build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                when {
+                    resp.code == 401 -> Items(error = c.getString(R.string.yandex_need_login))
+                    // Папки ещё нет (первый прогон) — книг на Диске ноль.
+                    resp.code == 404 || resp.code == 409 -> Items()
+                    !resp.isSuccessful -> Items(error = c.getString(R.string.yandex_err, reason(body, resp.code)))
+                    else -> {
+                        val arr = JSONObject(body).optJSONObject("_embedded")?.optJSONArray("items")
+                        val out = ArrayList<Entry>()
+                        if (arr != null) {
+                            for (i in 0 until arr.length()) {
+                                val o = arr.getJSONObject(i)
+                                val name = o.optString("name")
+                                if (name.isNotBlank()) out.add(Entry(name, o.optLong("size")))
+                            }
+                        }
+                        Items(list = out)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Items(error = c.getString(R.string.yandex_err, e.message ?: ""))
+        }
+    }
+
+    /** Завести папку книг. Диск не создаёт родительскую папку сам, а заливка в
+     *  несуществующую папку падает. null — папка есть. */
+    fun ensureBooks(c: Context): String? {
+        val t = token(c) ?: return c.getString(R.string.yandex_no_token)
+        return try {
+            val url = Uri.parse(API).buildUpon()
+                .appendQueryParameter("path", BOOKS_DIR)
+                .build()
+                .toString()
+            val req = Request.Builder().url(url)
+                .method("PUT", ByteArray(0).toRequestBody(null))
+                .header("Authorization", "OAuth $t")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                when {
+                    resp.isSuccessful -> null
+                    resp.code == 409 -> null // уже есть — это не ошибка
+                    resp.code == 401 -> c.getString(R.string.yandex_need_login)
+                    else -> c.getString(R.string.yandex_err, reason(body, resp.code))
+                }
+            }
+        } catch (e: Exception) {
+            c.getString(R.string.yandex_err, e.message ?: "")
+        }
+    }
+
+    /** Залить одну книгу. null — получилось. */
+    fun uploadBook(c: Context, name: String, src: File): String? {
+        val t = token(c) ?: return c.getString(R.string.yandex_no_token)
+        return try {
+            val link = fileLink(c, t, "upload", "$BOOKS_DIR/$name", missingOk = false)
+            if (link.error != null) return link.error
+            val href = link.body ?: return c.getString(R.string.yandex_err, "нет ссылки на загрузку")
+            // Тело берём прямо из файла: книга бывает и в сотни мегабайт, целиком
+            // в памяти ей делать нечего, а disk-запрос читает её потоком.
+            val put = Request.Builder().url(href).put(src.asRequestBody(OCTET)).build()
+            client.newCall(put).execute().use { resp ->
+                if (!resp.isSuccessful) return c.getString(R.string.yandex_err, "HTTP ${resp.code}")
+            }
+            null
+        } catch (e: Exception) {
+            c.getString(R.string.yandex_err, e.message ?: "")
+        }
+    }
+
+    /** Забрать одну книгу в [dest]. null — получилось. Пишем потоком, по той же
+     *  причине, что и заливаем. */
+    fun downloadBook(c: Context, name: String, dest: File): String? {
+        val t = token(c) ?: return c.getString(R.string.yandex_no_token)
+        return try {
+            val link = fileLink(c, t, "download", "$BOOKS_DIR/$name", missingOk = false)
+            if (link.error != null) return link.error
+            val href = link.body ?: return c.getString(R.string.yandex_err, "нет ссылки на скачивание")
+            client.newCall(Request.Builder().url(href).build()).execute().use { resp ->
+                if (!resp.isSuccessful) return c.getString(R.string.yandex_err, "HTTP ${resp.code}")
+                val body = resp.body ?: return c.getString(R.string.yandex_err, "пустой ответ")
+                dest.outputStream().use { out -> body.byteStream().copyTo(out) }
+            }
+            null
+        } catch (e: Exception) {
+            // Недокачанный файл на полке хуже отсутствующего: его не отличить от
+            // целого, а откроется он огрызком.
+            runCatching { dest.delete() }
+            c.getString(R.string.yandex_err, e.message ?: "")
+        }
+    }
+
+    /** Ссылка на файл Диска: [op] — «download» или «upload». [missingOk] —
+     *  «файла ещё нет» (404) считаем пустым ответом, а не ошибкой: у файла
+     *  синхронизации это первый прогон, файл создаётся только сейчас. */
+    private fun fileLink(c: Context, token: String, op: String, path: String, missingOk: Boolean): Text {
+        val url = Uri.parse("$API/$op").buildUpon()
+            .appendQueryParameter("path", path)
+            .apply { if (op == "upload") appendQueryParameter("overwrite", "true") }
             .build()
             .toString()
         val req = Request.Builder().url(url).header("Authorization", "OAuth $token").build()
         client.newCall(req).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
             return when {
-                resp.code == 404 -> Text()
+                resp.code == 404 && missingOk -> Text()
                 resp.code == 401 -> Text(error = c.getString(R.string.yandex_need_login))
                 !resp.isSuccessful -> Text(error = c.getString(R.string.yandex_err, reason(body, resp.code)))
                 else -> {
