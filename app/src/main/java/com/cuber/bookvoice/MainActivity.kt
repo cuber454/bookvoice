@@ -1913,7 +1913,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             else "${i + 1}. $title"
         }
         val items = if (bmHeader == null) titles.toTypedArray() else arrayOf(bmHeader) + titles
-        MaterialAlertDialogBuilder(this)
+        // msg6171: оглавление открывается на текущей главе, а не с начала
+        // списка. setItems всегда строит список с нулевой прокруткой, поэтому
+        // диалог создаём сами и после показа ставим выбор на строку текущей
+        // главы (первой строкой идут закладки, если они есть, — отсюда сдвиг).
+        val dlg = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.toc_title)
             .setItems(items) { _, which ->
                 if (bmHeader != null && which == 0) {
@@ -1930,7 +1934,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 if (!playing && prefs.getBoolean(KEY_TOC_PLAY, true)) requestStart()
             }
             .setNegativeButton(R.string.toc_close, null)
-            .show()
+            .create()
+        dlg.setOnShowListener {
+            val list = dlg.listView ?: return@setOnShowListener
+            val row = chapterIdx + if (bmHeader == null) 0 else 1
+            if (row in items.indices) list.setSelection(row)
+        }
+        dlg.show()
     }
 
     /** Перепрыгнуть на глобальное предложение (слайдер перемотки). [announce] —
