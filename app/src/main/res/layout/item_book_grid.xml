@@ -3,19 +3,7 @@
      название крупным и автор под ним. Один фокусный узел — вся карточка; текст
      для TalkBack (что именно озвучить) и клики выставляет BookAdapter в коде.
      Видимые TextView помечены как несущественные для доступности, чтобы
-     TalkBack не спотыкался о них отдельно от карточки.
-
-     msg6183: потолок строк поднят. Было название 3 строки и автор 1 строка с
-     ellipsize=end — при крупном шрифте (Настройки → размер текста) в узкую
-     колонку влезало «Николай Юрьеви…» и «Рука на пульсе. Случаи из практики
-     мол…», то есть половина названия. Стало 6 и 2.
-     Почему не «без потолка вовсе» (msg6187: Сергей спросил, не станут ли
-     карточки несоизмеримо большими — станут): у названия-монстра в 150 знаков
-     карточка вымахивает в треть экрана. Шесть строк при крупном шрифте — это
-     ~80 знаков, с запасом больше любого реального названия; обрезка возможна
-     теперь только на совсем диких метаданных. Ущерб от прежней обрезки был
-     всё равно только на глаз — диктору уходит contentDescription с полным
-     названием. -->
+     TalkBack не спотыкался о них отдельно от карточки. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -35,7 +23,7 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:importantForAccessibility="no"
-        android:maxLines="6"
+        android:maxLines="3"
         android:textColor="?attr/bvInk"
         android:textSize="16sp"
         android:textStyle="bold" />
@@ -47,7 +35,7 @@
         android:layout_marginTop="6dp"
         android:ellipsize="end"
         android:importantForAccessibility="no"
-        android:maxLines="2"
+        android:maxLines="1"
         android:textColor="?attr/bvDim"
         android:textSize="14sp" />
 </LinearLayout>
