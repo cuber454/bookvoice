@@ -7,6 +7,7 @@ import android.os.Build
 import android.provider.DocumentsContract
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -42,6 +43,10 @@ object SyncStore {
     const val KEY_DIR = "sync_dir"
     private const val KEY_LAST_AT = "sync_last_at"
     private const val KEY_LAST_RESULT = "sync_last_result"
+    /** Что мы знаем о других устройствах (msg6086). Нужно ручному пути: файл
+     *  собирается из своей полки, а чужая книга в полку не заводится — без этой
+     *  памяти она потерялась бы при отправке файла обратно. */
+    private const val KEY_CARRY = "sync_carry"
 
     /** Имя файла в облачной папке. Видно владельцу в проводнике/Диске — по нему
      *  он понимает, что синхронизация живая. */
@@ -135,6 +140,53 @@ object SyncStore {
         } finally {
             running.set(false)
         }
+    }
+
+    // ---------------- Ручной путь: файл уносим сами (msg6086) ----------------
+    //
+    // Для случая, когда облака на телефоне нет вовсе: файл синхронизации
+    // отправляется вручную (Telegram «Избранное» или любым другим способом), а на
+    // втором устройстве забирается кнопкой. Те же разбор и слияние, что и в
+    // обычном прогоне, — отличается только то, откуда взялись байты.
+
+    /** Собирает файл синхронизации во временный файл и отдаёт его наружу.
+     *  null — не вышло записать. */
+    fun exportFile(c: Context): File? = runCatching {
+        val (carryBooks, carryQuotes) = carry(c)
+        val books = merge(collect(c), carryBooks)
+        val quotes = unionQuotes(QuoteStore.all(c), carryQuotes)
+        setCarry(c, books, quotes)
+        File(c.cacheDir, FILE_NAME).apply {
+            writeText(root(books, quotes).toString(), Charsets.UTF_8)
+        }
+    }.getOrNull()
+
+    /** Файл, принесённый вручную. */
+    fun importBytes(c: Context, bytes: ByteArray): Result {
+        if (!running.compareAndSet(false, true)) return Result(0, 0, 0, null)
+        try {
+            val remote = parse(String(bytes, Charsets.UTF_8))
+                ?: return finish(c, Result(0, 0, 0, c.getString(R.string.sync_bad_file)))
+            val merged = merge(collect(c), remote.first)
+            val (got, sent) = apply(c, merged, remote.first)
+            setCarry(c, merged, unionQuotes(QuoteStore.all(c), remote.second))
+            return finish(c, Result(got, sent, countNewQuotes(c, remote.second), null))
+        } catch (e: Exception) {
+            return finish(c, Result(0, 0, 0, e.message ?: c.getString(R.string.sync_bad_file)))
+        } finally {
+            running.set(false)
+        }
+    }
+
+    /** Чужие записи, которые мы помним с прошлого раза. */
+    private fun carry(c: Context): Pair<List<SBook>, List<Quote>> {
+        val raw = prefs(c).getString(KEY_CARRY, null)
+            ?: return emptyList<SBook>() to emptyList()
+        return parse(raw) ?: (emptyList<SBook>() to emptyList())
+    }
+
+    private fun setCarry(c: Context, books: List<SBook>, quotes: List<Quote>) {
+        prefs(c).edit().putString(KEY_CARRY, root(books, quotes).toString()).apply()
     }
 
     private fun finish(c: Context, r: Result): Result {
@@ -298,79 +350,92 @@ object SyncStore {
     private fun parse(text: String): Pair<List<SBook>, List<Quote>>? = runCatching {
         val o = JSONObject(text)
         if (o.optString("kind") != KIND) return@runCatching null
-        val books = ArrayList<SBook>()
-        o.optJSONArray("books")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val b = arr.getJSONObject(i)
-                val bm = ArrayList<Bm>()
-                b.optJSONArray("bm")?.let { ba ->
-                    for (j in 0 until ba.length()) {
-                        val bo = ba.getJSONObject(j)
-                        bm.add(Bm(bo.optInt("ch"), bo.optInt("s"), bo.optString("t")))
-                    }
-                }
-                val k = b.optString("key")
-                if (k.isBlank()) continue
-                books.add(SBook(
-                    key = k,
-                    title = b.optString("title").ifBlank { null },
-                    author = b.optString("author").ifBlank { null },
-                    status = b.optInt("status"),
-                    chapter = b.optInt("chapter"),
-                    sentence = b.optInt("sentence"),
-                    readPct = b.optInt("readPct"),
-                    favorite = b.optBoolean("favorite"),
-                    at = b.optLong("at"),
-                    bm = bm,
-                ))
-            }
-        }
-        val quotes = ArrayList<Quote>()
-        o.optJSONArray("quotes")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                runCatching { quotes.add(Quote.fromJson(arr.getJSONObject(i))) }
-            }
-        }
-        books to quotes
+        parseBooks(o.optJSONArray("books")) to parseQuotes(o.optJSONArray("quotes"))
     }.getOrNull()
+
+    private fun parseBooks(arr: JSONArray?): List<SBook> {
+        if (arr == null) return emptyList()
+        val books = ArrayList<SBook>()
+        for (i in 0 until arr.length()) {
+            val b = arr.getJSONObject(i)
+            val bm = ArrayList<Bm>()
+            b.optJSONArray("bm")?.let { ba ->
+                for (j in 0 until ba.length()) {
+                    val bo = ba.getJSONObject(j)
+                    bm.add(Bm(bo.optInt("ch"), bo.optInt("s"), bo.optString("t")))
+                }
+            }
+            val k = b.optString("key")
+            if (k.isBlank()) continue
+            books.add(SBook(
+                key = k,
+                title = b.optString("title").ifBlank { null },
+                author = b.optString("author").ifBlank { null },
+                status = b.optInt("status"),
+                chapter = b.optInt("chapter"),
+                sentence = b.optInt("sentence"),
+                readPct = b.optInt("readPct"),
+                favorite = b.optBoolean("favorite"),
+                at = b.optLong("at"),
+                bm = bm,
+            ))
+        }
+        return books
+    }
+
+    private fun parseQuotes(arr: JSONArray?): List<Quote> {
+        if (arr == null) return emptyList()
+        val quotes = ArrayList<Quote>()
+        for (i in 0 until arr.length()) {
+            runCatching { quotes.add(Quote.fromJson(arr.getJSONObject(i))) }
+        }
+        return quotes
+    }
+
+    /** Цитаты — объединение по id: чужую не теряем, свою не отдаём дважды. */
+    private fun unionQuotes(local: List<Quote>, remote: List<Quote>): List<Quote> {
+        val byId = LinkedHashMap<String, Quote>()
+        local.forEach { byId[it.id] = it }
+        remote.forEach { byId.putIfAbsent(it.id, it) }
+        return byId.values.toList()
+    }
 
     /** Пишем объединение: свои книги + чужие (в том числе те, которых у нас нет) +
      *  цитаты, объединённые по id. */
     private fun writeRemote(c: Context, tree: Uri, books: List<SBook>, quotes: List<Quote>): Boolean {
-        val have = QuoteStore.all(c)
-        val byId = LinkedHashMap<String, Quote>()
-        have.forEach { byId[it.id] = it }
-        quotes.forEach { byId.putIfAbsent(it.id, it) }
+        val merged = root(books, unionQuotes(QuoteStore.all(c), quotes))
+        return writeFile(c, tree, merged.toString().toByteArray(Charsets.UTF_8))
+    }
 
-        val root = JSONObject().apply {
-            put("app", "BookVoice")
-            put("kind", KIND)
-            put("version", VERSION)
-            put("device", deviceName())
-            put("updatedAt", System.currentTimeMillis())
-            put("books", JSONArray().apply {
-                books.forEach { b ->
-                    put(JSONObject().apply {
-                        put("key", b.key)
-                        b.title?.let { put("title", it) }
-                        b.author?.let { put("author", it) }
-                        put("status", b.status)
-                        put("chapter", b.chapter)
-                        put("sentence", b.sentence)
-                        put("readPct", b.readPct)
-                        put("favorite", b.favorite)
-                        put("at", b.at)
-                        put("bm", JSONArray().apply {
-                            b.bm.forEach { m ->
-                                put(JSONObject().put("ch", m.ch).put("s", m.s).put("t", m.t))
-                            }
-                        })
+    /** Содержимое файла синхронизации. Одно и то же и для облачной папки, и для
+     *  файла, который уносят руками (msg6086). */
+    private fun root(books: List<SBook>, quotes: List<Quote>): JSONObject = JSONObject().apply {
+        put("app", "BookVoice")
+        put("kind", KIND)
+        put("version", VERSION)
+        put("device", deviceName())
+        put("updatedAt", System.currentTimeMillis())
+        put("books", JSONArray().apply {
+            books.forEach { b ->
+                put(JSONObject().apply {
+                    put("key", b.key)
+                    b.title?.let { put("title", it) }
+                    b.author?.let { put("author", it) }
+                    put("status", b.status)
+                    put("chapter", b.chapter)
+                    put("sentence", b.sentence)
+                    put("readPct", b.readPct)
+                    put("favorite", b.favorite)
+                    put("at", b.at)
+                    put("bm", JSONArray().apply {
+                        b.bm.forEach { m ->
+                            put(JSONObject().put("ch", m.ch).put("s", m.s).put("t", m.t))
+                        }
                     })
-                }
-            })
-            put("quotes", JSONArray().apply { byId.values.forEach { put(it.toJson()) } })
-        }
-        return writeFile(c, tree, root.toString().toByteArray(Charsets.UTF_8))
+                })
+            }
+        })
+        put("quotes", JSONArray().apply { quotes.forEach { put(it.toJson()) } })
     }
 
     private fun deviceName(): String =

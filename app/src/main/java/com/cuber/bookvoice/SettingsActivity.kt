@@ -1180,6 +1180,11 @@ class SettingsActivity(private val act: SectionActivity) {
         addCheck(R.string.sync_title, SyncStore.KEY_ON, false) { refreshRows() }
         syncDirRow = addValueButton { pickSyncDir() }
         addButton(getString(R.string.sync_now)) { runSyncNow() }
+        // Ручной путь (msg6086): облака на телефоне может не быть вовсе, и без
+        // этих двух кнопок синхронизация тогда недоступна совсем.
+        addButton(getString(R.string.sync_send)) { sendSyncFile() }
+        addButton(getString(R.string.sync_get)) { openSyncFilePicker() }
+        addHint(getString(R.string.sync_manual_hint))
         syncLastRow = addValueText()
         addHint(getString(R.string.sync_hint))
     }
@@ -1973,6 +1978,54 @@ class SettingsActivity(private val act: SectionActivity) {
             act.runOnUiThread {
                 // Текст отчёта берём из SyncStore — тот же, что ложится в строку
                 // «Последняя синхронизация»: одно место, один текст.
+                toast(SyncStore.lastResult(act) ?: getString(R.string.sync_same))
+                refreshRows()
+            }
+        }.start()
+    }
+
+    /** Ручной путь: унести файл синхронизации самому (msg6086) — «Поделиться»
+     *  тем же способом, что и резервная копия. Нужен, когда облака нет вовсе. */
+    private fun sendSyncFile() {
+        val f = SyncStore.exportFile(act)
+        if (f == null) {
+            toast(getString(R.string.sync_share_fail))
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(act, "$packageName.fileprovider", f)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, f.name)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, getString(R.string.sync_send)))
+        } catch (e: Exception) {
+            Diag.log(act, "sync", "ошибка отправки файла синхронизации: ${e.message}")
+            toast(getString(R.string.sync_share_fail))
+        }
+    }
+
+    /** Ручной путь: принять файл, принесённый из Telegram или из проводника. */
+    private fun openSyncFilePicker() {
+        act.openDocPicker(arrayOf("application/json", "text/plain", "*/*")) { uri ->
+            if (uri != null) importSyncFile(uri)
+        }
+    }
+
+    private fun importSyncFile(uri: Uri) {
+        val bytes = runCatching {
+            contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }.getOrNull()
+        if (bytes == null || bytes.isEmpty()) {
+            toast(getString(R.string.sync_pick_fail))
+            return
+        }
+        toast(getString(R.string.sync_now))
+        Thread {
+            SyncStore.importBytes(act, bytes)
+            act.runOnUiThread {
                 toast(SyncStore.lastResult(act) ?: getString(R.string.sync_same))
                 refreshRows()
             }
