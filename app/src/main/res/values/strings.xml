@@ -922,6 +922,21 @@
     <string name="sync_err_no_dir">Папка синхронизации не выбрана</string>
     <string name="sync_err_write">Не получилось записать файл синхронизации в папку</string>
     <string name="sync_need_folder">Сначала выбери папку синхронизации — ту же, что на втором устройстве</string>
+    <string name="sync_dir_yandex">Яндекс.Диск, папка приложения</string>
+    <string name="yandex_title">Яндекс.Диск</string>
+    <string name="yandex_on">подключён (%1$s)</string>
+    <string name="yandex_on_plain">подключён</string>
+    <string name="yandex_off_state">не подключён, нажми, чтобы войти</string>
+    <string name="yandex_off">Отключить Яндекс.Диск</string>
+    <string name="yandex_off_done">Яндекс.Диск отключён</string>
+    <string name="yandex_opening">Открываю страницу входа в Яндекс</string>
+    <string name="yandex_no_browser">Не нашёл браузер, чтобы войти в Яндекс</string>
+    <string name="yandex_login_ok">Вход в Яндекс выполнен</string>
+    <string name="yandex_login_fail">Войти в Яндекс не получилось</string>
+    <string name="yandex_no_token">Яндекс.Диск не подключён</string>
+    <string name="yandex_need_login">Яндекс требует войти заново — нажми строку «Яндекс.Диск»</string>
+    <string name="yandex_err">Яндекс.Диск: %1$s</string>
+    <string name="yandex_used">Синхронизация идёт через Яндекс.Диск — папка не нужна</string>
 
     <!-- 0.3.42: отмена перехода — меню «⋮ Ещё» в читалке (#101) -->
     <string name="reader_more_cd">Ещё</string>

@@ -128,6 +128,8 @@ class SettingsActivity(private val act: SectionActivity) {
     // «последняя синхронизация». Сам выключатель — обычная галочка.
     private var syncDirRow: Button? = null
     private var syncLastRow: TextView? = null
+    // msg6114: строка входа в Яндекс.Диск — рекомендованный путь синхронизации.
+    private var yandexRow: Button? = null
     // #57: галочка «Бесшовная передача» — при альтернативном способе озвучки
     // становится недоступной (она в этом режиме не работает).
     // #70 (msg5503/5511): движок, язык и голос — три строки-значения вместо одной
@@ -252,6 +254,9 @@ class SettingsActivity(private val act: SectionActivity) {
     fun resume(byTab: Boolean) {
         val firstShow = !contentFocusedOnce
         contentFocusedOnce = true
+        // Возврат из браузера после входа в Яндекс (msg6114): строка «Яндекс.Диск»
+        // обязана показать новое состояние сразу, а не после перезахода в раздел.
+        if (group == Group.LIBRARY) refreshRows()
         if (byTab || firstShow) {
             // byTab (первый показ): фокус на заголовок после паузы — окно
             // показалось, TalkBack отпустил нажатый элемент. Первый показ не по
@@ -1178,6 +1183,10 @@ class SettingsActivity(private val act: SectionActivity) {
         // молча, а тут он должен находиться.
         addHeading(getString(R.string.sync_title))
         addCheck(R.string.sync_title, SyncStore.KEY_ON, false) { refreshRows() }
+        // Вход в Яндекс (msg6114) — первый и главный путь: своя папка на Диске
+        // заводится сама, выбирать папку не нужно, облачное приложение на телефоне
+        // не нужно тоже. Строка ниже (папка) остаётся для тех, у кого аккаунта нет.
+        yandexRow = addValueButton { yandexAction() }
         syncDirRow = addValueButton { pickSyncDir() }
         addButton(getString(R.string.sync_now)) { runSyncNow() }
         // Ручной путь (msg6086): облака на телефоне может не быть вовсе, и без
@@ -1510,7 +1519,11 @@ class SettingsActivity(private val act: SectionActivity) {
             if (dir == null) getString(R.string.backup_dir_none) else folderLabel(dir)
         backupAutoRow?.text = getString(R.string.backup_auto_title) + ": " + backupAutoLabel()
         // msg6046…6078: папка синхронизации и след последнего прогона.
-        syncDirRow?.text = getString(R.string.sync_dir_title) + ": " + syncDirLabel()
+        // msg6114: при выполненном входе в Яндекс папка не нужна вовсе — говорим
+        // об этом прямо, иначе человек пойдёт выбирать папку, которая не работает.
+        yandexRow?.text = yandexLabel()
+        syncDirRow?.text = getString(R.string.sync_dir_title) + ": " +
+            if (YandexDisk.connected(act)) getString(R.string.sync_dir_yandex) else syncDirLabel()
         syncLastRow?.text = getString(R.string.sync_last_title) + ": " +
             (SyncStore.lastResult(act) ?: getString(R.string.sync_last_never))
         updateModeRow?.text = getString(R.string.update_mode_title) + ": " + updateModeLabel()
@@ -1927,13 +1940,54 @@ class SettingsActivity(private val act: SectionActivity) {
         probeBackupDir(tree)
     }
 
-    // ---------------- Синхронизация (msg6046…6078) ----------------
+    // ---------------- Синхронизация (msg6046…6114) ----------------
+
+    /** Строка «Яндекс.Диск» на экране: кто вошёл или предложение войти. */
+    private fun yandexLabel(): String {
+        val who = YandexDisk.user(act)
+        val state = when {
+            who != null -> getString(R.string.yandex_on, who)
+            YandexDisk.connected(act) -> getString(R.string.yandex_on_plain)
+            else -> getString(R.string.yandex_off_state)
+        }
+        return getString(R.string.yandex_title) + ": " + state
+    }
+
+    /** Вход в Яндекс или отказ от него. Пароль владелец вводит на странице
+     *  Яндекса в своём браузере — через нас он не проходит и у нас не хранится;
+     *  у нас остаётся только токен доступа. */
+    private fun yandexAction() {
+        if (YandexDisk.connected(act)) {
+            MaterialAlertDialogBuilder(act)
+                .setTitle(R.string.yandex_title)
+                .setItems(arrayOf(getString(R.string.yandex_off))) { _, _ ->
+                    YandexDisk.reset(act)
+                    toast(getString(R.string.yandex_off_done))
+                    refreshRows()
+                }
+                .setNegativeButton(R.string.toc_close, null)
+                .show()
+            return
+        }
+        toast(getString(R.string.yandex_opening))
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(YandexDisk.loginUrl(act))))
+        }.onFailure {
+            Diag.log(act, "sync", "не открылся браузер для входа в Яндекс: ${it.message}")
+            toast(getString(R.string.yandex_no_browser))
+        }
+    }
 
     /** Смена папки синхронизации. Папка нужна ровно одна на оба устройства, и
      *  её выбор обойти нельзя: Android не даёт писать в чужое облако без
      *  разрешения. Но если папка уже есть (своя, папка книг в облаке или папка
      *  копий) — молчим и пользуемся ею, лишний выбор не навязываем. */
     private fun pickSyncDir() {
+        if (YandexDisk.connected(act)) {
+            // При входе в Яндекс файл лежит у него, и папка ничего не решает.
+            toast(getString(R.string.yandex_used))
+            return
+        }
         if (SyncStore.folderFor(act) == null) {
             openSyncDirPicker()
         } else {
@@ -1967,7 +2021,7 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Ручной прогон. Работает и при выключенной галочке: галочка отвечает за
      *  фоновую синхронизацию на полке и в читалке, а не за право нажать кнопку. */
     private fun runSyncNow() {
-        if (SyncStore.folderFor(act) == null) {
+        if (!YandexDisk.connected(act) && SyncStore.folderFor(act) == null) {
             toast(getString(R.string.sync_need_folder))
             pickSyncDir()
             return

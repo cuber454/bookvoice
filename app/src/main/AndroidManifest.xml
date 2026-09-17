@@ -224,6 +224,25 @@
             android:name=".QuotesActivity"
             android:exported="false" />
 
+        <!-- Возврат из браузера после входа в Яндекс (msg6114). Адрес
+             bookvoice://oauth открывает система — это единственный intent-filter
+             приложения, ведущий снаружи внутрь. Своего экрана у окна нет (тема
+             полупрозрачная): меняет код на токен в фоне и закрывается, владелец
+             возвращается в Настройки. -->
+        <activity
+            android:name=".YandexAuthActivity"
+            android:exported="true"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="bookvoice" android:host="oauth" />
+            </intent-filter>
+        </activity>
+
         <!-- Медиа-сессия живёт в сервисе, а не в окне — так система отдаёт
              кнопки гарнитуры и «волшебное касание» нам, а не чужому плееру. -->
         <service

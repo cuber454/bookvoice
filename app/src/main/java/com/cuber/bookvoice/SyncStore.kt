@@ -124,6 +124,11 @@ object SyncStore {
     fun sync(c: Context): Result {
         if (!running.compareAndSet(false, true)) return Result(0, 0, 0, null)
         try {
+            // Вход в Яндекс важнее выбранной папки (msg6114): папка приложения на
+            // Диске не требует ни облачного приложения на телефоне, ни выбора —
+            // владелец вошёл, и файл уже лежит где надо. Папка остаётся для тех,
+            // у кого аккаунта нет.
+            if (YandexDisk.connected(c)) return syncYandex(c)
             val tree = folderFor(c)
                 ?: return finish(c, Result(0, 0, 0, c.getString(R.string.sync_err_no_dir)))
             val remote = readRemote(c, tree)?.let { parse(it) }
@@ -140,6 +145,19 @@ object SyncStore {
         } finally {
             running.set(false)
         }
+    }
+
+    /** Прогон через папку приложения на Яндекс.Диске (msg6114). Разбор, слияние и
+     *  запись — те же самые; отличается только место, где лежит файл. */
+    private fun syncYandex(c: Context): Result {
+        val t = YandexDisk.read(c)
+        if (t.error != null) return finish(c, Result(0, 0, 0, t.error))
+        val remote = t.body?.let { parse(it) }
+        val merged = merge(collect(c), remote?.first ?: emptyList())
+        val (got, sent) = apply(c, merged, remote?.first ?: emptyList())
+        val body = root(merged, unionQuotes(QuoteStore.all(c), remote?.second ?: emptyList()))
+        YandexDisk.write(c, body.toString())?.let { return finish(c, Result(0, 0, 0, it)) }
+        return finish(c, Result(got, sent, remote?.second?.let { rq -> countNewQuotes(c, rq) } ?: 0, null))
     }
 
     // ---------------- Ручной путь: файл уносим сами (msg6086) ----------------
