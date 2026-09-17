@@ -1384,6 +1384,13 @@ class LibraryActivity(private val act: SectionActivity) {
     private fun onBookPicked(uri: Uri) {
         val name = externalBookName(uri)
         if (!supportedFileName(name)) {
+            // msg6148: журнал приложения узнаём отдельно — это не «неизвестный
+            // формат», а файл, который мы сами и породили, и у человека есть
+            // готовый путь: Настройки → «Отправить лог».
+            if (name.lowercase(Locale.ROOT).endsWith(".log")) {
+                toast(getString(R.string.open_format_log))
+                return
+            }
             // msg4853: про форматы, которые мы осознанно не читаем (mobi/rtf/
             // doc…), говорим правду — иначе «формат не поддерживается» звучит
             // как «файл битый», хотя он целый, просто не для нас.
@@ -1528,6 +1535,13 @@ class LibraryActivity(private val act: SectionActivity) {
     private fun externalBookName(uri: Uri): String {
         val raw = queryDisplayName(uri) ?: uri.lastPathSegment ?: "book"
         if (supportedFileName(raw)) return raw
+        // msg6148: расширение соседнего формата — это уже ответ, а не «имени без
+        // расширения не дали». Журнал приложения (.log), как и mobi/rtf/doc, по
+        // mime-типу не переодеваем: иначе любой текстовый файл с чужой полки
+        // становится «книгой» и уезжает на полку молча — человек ждал файл, а
+        // получил книгу, которой не просил.
+        val lower = raw.lowercase(Locale.ROOT)
+        if (lower.endsWith(".log") || MainActivity.UNREADABLE_EXTS.any { lower.endsWith(".$it") }) return raw
         val mime: String? = try {
             contentResolver.getType(uri)
         } catch (_: Exception) {
@@ -1571,17 +1585,33 @@ class LibraryActivity(private val act: SectionActivity) {
      *  и внешний файл приходит в onNewIntent, а не в build (msg2799). */
     internal fun handleExternalOpen(intent: Intent?) {
         val action = intent?.action ?: return
-        val uri = when (action) {
-            Intent.ACTION_VIEW -> intent.data
-            // «Поделиться файлом»: тип реального файла (не сообщения-текста)
-            // определяем по наличию EXTRA_STREAM — без него это просто текст,
-            // не файл, игнорируем.
-            Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM)
-            else -> return
-        }
-        if (uri == null) return
+        if (action != Intent.ACTION_VIEW && action != Intent.ACTION_SEND) return
+        // msg6148: ссылка на файл приходит не всегда в data/EXTRA_STREAM — бывает,
+        // что она лежит только в ClipData. Раньше мы в этом случае молча
+        // выходили, и дальше холодный старт сам открывал последнюю книгу: человек
+        // нажал на файл, а получил книгу — и ни слова о том, что файл не забрали.
+        val uri = fileUri(intent)
+        // Внешний запуск гасит авто-открытие последней книги в любом случае: шли
+        // за файлом, а не за продолжением чтения.
         launchWasExternal = true
+        if (uri == null) {
+            Diag.log(act, "activity", "файл снаружи не получен: $action")
+            toast(getString(R.string.external_no_file))
+            return
+        }
         onBookPicked(uri)
+    }
+
+    /** Ссылка на файл из чужого интента: data → EXTRA_STREAM → ClipData. */
+    private fun fileUri(intent: Intent): Uri? {
+        intent.data?.let { return it }
+        // getParcelableExtra бросает ClassCastException, если прислали строку
+        // вместо ссылки (чужое приложение вправе) — падать из-за этого нельзя.
+        runCatching { intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) }
+            .getOrNull()?.let { return it }
+        val clip = intent.clipData ?: return null
+        for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { return it }
+        return null
     }
 
     // ---------------- Долгое нажатие на книгу (меню) ----------------
