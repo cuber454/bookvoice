@@ -896,6 +896,27 @@
     <string name="backup_folder_copied">Копия сохранена в папку копий</string>
     <string name="backup_folder_copy_fail">В папку копий сохранить не вышло — она не разрешает запись. Копия открыта в меню «Поделиться», её можно отправить себе в Telegram</string>
 
+    <!-- msg6046…6078: синхронизация между устройствами -->
+    <string name="sync_title">Синхронизация</string>
+    <string name="sync_on">включена</string>
+    <string name="sync_off">выключена</string>
+    <string name="sync_dir_title">Папка синхронизации</string>
+    <string name="sync_dir_none">не выбрана</string>
+    <string name="sync_dir_cloud">в облаке</string>
+    <string name="sync_dir_local">на телефоне, между устройствами не поедет</string>
+    <string name="sync_dir_saved">Папка синхронизации выбрана</string>
+    <string name="sync_dir_pick">Выбрать папку для синхронизации</string>
+    <string name="sync_dir_change">Сменить папку синхронизации</string>
+    <string name="sync_now">Синхронизировать сейчас</string>
+    <string name="sync_last_title">Последняя синхронизация</string>
+    <string name="sync_last_never">ещё не было</string>
+    <string name="sync_hint">Переносятся места чтения, закладки, цитаты и избранное. Книги и голоса не переносятся: книги должны быть на обоих устройствах, а голоса у каждого телефона свои. Папка должна быть одна и та же на обоих устройствах.</string>
+    <string name="sync_counts">Отправил: %1$d, забрал: %2$d</string>
+    <string name="sync_same">Всё уже совпадает</string>
+    <string name="sync_err_no_dir">Папка синхронизации не выбрана</string>
+    <string name="sync_err_write">Не получилось записать файл синхронизации в папку</string>
+    <string name="sync_need_folder">Сначала выбери папку синхронизации — ту же, что на втором устройстве</string>
+
     <!-- 0.3.42: отмена перехода — меню «⋮ Ещё» в читалке (#101) -->
     <string name="reader_more_cd">Ещё</string>
     <string name="ui_more_title">Кнопка «Ещё»</string>

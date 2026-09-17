@@ -124,6 +124,10 @@ class SettingsActivity(private val act: SectionActivity) {
     private var resetTabsRow: Button? = null
     // Резервная копия (#100): папка и частота (строка-резюме).
     private var backupDirRow: Button? = null
+    // msg6046…6078: синхронизация чтения между устройствами — папка и строка
+    // «последняя синхронизация». Сам выключатель — обычная галочка.
+    private var syncDirRow: Button? = null
+    private var syncLastRow: TextView? = null
     // #57: галочка «Бесшовная передача» — при альтернативном способе озвучки
     // становится недоступной (она в этом режиме не работает).
     // #70 (msg5503/5511): движок, язык и голос — три строки-значения вместо одной
@@ -1166,6 +1170,31 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         backupDirRow = addValueButton { pickBackupDirAction() }
         backupAutoRow = addValueButton { pickBackupAuto() }
+
+        // Синхронизация между устройствами (msg6046…6078). Место — «Библиотека»,
+        // рядом с папкой книг и копиями: это про книги, а не про экран. Галочка
+        // одна: второй «автоматически» не заводим — включено значит и в фоне.
+        // Пункт виден всегда, даже выключенный: спрятанный пункт человек ищет
+        // молча, а тут он должен находиться.
+        addHeading(getString(R.string.sync_title))
+        addCheck(R.string.sync_title, SyncStore.KEY_ON, false) { refreshRows() }
+        syncDirRow = addValueButton { pickSyncDir() }
+        addButton(getString(R.string.sync_now)) { runSyncNow() }
+        syncLastRow = addValueText()
+        addHint(getString(R.string.sync_hint))
+    }
+
+    /** Строка состояния без действия (msg6046…6078): «Последняя синхронизация: …».
+     *  Кнопкой её делать нельзя — нажать нечего, а TalkBack добавил бы «кнопка». */
+    private fun addValueText(): TextView {
+        val tv = TextView(act).apply {
+            textSize = 17f
+            setTextColor(Palette.INK)
+            setLineSpacing(0f, 1.1f)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        content().addView(tv)
+        return tv
     }
 
     /** msg4895: сколько занял разобранный текст и его очистка. */
@@ -1475,6 +1504,10 @@ class SettingsActivity(private val act: SectionActivity) {
         backupDirRow?.text = getString(R.string.backup_dir_title) + ": " +
             if (dir == null) getString(R.string.backup_dir_none) else folderLabel(dir)
         backupAutoRow?.text = getString(R.string.backup_auto_title) + ": " + backupAutoLabel()
+        // msg6046…6078: папка синхронизации и след последнего прогона.
+        syncDirRow?.text = getString(R.string.sync_dir_title) + ": " + syncDirLabel()
+        syncLastRow?.text = getString(R.string.sync_last_title) + ": " +
+            (SyncStore.lastResult(act) ?: getString(R.string.sync_last_never))
         updateModeRow?.text = getString(R.string.update_mode_title) + ": " + updateModeLabel()
 
         cacheRow?.text = cacheText()
@@ -1887,6 +1920,74 @@ class SettingsActivity(private val act: SectionActivity) {
         toast(getString(R.string.backup_dir_saved))
         refreshRows()
         probeBackupDir(tree)
+    }
+
+    // ---------------- Синхронизация (msg6046…6078) ----------------
+
+    /** Смена папки синхронизации. Папка нужна ровно одна на оба устройства, и
+     *  её выбор обойти нельзя: Android не даёт писать в чужое облако без
+     *  разрешения. Но если папка уже есть (своя, папка книг в облаке или папка
+     *  копий) — молчим и пользуемся ею, лишний выбор не навязываем. */
+    private fun pickSyncDir() {
+        if (SyncStore.folderFor(act) == null) {
+            openSyncDirPicker()
+        } else {
+            MaterialAlertDialogBuilder(act)
+                .setTitle(R.string.sync_dir_title)
+                .setItems(arrayOf(getString(R.string.sync_dir_change))) { _, _ ->
+                    openSyncDirPicker()
+                }
+                .setNegativeButton(R.string.toc_close, null)
+                .show()
+        }
+    }
+
+    private fun openSyncDirPicker() {
+        act.openTreePicker { uri -> if (uri != null) onSyncDirPicked(uri) }
+    }
+
+    private fun onSyncDirPicked(tree: Uri) {
+        try {
+            contentResolver.takePersistableUriPermission(
+                tree,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        } catch (_: Exception) {
+        }
+        SyncStore.setDir(act, tree)
+        toast(getString(R.string.sync_dir_saved))
+        refreshRows()
+    }
+
+    /** Ручной прогон. Работает и при выключенной галочке: галочка отвечает за
+     *  фоновую синхронизацию на полке и в читалке, а не за право нажать кнопку. */
+    private fun runSyncNow() {
+        if (SyncStore.folderFor(act) == null) {
+            toast(getString(R.string.sync_need_folder))
+            pickSyncDir()
+            return
+        }
+        toast(getString(R.string.sync_now))
+        Thread {
+            SyncStore.sync(act)
+            act.runOnUiThread {
+                // Текст отчёта берём из SyncStore — тот же, что ложится в строку
+                // «Последняя синхронизация»: одно место, один текст.
+                toast(SyncStore.lastResult(act) ?: getString(R.string.sync_same))
+                refreshRows()
+            }
+        }.start()
+    }
+
+    /** Что показываем в строке папки: имя и — обязательно — облако это или
+     *  память телефона. Папка на телефоне синхронизацией не является, и человек
+     *  должен узнать это из строки, а не из тишины. */
+    private fun syncDirLabel(): String {
+        val tree = SyncStore.folderFor(act) ?: return getString(R.string.sync_dir_none)
+        val name = folderLabel(tree).ifBlank { tree.lastPathSegment ?: "" }
+        return name + ", " + getString(
+            if (SyncStore.isCloud(tree)) R.string.sync_dir_cloud else R.string.sync_dir_local
+        )
     }
 
     /** Проверка, что в выбранную папку реально можно писать автоматически
