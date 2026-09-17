@@ -265,7 +265,11 @@ class SpeechPlayer(context: Context) {
      *  на каждом «продолжить», и до перезапуска движка дело бы не доходило. */
     private var softRetriedText: String? = null
 
-    private class Pending(val kind: Kind, val text: String, val file: File?) {
+    /** [rate] — скорость, с которой этот файл ЗАКАЗАН у движка (msg5979). Держим
+     *  её при заявке, а не читаем текущую при завершении: смена скорости не
+     *  выбрасывает уже готовые заготовки, и фраза из очереди могла быть
+     *  синтезирована на прежней. */
+    private class Pending(val kind: Kind, val text: String, val file: File?, val rate: Float = 1f) {
         enum class Kind { FILE, DIRECT }
         var cancelled = false
     }
@@ -632,7 +636,7 @@ class SpeechPlayer(context: Context) {
         if (t == null || !ready) return
         val file = File(synthDir, "s_${reqSeq}.wav")
         val id = reqSeq++
-        pending[id] = Pending(Pending.Kind.FILE, text, file)
+        pending[id] = Pending(Pending.Kind.FILE, text, file, speed)
         armSynthWatch(text)
         val r = runCatching {
             t.synthesizeToFile(text, null, file, id.toString())
@@ -675,6 +679,16 @@ class SpeechPlayer(context: Context) {
                         "движок отдал пустой звук (${f.length()} байт): «${p.text.take(60)}»"
                     )
                 }
+                // msg5979: заказанная скорость и «сырой» размер файла. По ним
+                // видно, насколько движок ускорился НА САМОМ ДЕЛЕ: при 24 кГц,
+                // 16 бит моно это 48 000 байт в секунду звучания, значит одна и
+                // та же фраза на 2.0 обязана быть вдвое короче, чем на 1.0.
+                // Пишем ДО trimSilence: обрезка краёв отнимает постоянный кусок
+                // и сравнение смазала бы.
+                Diag.log(
+                    appContext, "sound",
+                    "синтез готов: ${f.name} (${f.length()} байт), скорость ${RateSteps.label(p.rate)}"
+                )
                 trimSilence(f)
                 if (p.text == awaitingPlayText) {
                     // Это тот текст, который уже попросили говорить.
