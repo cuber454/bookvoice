@@ -8,6 +8,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 import java.util.Locale
+import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
 /**
@@ -94,7 +95,11 @@ object BookParser {
         }
         // EPUB-метаданные проверяем первыми: иначе zipMeta принял бы
         // META-INF/container.xml за книгу и назвал бы её «container».
-        if (isZip(data)) return epubPeekMeta(data) ?: zipMeta(data)
+        // tryParse обязателен: данные бывают УСЕЧЁННЫМИ (полка читает только
+        // начало файла, см. META_PREFIX), а разбор архива на обрыве бросает
+        // EOFException — см. nextEntry. Разбор метаданных не имеет права ронять
+        // приложение (msg6161).
+        if (isZip(data)) return tryParse { epubPeekMeta(data) ?: zipMeta(data) }
         return when {
             lower.endsWith(".fb2") || lower.endsWith(".xml") ->
                 metaFromText(data.copyOfRange(0, minOf(data.size, META_PREFIX)))
@@ -102,11 +107,25 @@ object BookParser {
         }
     }
 
+    /** Следующая запись архива; null — конец файла ИЛИ обрыв.
+     *  msg6161: полка читает у книги только начало ([META_PREFIX]), поэтому в
+     *  zip-ветку приходит усечённый массив. На обрыве `nextEntry` дочитывает
+     *  остаток текущей записи (`closeEntry`) и бросает EOFException «Unexpected
+     *  end of ZLIB input stream» — раньше оно улетало в сторож падений
+     *  (BookVoiceApp) и клало процесс целиком: приложение перезапускалось,
+     *  полка снова сканировала и падала опять — «падает и запускается по кругу».
+     *  Обрыв для нас просто конец архива: что успели прочитать, то и наше. */
+    private fun nextEntry(zis: ZipInputStream): ZipEntry? = try {
+        zis.nextEntry
+    } catch (_: Exception) {
+        null
+    }
+
     private fun zipMeta(data: ByteArray): BookMeta? {
         var fb2: BookMeta? = null
         var anyTxt: BookMeta? = null
         ZipInputStream(ByteArrayInputStream(data)).use { zis ->
-            var entry = zis.nextEntry
+            var entry = nextEntry(zis)
             while (entry != null && fb2 == null) {
                 if (!entry.isDirectory) {
                     val en = entry.name.lowercase(Locale.ROOT)
@@ -125,7 +144,7 @@ object BookParser {
                         }
                     }
                 }
-                entry = zis.nextEntry
+                entry = nextEntry(zis)
             }
         }
         return fb2 ?: anyTxt
@@ -135,13 +154,18 @@ object BookParser {
         val buf = ByteArray(64 * 1024)
         val out = java.io.ByteArrayOutputStream()
         var total = 0
-        while (total < max) {
-            val n = zis.read(buf, 0, minOf(buf.size, max - total))
-            if (n < 0) break
-            if (n > 0) {
-                out.write(buf, 0, n)
-                total += n
+        try {
+            while (total < max) {
+                val n = zis.read(buf, 0, minOf(buf.size, max - total))
+                if (n < 0) break
+                if (n > 0) {
+                    out.write(buf, 0, n)
+                    total += n
+                }
             }
+        } catch (_: Exception) {
+            // Обрыв записи на усечённом файле (msg6161) — отдаём прочитанное:
+            // метаданные FB2 лежат в начале, их обычно хватает.
         }
         return out.toByteArray()
     }
@@ -406,20 +430,26 @@ object BookParser {
         }
     }
 
-    /** Прочитать только текстовые файлы EPUB (xhtml/opf/ncx) в память. */
+    /** Прочитать только текстовые файлы EPUB (xhtml/opf/ncx) в память.
+     *  Обрыв усечённого файла (msg6161) — не повод падать: отдаём то, что
+     *  успели прочитать, и следующая запись уже не запрашивается (см. [nextEntry]). */
     private fun epubFiles(data: ByteArray): HashMap<String, ByteArray> {
         val files = HashMap<String, ByteArray>()
         ZipInputStream(ByteArrayInputStream(data)).use { zis ->
-            var e = zis.nextEntry
+            var e = nextEntry(zis)
             while (e != null) {
                 if (!e.isDirectory) {
                     val key = normName(e.name)
                     if (key == CONTAINER_PATH || EPUB_TEXT_EXT.any { key.endsWith(it) }) {
-                        val b = zis.readBytes()
+                        val b = try {
+                            zis.readBytes()
+                        } catch (_: Exception) {
+                            ByteArray(0)
+                        }
                         if (b.isNotEmpty()) files[key] = b
                     }
                 }
-                e = zis.nextEntry
+                e = nextEntry(zis)
             }
         }
         return files

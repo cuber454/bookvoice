@@ -1172,7 +1172,18 @@ class LibraryActivity(private val act: SectionActivity) {
     /** Скан в фоне — не вешаем UI, названия из файлов читаем отдельно. */
     private fun scanInBackground(done: (Int) -> Unit) {
         Thread {
-            val added = scanFolderWithMeta()
+            // msg6161: скан — фоновая работа по чужим файлам, и НИ ОДНО исключение
+            // отсюда не должно уходить в сторож падений (BookVoiceApp): тот
+            // записывает лог и убивает процесс целиком. Симптом был такой:
+            // приложение падает, система поднимает его заново, полка снова
+            // сканирует тот же файл и снова падает — «падает и запускается по
+            // кругу». Один битый или нестандартный файл не имеет права ронять
+            // приложение; конкретную причину ловим в разборе метаданных.
+            val added = try {
+                scanFolderWithMeta()
+            } catch (_: Throwable) {
+                0
+            }
             runOnUiThread {
                 if (!act.isFinishing && !act.isDestroyed) done(added)
             }
