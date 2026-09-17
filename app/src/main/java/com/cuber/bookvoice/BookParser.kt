@@ -68,7 +68,16 @@ object BookParser {
 
     // ---------------- Быстрые метаданные (название/автор) ----------------
 
-    data class BookMeta(val title: String?, val author: String?, val annotation: String? = null)
+    data class BookMeta(
+        val title: String?,
+        val author: String?,
+        val annotation: String? = null,
+        // msg6042: серия книги и номер в ней — тег <sequence> внутри <title-info>
+        // (там же, где автор и название). Номер держим строкой: в FB2 он бывает
+        // «1.5» или пустым, а его ещё и показывать словами («книга 2»).
+        val series: String? = null,
+        val seriesNo: String? = null,
+    )
 
     /** Не разбираем всю книгу — только вытаскиваем название, автора и аннотацию
      *  для полки и окна «Информация о книге». */
@@ -109,7 +118,7 @@ object BookParser {
                         if (en.endsWith(".fb2") || en.endsWith(".xml")) {
                             val m = metaFromText(prefix)
                             val title = m?.title?.takeIf { it.isNotBlank() } ?: base
-                            fb2 = BookMeta(title, m?.author, m?.annotation)
+                            fb2 = BookMeta(title, m?.author, m?.annotation, m?.series, m?.seriesNo)
                         } else if (anyTxt == null) {
                             // У TXT названия нет — показываем имя файла внутри архива.
                             anyTxt = BookMeta(base, null)
@@ -164,8 +173,27 @@ object BookParser {
         val ann = annotationRe.find(t)?.let { m ->
             unescape(stripTags(m.groupValues[1])).replace(Regex("\\s+"), " ").trim()
         }?.takeIf { it.isNotEmpty() }
-        if (title == null && author == null && ann == null) return null
-        return BookMeta(title, author, ann)
+        // msg6042: серия. Атрибуты name и number могут стоять в любом порядке,
+        // поэтому тег достаём целиком, а атрибуты ищем в нём по отдельности.
+        // Серия без имени (бывает у самодельных fb2) нам не серия.
+        val seqTag = sequenceTagRe.find(t)?.value
+        val series = seqTag?.let { xmlAttr(it, "name") }?.takeIf { it.isNotBlank() }
+        val seriesNo = if (series == null) null
+        else seqTag?.let { xmlAttr(it, "number") }?.takeIf { it.isNotBlank() }
+        if (title == null && author == null && ann == null && series == null) return null
+        return BookMeta(title, author, ann, series, seriesNo)
+    }
+
+    /** Значение атрибута XML по имени, с раскрытием сущностей. */
+    private fun xmlAttr(tag: String, name: String): String? =
+        Regex("\\b$name\\s*=\\s*[\"']([^\"']*)[\"']", RegexOption.IGNORE_CASE)
+            .find(tag)?.groupValues?.get(1)?.let { unescape(it.trim()) }
+
+    /** Может ли имя файла нести серию: она живёт только в fb2 (и в архиве с
+     *  fb2 внутри). У pdf/docx/txt брать её неоткуда. */
+    fun canCarrySeries(fileName: String): Boolean {
+        val lower = fileName.lowercase(Locale.ROOT)
+        return lower.endsWith(".fb2") || lower.endsWith(".xml") || lower.endsWith(".zip")
     }
 
     internal fun unescape(s: String): String = s
@@ -201,8 +229,12 @@ object BookParser {
         "<annotation[^>]*>(.*?)</annotation>",
         setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
     )
+    /** Тег серии FB2 целиком (атрибуты разбираем отдельно — порядок их свободен). */
+    private val sequenceTagRe = Regex("<sequence\\b[^>]*>", RegexOption.IGNORE_CASE)
 
-    private const val META_PREFIX = 256 * 1024
+    /** Сколько байт начала файла разбираем ради метаданных. internal: тем же
+     *  пределом ограничивает чтение дозаполнение серии на полке (msg6042). */
+    internal const val META_PREFIX = 256 * 1024
 
     internal inline fun <T> tryParse(block: () -> T?): T? = try {
         block()

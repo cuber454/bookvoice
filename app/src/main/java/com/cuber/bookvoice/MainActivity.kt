@@ -780,7 +780,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             // Глобальная нумерация предложений и накопительные слова считаем
             // в фоне — на больших книгах это не должно дёргать интерфейс.
             val prog = doc?.let { computeProgressIndexes(it) }
+            // msg6042: серия книги — дозаполняем запись полки, если её там ещё нет
+            // (скан папки проходит не у всех). Читаем только начало файла и только
+            // пока запись не проверена — см. [seriesFillFor].
+            val seriesUpd = seriesFillFor(uri)
             handler.post {
+                // Запись книги можно обновлять и до проверок ниже: это просто
+                // метаданные полки, к движку и разбору они отношения не имеют.
+                seriesUpd?.let { runCatching { BookStore.upsert(this, it) } }
                 // msg2679: разбор кончился — состояние загрузки снято, дальше
                 // refreshChrome сам решает по факту (есть книга или пусто).
                 bookLoading = false
@@ -991,6 +998,32 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
         return contentResolver.openInputStream(uri)?.use { it.readBytes() }
     }
+
+    /** msg6042: дозаполнить серию книги в записи полки. null — делать нечего:
+     *  записи нет, она уже проверена (в том числе «проверено, серии нет»), формат
+     *  серию не несёт или файл не прочитался. Иначе — готовая запись для upsert.
+     *
+     *  Читаем только начало файла: книга бывает в десятки мегабайт, а серия лежит
+     *  в первых килобайтах. Усечённый архив разобрать нельзя — у книг в архиве
+     *  серия появится от скана папки (там файл читается целиком). */
+    private fun seriesFillFor(uri: Uri): BookRecord? = runCatching {
+        val rec = BookStore.byUri(this, uri.toString()) ?: return@runCatching null
+        if (rec.series != null) return@runCatching null
+        if (!BookParser.canCarrySeries(rec.name)) return@runCatching null
+        val max = BookParser.META_PREFIX
+        val head = contentResolver.openInputStream(uri)?.use { ins ->
+            val buf = ByteArray(max)
+            var total = 0
+            while (total < max) {
+                val n = ins.read(buf, total, max - total)
+                if (n < 0) break
+                total += n
+            }
+            buf.copyOf(total)
+        } ?: return@runCatching null
+        val meta = BookParser.peekMeta(rec.name, head) ?: return@runCatching null
+        rec.copy(series = meta.series ?: "", seriesNo = meta.seriesNo)
+    }.getOrNull()
 
     private fun queryDisplayName(uri: Uri): String? =
         try {

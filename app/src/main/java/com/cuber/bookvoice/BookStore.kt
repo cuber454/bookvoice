@@ -45,6 +45,10 @@ data class BookRecord(
     // Показывается вместо [title]/[name] (см. [displayTitle]); файл и его имя
     // на диске не трогаются. null = своё название не задано.
     val customTitle: String? = null,
+    // msg6042: серия книги и номер в ней (из fb2). null = «ещё не проверяли»,
+    // "" = «проверено, серии нет» — та же разница, что у [annotation].
+    val series: String? = null,
+    val seriesNo: String? = null,
 ) {
     // Своё название важнее метаданных из файла (title), те — важнее имени
     // файла. У ручного названия приоритет и оно не перезаписывается при чтении
@@ -78,6 +82,10 @@ data class BookRecord(
             readPct = o.optInt("readPct"),
             favorite = o.optBoolean("favorite"),
             customTitle = o.optString("customTitle").ifBlank { null },
+            // Пустая строка здесь значима («проверено, серии нет») — в отличие от
+            // названия, её не схлопываем в null (как annotation).
+            series = if (o.has("series")) o.optString("series") else null,
+            seriesNo = o.optString("seriesNo").ifBlank { null },
         )
     }
 
@@ -99,6 +107,8 @@ data class BookRecord(
         put("readPct", readPct)
         put("favorite", favorite)
         customTitle?.let { put("customTitle", it) }
+        series?.let { put("series", it) }
+        seriesNo?.let { put("seriesNo", it) }
     }
 }
 

@@ -698,6 +698,10 @@ class LibraryActivity(private val act: SectionActivity) {
     private fun rowText(rec: BookRecord): String {
         val meta = ArrayList<String>()
         rec.author?.takeIf { it.isNotBlank() }?.let { meta.add(it) }
+        // msg6042: в сортировке по сериям показываем серию — иначе порядок на слух
+        // ничем не объяснён (почему эти книги стоят рядом). В остальных режимах
+        // строку не удлиняем.
+        if (sortMode == SORT_SERIES) seriesRowText(rec)?.let { meta.add(it) }
         // Статус — только в «Все»: в отфильтрованном списке он одинаков у каждой
         // строки и только засоряет озвучку. Прогресс оставляем везде. Метку
         // «в избранном» показываем вне вкладки «Избранное» — там она у всех.
@@ -709,6 +713,16 @@ class LibraryActivity(private val act: SectionActivity) {
         } else {
             rec.displayTitle + "\n" + meta.joinToString(" · ")
         }
+    }
+
+    /** Серия для строки полки: «Серия: Хроники Амбера, книга 2». null — серии
+     *  нет (или запись её ещё не проверяла). Показывается только в сортировке
+     *  по сериям (msg6042). */
+    private fun seriesRowText(rec: BookRecord): String? {
+        val s = rec.series?.takeIf { it.isNotBlank() } ?: return null
+        val no = rec.seriesNo?.takeIf { it.isNotBlank() }
+        return if (no == null) getString(R.string.series_row, s)
+        else getString(R.string.series_row_no, s, no)
     }
 
     /** «прочитано N%» (msg656): дочитанная книга — 100%, у остальных — процент,
@@ -793,9 +807,28 @@ class LibraryActivity(private val act: SectionActivity) {
             SORT_UNFINISHED -> list.sortedWith(
                 compareBy<BookRecord>({ it.status == BookRecord.STATUS_FINISHED }, { titleKey(it) })
             )
+            // msg6042: «по сериям». Сначала книги с серией — серии подряд, внутри
+            // серии по номеру (в fb2 он строкой: «1.5» должен встать между 1 и 2,
+            // поэтому сортируем числом), при равных номерах — по названию. Книги
+            // без серии (в том числе pdf/docx и те fb2, где её не заполнили) —
+            // вниз одним блоком по названию. Так ни одна книга не пропадает.
+            SORT_SERIES -> list.sortedWith(
+                compareBy<BookRecord>(
+                    { it.series.isNullOrBlank() },
+                    { (it.series ?: "").lowercase(Locale.ROOT) },
+                    { seriesNumberKey(it.seriesNo) },
+                    { titleKey(it) },
+                )
+            )
             else -> list.sortedWith(compareBy<BookRecord> { titleKey(it) })
         }
     }
+
+    /** Номер книги в серии как число. Пустой или нечисловой — в конец своей
+     *  серии (MAX_VALUE): «книга без номера» не должна вставать перед первой.
+     *  Запятая как разделитель тоже встречается («1,5»). */
+    private fun seriesNumberKey(no: String?): Double =
+        no?.trim()?.replace(',', '.')?.toDoubleOrNull() ?: Double.MAX_VALUE
 
     /** Размер файла книги в байтах. Тяжело для больших полок — считаем один раз
      *  за сессию (кэш) и только когда нужен (режим «по размеру»). */
@@ -1179,7 +1212,33 @@ class LibraryActivity(private val act: SectionActivity) {
                             } else {
                                 upd.annotation
                             },
+                            // msg6042: файл уже прочитан — берём и серию, если
+                            // формат её несёт. "" = «проверено, серии нет».
+                            series = if (BookParser.canCarrySeries(name)) {
+                                meta.series ?: ""
+                            } else {
+                                upd.series
+                            },
+                            seriesNo = if (BookParser.canCarrySeries(name)) {
+                                meta.seriesNo
+                            } else {
+                                upd.seriesNo
+                            },
                         )
+                    }
+                }
+                // msg6042: дозаполнение серии у записей прошлых версий — своя ветка,
+                // потому что название с автором у них уже есть (выше не читается).
+                // Только начало файла: книга бывает в десятки мегабайт, а серия
+                // лежит в первых килобайтах. Проверенное (в том числе «серии нет»)
+                // больше не перечитываем — иначе скан читал бы весь fb2 на каждой
+                // пробежке.
+                if (upd.series == null && BookParser.canCarrySeries(name)) {
+                    // Без ?.let: присваивание upd внутри лямбды ломает вывод типа
+                    // (smart cast «upd» невозможен — переменная в замыкании).
+                    val m = readMetaHead(uri, name)
+                    if (m != null) {
+                        upd = upd.copy(series = m.series ?: "", seriesNo = m.seriesNo)
                     }
                 }
                 if (upd != existing) BookStore.upsert(act, upd)
@@ -1206,6 +1265,15 @@ class LibraryActivity(private val act: SectionActivity) {
                 } else {
                     null
                 },
+                // msg6042: серия (только у fb2-подобных). Файл уже прочитан ради
+                // названия — отдельного чтения здесь не нужно; "" = проверено,
+                // серии нет.
+                series = if (meta != null && BookParser.canCarrySeries(name)) {
+                    meta.series ?: ""
+                } else {
+                    null
+                },
+                seriesNo = if (meta != null && BookParser.canCarrySeries(name)) meta.seriesNo else null,
                 addedAt = System.currentTimeMillis(),
             ))
             added++
@@ -1236,6 +1304,29 @@ class LibraryActivity(private val act: SectionActivity) {
     private fun readMeta(uri: Uri, name: String): BookParser.BookMeta? {
         val bytes = try {
             contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+        } catch (_: Exception) {
+            return null
+        }
+        return BookParser.peekMeta(name, bytes)
+    }
+
+    /** Начало файла (не весь) — для дозаполнения серии (msg6042). Метаданные fb2
+     *  лежат в первых килобайтах, а книга бывает в десятки мегабайт; читать её
+     *  целиком ради одной строки нельзя. Годится только для fb2/xml: усечённый
+     *  архив не разобрать, там [readMeta] (см. вызов). */
+    private fun readMetaHead(uri: Uri, name: String): BookParser.BookMeta? {
+        val max = BookParser.META_PREFIX
+        val bytes = try {
+            contentResolver.openInputStream(uri)?.use { ins ->
+                val buf = ByteArray(max)
+                var total = 0
+                while (total < max) {
+                    val n = ins.read(buf, total, max - total)
+                    if (n < 0) break
+                    total += n
+                }
+                buf.copyOf(total)
+            } ?: return null
         } catch (_: Exception) {
             return null
         }
@@ -1991,6 +2082,11 @@ class LibraryActivity(private val act: SectionActivity) {
         // порядок по названию (автор→название, размер→название и т.п.).
         internal const val SORT_SIZE = 5
         internal const val SORT_UNFINISHED = 6
+        // msg6042: «по сериям» (Сергей). Серия есть только у fb2 — у pdf/docx её
+        // брать неоткуда, такие книги уходят вниз одним блоком. Новый режим —
+        // в конец: сохранённые в prefs номера прошлых версий должны читаться
+        // прежними режимами (tabSort откатывает неизвестное на «по названию»).
+        internal const val SORT_SERIES = 7
 
         // Персональная сортировка вкладки (msg2713/2717): ключ prefs «sort_tab_<mode>».
         // Ставится долгим удержанием вкладки (см. showSortDialog); пока её нет —
@@ -2000,6 +2096,7 @@ class LibraryActivity(private val act: SectionActivity) {
         /** Варианты сортировки (порядок в диалоге). */
         internal val SORT_CHOICES = intArrayOf(
             SORT_TITLE, SORT_DATE, SORT_AUTHOR, SORT_LASTREAD, SORT_SIZE, SORT_UNFINISHED,
+            SORT_SERIES,
         )
 
         /** Подпись варианта сортировки по его id (не по позиции в списке). */
@@ -2009,6 +2106,7 @@ class LibraryActivity(private val act: SectionActivity) {
             SORT_LASTREAD -> R.string.sort_lastread
             SORT_SIZE -> R.string.sort_size
             SORT_UNFINISHED -> R.string.sort_unfinished
+            SORT_SERIES -> R.string.sort_series
             else -> R.string.sort_title
         }
 

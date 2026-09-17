@@ -65,6 +65,12 @@
     <!-- msg2713/2717: гибкая сортировка по вкладкам — новые режимы и подписи. -->
     <string name="sort_size">По размеру</string>
     <string name="sort_unfinished">Сначала недочитанные</string>
+    <!-- msg6042: сортировка по сериям (Сергей). Серия есть только у fb2, остальные
+         книги в этом режиме стоят внизу блоком; серия показывается в строке книги,
+         иначе порядок на слух ничем не объяснён. -->
+    <string name="sort_series">По сериям</string>
+    <string name="series_row">Серия: %1$s</string>
+    <string name="series_row_no">Серия: %1$s, книга %2$s</string>
     <string name="sort_reset">Как у остальных вкладок (общая)</string>
     <string name="tab_sort_dialog">Сортировка книг вкладки „%1$s“</string>
     <string name="sort_applied">Сортировка: %1$s</string>
