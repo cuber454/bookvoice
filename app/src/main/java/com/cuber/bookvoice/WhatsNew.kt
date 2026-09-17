@@ -56,6 +56,18 @@ object WhatsNew {
             R.string.whats_new_102_9,
             R.string.whats_new_102_10,
         ),
+        // 0.4.43: тексты утверждены Сергеем (msg5969 → «да» msg5983).
+        103 to listOf(
+            R.string.whats_new_103_1,
+            R.string.whats_new_103_2,
+            R.string.whats_new_103_3,
+            R.string.whats_new_103_4,
+            R.string.whats_new_103_5,
+            R.string.whats_new_103_6,
+            R.string.whats_new_103_7,
+            R.string.whats_new_103_8,
+            R.string.whats_new_103_9,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =
