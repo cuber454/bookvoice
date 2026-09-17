@@ -3,7 +3,15 @@
      название крупным и автор под ним. Один фокусный узел — вся карточка; текст
      для TalkBack (что именно озвучить) и клики выставляет BookAdapter в коде.
      Видимые TextView помечены как несущественные для доступности, чтобы
-     TalkBack не спотыкался о них отдельно от карточки. -->
+     TalkBack не спотыкался о них отдельно от карточки.
+
+     msg6183: обрезки по строкам здесь БОЛЬШЕ НЕТ. Было название 3 строки и автор
+     1 строка с ellipsize=end — при крупном шрифте (Настройки → размер текста)
+     в узкую колонку влезало «Николай Юрьеви…» и «Рука на пульсе. Случаи из
+     практики мол…», то есть половина названия. Правило то же, что у строки
+     списка (item_book.xml): текст не прячем, карточка растёт по содержимому.
+     Ущерб от обрезки был только на глаз — диктору уходит contentDescription
+     с полным названием, — но слабовидящему читателю видно именно это. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -21,9 +29,7 @@
         android:id="@+id/tvCardTitle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:ellipsize="end"
         android:importantForAccessibility="no"
-        android:maxLines="3"
         android:textColor="?attr/bvInk"
         android:textSize="16sp"
         android:textStyle="bold" />
@@ -33,9 +39,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="6dp"
-        android:ellipsize="end"
         android:importantForAccessibility="no"
-        android:maxLines="1"
         android:textColor="?attr/bvDim"
         android:textSize="14sp" />
 </LinearLayout>
