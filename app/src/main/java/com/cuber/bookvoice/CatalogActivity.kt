@@ -21,6 +21,7 @@ import android.text.method.LinkMovementMethod
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -247,9 +248,23 @@ class CatalogActivity(private val act: SectionActivity) {
         Diag.log(act, "opds", "экран каталогов, версия $versionName")
         binding.btnSearch.setOnClickListener { toggleSearchPanel() }
         // msg1421: долгий тап (под TalkBack — двойной тап-удержание) — голосовой поиск.
+        // msg6175: перед микрофоном глушим экранного диктора — своё объявление
+        // кнопки («Поиск. Долгое нажатие — голосовой поиск») он читает в тот же
+        // миг, и этот голос уходил в уже открытый микрофон («синтезатор забивает
+        // эфир»). Пауза 400 мс — чтобы interrupt() попал в речь, а не до неё.
         binding.btnSearch.setOnLongClickListener {
             val s = currentFeedSession()?.takeIf { it.searchTemplate != null }
-            if (s == null) false else { startVoiceSearch(s); true }
+            if (s == null) false else {
+                hushScreenReader()
+                Diag.log(act, "voice", "долгое нажатие 🔍: глушу диктора, микрофон через 400 мс")
+                binding.root.postDelayed({
+                    if (currentFeedSession() === s) {
+                        hushScreenReader()
+                        startVoiceSearch(s)
+                    }
+                }, 400)
+                true
+            }
         }
         // msg3214: панель поиска под шапкой — поле в фокусе с клавиатурой, рядом
         // кнопки голосового ввода и «Найти».
@@ -1648,9 +1663,23 @@ class CatalogActivity(private val act: SectionActivity) {
      *
      *  Перед распознаванием тихо ставим фоновое чтение на паузу и убираем
      *  клавиатуру: TTS и стук клавиш в микрофоне испортили бы распознавание. */
+    /** Оборвать текущую речь экранного диктора (msg6175). Нужна там, где мы
+     *  открываем микрофон: диктор объявляет нажатую кнопку словами, и без этого
+     *  его голос попадает в микрофон и глушит начало фразы владельца.
+     *  interrupt() — штатный публичный API, гасит текущую озвучку; диктор,
+     *  который его не слушает, просто продолжит говорить (хуже не станет). */
+    private fun hushScreenReader() {
+        val am = act.getSystemService(Context.ACCESSIBILITY_SERVICE)
+            as? AccessibilityManager ?: return
+        runCatching { am.interrupt() }
+    }
+
     private fun startVoiceSearch(s: FeedSession) {
         MediaSessionService.pause()
         hideKeyboard()
+        // msg6175: любой вход в голосовой поиск начинается с тишины — диктор
+        // не должен говорить в открытый микрофон (кнопка 🎤, долгое нажатие 🔍).
+        hushScreenReader()
         // Своего распознавателя на устройстве нет — остаётся системное окно.
         if (!SpeechRecognizer.isRecognitionAvailable(act)) {
             startDialogRecognition(s)
@@ -1684,6 +1713,9 @@ class CatalogActivity(private val act: SectionActivity) {
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {
                 // Микрофон реально слушает — только теперь зовём говорить.
+                // msg6175: диктор мог начать озвучку уже после нажатия — гасим
+                // ещё раз, чтобы его голос не попал в открытый микрофон.
+                hushScreenReader()
                 SoundFx.listen(act)
                 Diag.log(act, "voice", "микрофон слушает")
             }
