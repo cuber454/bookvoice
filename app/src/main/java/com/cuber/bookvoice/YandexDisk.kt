@@ -56,6 +56,10 @@ object YandexDisk {
      *  не создаёт — [ensureBooks] вызывается перед первой заливкой. */
     private const val BOOKS_DIR = "app:/books"
 
+    /** Куда переезжают книги, удалённые на любом из устройств (msg6142): с Диска
+     *  они не пропадают, а лежат здесь, пока владелец не уберёт их руками. */
+    private const val TRASH_DIR = "app:/BookVoice — удалённое"
+
     private const val KEY_TOKEN = "yandex_token"
     private const val KEY_USER = "yandex_user"
     private const val KEY_VERIFIER = "yandex_verifier"
@@ -250,11 +254,17 @@ object YandexDisk {
 
     /** Завести папку книг. Диск не создаёт родительскую папку сам, а заливка в
      *  несуществующую папку падает. null — папка есть. */
-    fun ensureBooks(c: Context): String? {
+    fun ensureBooks(c: Context): String? = ensureDir(c, BOOKS_DIR)
+
+    /** Завести папку для удалённого (msg6142). Удалённая книга не стирается с
+     *  Диска, а переезжает сюда — владелец может достать её обратно. */
+    fun ensureTrash(c: Context): String? = ensureDir(c, TRASH_DIR)
+
+    private fun ensureDir(c: Context, dir: String): String? {
         val t = token(c) ?: return c.getString(R.string.yandex_no_token)
         return try {
             val url = Uri.parse(API).buildUpon()
-                .appendQueryParameter("path", BOOKS_DIR)
+                .appendQueryParameter("path", dir)
                 .build()
                 .toString()
             val req = Request.Builder().url(url)
@@ -266,6 +276,36 @@ object YandexDisk {
                 when {
                     resp.isSuccessful -> null
                     resp.code == 409 -> null // уже есть — это не ошибка
+                    resp.code == 401 -> c.getString(R.string.yandex_need_login)
+                    else -> c.getString(R.string.yandex_err, reason(body, resp.code))
+                }
+            }
+        } catch (e: Exception) {
+            c.getString(R.string.yandex_err, e.message ?: "")
+        }
+    }
+
+    /** Убрать книгу с Диска в «BookVoice — удалённое» (msg6142). Не стираем:
+     *  владелец всегда может достать книгу из папки руками. 404 — переносить
+     *  нечего, книга уже убрана (второе устройство успело раньше), это не ошибка. */
+    fun moveToTrash(c: Context, name: String): String? {
+        val t = token(c) ?: return c.getString(R.string.yandex_no_token)
+        return try {
+            val url = Uri.parse("$API/move").buildUpon()
+                .appendQueryParameter("from", "$BOOKS_DIR/$name")
+                .appendQueryParameter("path", "$TRASH_DIR/$name")
+                .appendQueryParameter("overwrite", "true")
+                .build()
+                .toString()
+            val req = Request.Builder().url(url)
+                .method("POST", ByteArray(0).toRequestBody(null))
+                .header("Authorization", "OAuth $t")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                when {
+                    resp.isSuccessful -> null
+                    resp.code == 404 -> null
                     resp.code == 401 -> c.getString(R.string.yandex_need_login)
                     else -> c.getString(R.string.yandex_err, reason(body, resp.code))
                 }

@@ -54,6 +54,21 @@ object SyncStore {
 
     private const val KEY_LAST_AT = "sync_last_at"
     private const val KEY_LAST_RESULT = "sync_last_result"
+
+    /** Метки удаления (msg6142): «такую-то книгу удалили тогда-то». Своё «здесь
+     *  книги нет» между устройствами не передаётся — иначе пустая полка второго
+     *  устройства стирала бы полку первого. Едет только явная метка. */
+    private const val KEY_DEL = "sync_del"
+
+    /** Больше двухсот меток не держим: файл синхронизации должен оставаться
+     *  маленьким, а книга, удалённая двести удалений назад, уже никому не
+     *  встретится. Вытесняем самые старые. */
+    private const val DEL_KEEP = 200
+
+    /** Тот же список, что ведёт полка (`hidden_uris` в LibraryActivity): книга,
+     *  убранная по метке, не должна вернуться авто-сканом папки. Ключ обязан
+     *  совпадать с LibraryActivity.KEY_HIDDEN. */
+    private const val KEY_HIDDEN = "hidden_uris"
     /** Что мы знаем о других устройствах (msg6086). Нужно ручному пути: файл
      *  собирается из своей полки, а чужая книга в полку не заводится — без этой
      *  памяти она потерялась бы при отправке файла обратно. */
@@ -140,6 +155,10 @@ object SyncStore {
         val error: String?,
         /** Сколько книг уехало на Диск в этом прогоне (msg6130). */
         val booksUp: Int = 0,
+        /** Сколько книг убрано с полки по метке удаления (msg6142). */
+        val gone: Int = 0,
+        /** Сколько книг на Диске переехало в «BookVoice — удалённое» (msg6142). */
+        val moved: Int = 0,
     )
 
     // ---------------- Прогон ----------------
@@ -156,13 +175,21 @@ object SyncStore {
                 ?: return finish(c, Result(0, 0, 0, c.getString(R.string.sync_err_no_dir)))
             val remote = readRemote(c, tree)?.let { parse(it) }
             val local = collect(c)
-            val merged = merge(local, remote?.first ?: emptyList())
-            val (got, sent) = apply(c, merged, remote?.first ?: emptyList())
-            if (!writeRemote(c, tree, merged, remote?.second ?: emptyList())) {
+            val merged = merge(local, remote?.books ?: emptyList())
+            val (got, sent) = apply(c, merged, remote?.books ?: emptyList())
+            // Удаление — до записи файла и до подсчёта книг (msg6142): убранная
+            // книга не должна ни уехать обратно в файл, ни остаться в плане.
+            val del = unionMarks(marks(c), remote?.del ?: emptyList())
+            saveMarks(c, del)
+            val gone = applyMarks(c, del)
+            if (!writeRemote(c, tree, dropDead(merged, del), remote?.quotes ?: emptyList(), del)) {
                 return finish(c, Result(0, 0, 0, c.getString(R.string.sync_err_write)))
             }
             // Цитаты — второй блок файла (первый — книги).
-            return finish(c, Result(got, sent, remote?.second?.let { rq -> countNewQuotes(c, rq) } ?: 0, null))
+            return finish(c, Result(
+                got, sent, remote?.quotes?.let { rq -> countNewQuotes(c, rq) } ?: 0, null,
+                gone = gone,
+            ))
         } catch (e: Exception) {
             return finish(c, Result(0, 0, 0, e.message ?: c.getString(R.string.sync_err_write)))
         } finally {
@@ -176,14 +203,24 @@ object SyncStore {
         val t = YandexDisk.read(c)
         if (t.error != null) return finish(c, Result(0, 0, 0, t.error))
         val remote = t.body?.let { parse(it) }
-        val merged = merge(collect(c), remote?.first ?: emptyList())
-        val (got, sent) = apply(c, merged, remote?.first ?: emptyList())
-        val body = root(merged, unionQuotes(QuoteStore.all(c), remote?.second ?: emptyList()))
+        val merged = merge(collect(c), remote?.books ?: emptyList())
+        val (got, sent) = apply(c, merged, remote?.books ?: emptyList())
+        // Удаление — до плана книг (msg6142): убранная книга не должна попасть
+        // ни в заливку, ни в забор, ни обратно в файл.
+        val del = unionMarks(marks(c), remote?.del ?: emptyList())
+        saveMarks(c, del)
+        val gone = applyMarks(c, del)
+        val body = root(
+            dropDead(merged, del),
+            unionQuotes(QuoteStore.all(c), remote?.quotes ?: emptyList()),
+            del,
+        )
         YandexDisk.write(c, body.toString())?.let { return finish(c, Result(0, 0, 0, it)) }
         // Книги (msg6130): заливаем то, чего на Диске ещё нет. Забор книг сюда не
         // входит — он тянет десятки мегабайт и на чужом тарифе, и это решение
         // владельца, а не фоновая подробность: книги забираются кнопкой.
         var booksUp = 0
+        var moved = 0
         if (booksOn(c)) {
             val plan = planBooks(c)
             val err = plan.error
@@ -194,8 +231,16 @@ object SyncStore {
                 booksUp = n
                 if (upErr != null) Diag.log(c, "sync", "книга не залилась: $upErr")
             }
+            if (err == null) {
+                val (m, mvErr) = moveDeleted(c)
+                moved = m
+                if (mvErr != null) Diag.log(c, "sync", "удалённая книга на Диске: $mvErr")
+            }
         }
-        return finish(c, Result(got, sent, remote?.second?.let { rq -> countNewQuotes(c, rq) } ?: 0, null, booksUp))
+        return finish(c, Result(
+            got, sent, remote?.quotes?.let { rq -> countNewQuotes(c, rq) } ?: 0, null,
+            booksUp, gone, moved,
+        ))
     }
 
     // ---------------- Книги (msg6130) ----------------
@@ -243,7 +288,10 @@ object SyncStore {
                 if (size > 0) upBytes += size
             }
         }
-        val down = items.list.filter { key(it.name) !in localKeys }
+        // Книгу, удалённую у нас (метка ещё жива), обратно не забираем: на Диске
+        // она лежит только до ближайшей уборки в «BookVoice — удалённое».
+        val gone = marks(c).map { it.key }.toHashSet()
+        val down = items.list.filter { key(it.name) !in localKeys && key(it.name) !in gone }
         var downBytes = 0L
         down.forEach { downBytes += it.size }
         setDiskNew(c, down.size)
@@ -270,6 +318,33 @@ object SyncStore {
         } finally {
             moving.set(false)
         }
+    }
+
+    /** Убираем с Диска файлы удалённых книг: не стираем, а переносим в папку
+     *  «BookVoice — удалённое» — владелец всегда может достать книгу обратно.
+     *  Работает по меткам: файла, о котором мы ничего не знаем, не трогаем. */
+    private fun moveDeleted(c: Context): Pair<Int, String?> {
+        val list = marks(c)
+        if (list.isEmpty()) return 0 to null
+        val items = YandexDisk.listBooks(c)
+        items.error?.let { return 0 to it }
+        val onDisk = items.list.associateBy { key(it.name) }
+        if (onDisk.isEmpty()) return 0 to null
+        var done = 0
+        var dirReady = false
+        for (m in list) {
+            val e = onDisk[m.key] ?: continue
+            if (!dirReady) {
+                val err = YandexDisk.ensureTrash(c)
+                if (err != null) return done to err
+                dirReady = true
+            }
+            val err = YandexDisk.moveToTrash(c, e.name)
+            if (err != null) return done to err
+            done++
+            Diag.log(c, "sync", "книга на Диске убрана в «BookVoice — удалённое»: ${e.name}")
+        }
+        return done to null
     }
 
     /** Забираем с Диска книги, которых у нас нет. Кладём во внутреннюю папку
@@ -340,6 +415,120 @@ object SyncStore {
         }
     }.getOrDefault(0L)
 
+    // ---------------- Удаление по метке (msg6142) ----------------
+    //
+    // «Здесь этой книги нет» между устройствами не передаётся: у второго
+    // устройства полка может быть просто не просканирована, и пустота стёрла бы
+    // книги первого. Поэтому удаление едет явной меткой — «книгу с таким именем
+    // удалили тогда-то». Метка убирает книгу с полки только там, где её не
+    // трогали позже метки: книгу, которую на этом телефоне читали или заново
+    // добавили после удаления, метка не трогает — иначе чужое удаление вырывало
+    // бы книгу из-под читателя. Файл на Диске не стирается: он переезжает в
+    // папку «BookVoice — удалённое».
+
+    /** Одна метка удаления: [key] — имя файла, по которому книги сопоставляются,
+     *  [name] — как книга называлась (для лога и папки на Диске), [at] — когда
+     *  её удалили. */
+    private data class Mark(val key: String, val name: String, val at: Long)
+
+    /** Запомнить удаление книги. Зовёт полка в момент удаления (в том числе
+     *  «Удалить всё из категории»). Метка ставится, только если синхронизация
+     *  включена: без неё она никуда не поедет и только копилась бы в памяти. */
+    fun recordDelete(c: Context, name: String) {
+        if (!enabled(c)) return
+        val k = key(name)
+        if (k.isBlank()) return
+        val marks = marks(c).filterNot { it.key == k } + Mark(k, name, System.currentTimeMillis())
+        saveMarks(c, marks)
+        Diag.log(c, "sync", "книга удалена, метка для второго устройства: $name")
+    }
+
+    /** Метки, которые мы помним. Лежат в настройках, а не только в файле: между
+     *  прогонами файл может быть недоступен (нет сети, нет папки), а удаление уже
+     *  случилось и должно уехать. */
+    private fun marks(c: Context): List<Mark> {
+        val raw = prefs(c).getString(KEY_DEL, null) ?: return emptyList()
+        return parseMarks(runCatching { JSONArray(raw) }.getOrNull())
+    }
+
+    private fun saveMarks(c: Context, list: List<Mark>) {
+        val arr = JSONArray()
+        list.sortedByDescending { it.at }.take(DEL_KEEP).forEach { m ->
+            arr.put(JSONObject().put("key", m.key).put("name", m.name).put("at", m.at))
+        }
+        prefs(c).edit().putString(KEY_DEL, arr.toString()).apply()
+    }
+
+    private fun parseMarks(arr: JSONArray?): List<Mark> {
+        if (arr == null) return emptyList()
+        val out = ArrayList<Mark>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val k = o.optString("key")
+            if (k.isBlank()) continue
+            out.add(Mark(k, o.optString("name").ifBlank { k }, o.optLong("at")))
+        }
+        return out
+    }
+
+    /** Метки двух устройств: по одной на книгу, побеждает более поздняя. */
+    private fun unionMarks(a: List<Mark>, b: List<Mark>): List<Mark> {
+        val byKey = LinkedHashMap<String, Mark>()
+        (a + b).forEach { m ->
+            val old = byKey[m.key]
+            if (old == null || m.at > old.at) byKey[m.key] = m
+        }
+        return byKey.values.sortedByDescending { it.at }.take(DEL_KEEP)
+    }
+
+    /** Применяем метки к полке: убираем те книги, которых мы не касались позже
+     *  метки. Возвращает, сколько убрано. */
+    private fun applyMarks(c: Context, marks: List<Mark>): Int {
+        if (marks.isEmpty()) return 0
+        val byKey = marks.associateBy { it.key }
+        var n = 0
+        for (rec in BookStore.all(c)) {
+            val m = byKey[key(rec.name)] ?: continue
+            if (maxOf(rec.lastOpenedAt, rec.addedAt) >= m.at) continue
+            BookStore.remove(c, rec.uri)
+            // Свой скачанный файл (каталог кладёт книги во внутреннюю папку)
+            // убираем вместе с записью: он наш, а не владельца, и без записи он
+            // был бы мусором. Файл в папке владельца не трогаем — его удаляет
+            // только явное «удалить с файлом» на самом устройстве.
+            if (rec.uri.startsWith("file:")) {
+                val f = Uri.parse(rec.uri).path?.let { File(it) }
+                if (f != null && f.path.startsWith(c.filesDir.path)) {
+                    runCatching { f.delete() }
+                }
+            }
+            BookCache.remove(c, Uri.parse(rec.uri))
+            hideFromScan(c, rec.uri)
+            n++
+            Diag.log(c, "sync", "книга убрана с полки по метке удаления: ${rec.name}")
+        }
+        return n
+    }
+
+    /** Книга, убитая меткой, в файл не пишется: память о ней — сама метка, а
+     *  запись с местом чтения только звала бы её обратно. */
+    private fun dropDead(books: List<SBook>, marks: List<Mark>): List<SBook> {
+        if (marks.isEmpty()) return books
+        val byKey = marks.associateBy { it.key }
+        return books.filter { b ->
+            val m = byKey[b.key] ?: return@filter true
+            b.at >= m.at
+        }
+    }
+
+    /** Убранные книги прячем от авто-скана: файл-то в папке остался, и скан
+     *  вернул бы книгу на полку следующей же строкой. Тот же список, что ведёт
+     *  полка (KEY_HIDDEN в LibraryActivity). */
+    private fun hideFromScan(c: Context, uri: String) {
+        val p = prefs(c)
+        val set = (p.getStringSet(KEY_HIDDEN, null) ?: emptySet()).toMutableSet()
+        if (set.add(uri)) p.edit().putStringSet(KEY_HIDDEN, set).apply()
+    }
+
     // ---------------- Ручной путь: файл уносим сами (msg6086) ----------------
     //
     // Для случая, когда облака на телефоне нет вовсе: файл синхронизации
@@ -350,12 +539,13 @@ object SyncStore {
     /** Собирает файл синхронизации во временный файл и отдаёт его наружу.
      *  null — не вышло записать. */
     fun exportFile(c: Context): File? = runCatching {
-        val (carryBooks, carryQuotes) = carry(c)
-        val books = merge(collect(c), carryBooks)
-        val quotes = unionQuotes(QuoteStore.all(c), carryQuotes)
-        setCarry(c, books, quotes)
+        val carried = carry(c)
+        val del = unionMarks(marks(c), carried.del)
+        val books = dropDead(merge(collect(c), carried.books), del)
+        val quotes = unionQuotes(QuoteStore.all(c), carried.quotes)
+        setCarry(c, books, quotes, del)
         File(c.cacheDir, FILE_NAME).apply {
-            writeText(root(books, quotes).toString(), Charsets.UTF_8)
+            writeText(root(books, quotes, del).toString(), Charsets.UTF_8)
         }
     }.getOrNull()
 
@@ -365,10 +555,17 @@ object SyncStore {
         try {
             val remote = parse(String(bytes, Charsets.UTF_8))
                 ?: return finish(c, Result(0, 0, 0, c.getString(R.string.sync_bad_file)))
-            val merged = merge(collect(c), remote.first)
-            val (got, sent) = apply(c, merged, remote.first)
-            setCarry(c, merged, unionQuotes(QuoteStore.all(c), remote.second))
-            return finish(c, Result(got, sent, countNewQuotes(c, remote.second), null))
+            val merged = merge(collect(c), remote.books)
+            val (got, sent) = apply(c, merged, remote.books)
+            // Удаление едет и ручным файлом (msg6142): метки объединяем, убранное
+            // убираем, мёртвые записи в файл не пишем.
+            val del = unionMarks(marks(c), remote.del)
+            saveMarks(c, del)
+            val gone = applyMarks(c, del)
+            setCarry(c, merged, unionQuotes(QuoteStore.all(c), remote.quotes), del)
+            return finish(c, Result(
+                got, sent, countNewQuotes(c, remote.quotes), null, gone = gone,
+            ))
         } catch (e: Exception) {
             return finish(c, Result(0, 0, 0, e.message ?: c.getString(R.string.sync_bad_file)))
         } finally {
@@ -376,27 +573,38 @@ object SyncStore {
         }
     }
 
-    /** Чужие записи, которые мы помним с прошлого раза. */
-    private fun carry(c: Context): Pair<List<SBook>, List<Quote>> {
-        val raw = prefs(c).getString(KEY_CARRY, null)
-            ?: return emptyList<SBook>() to emptyList()
-        return parse(raw) ?: (emptyList<SBook>() to emptyList())
+    /** Чужие записи, которые мы помним с прошлого раза, — вместе с метками
+     *  удаления: книга, удалённая на другом устройстве, не должна вернуться
+     *  из ручного файла. Пустой [Content], если памяти ещё нет или она не
+     *  читается. */
+    private fun carry(c: Context): Content {
+        val raw = prefs(c).getString(KEY_CARRY, null) ?: return Content()
+        return parse(raw) ?: Content()
     }
 
-    private fun setCarry(c: Context, books: List<SBook>, quotes: List<Quote>) {
-        prefs(c).edit().putString(KEY_CARRY, root(books, quotes).toString()).apply()
+    private fun setCarry(c: Context, books: List<SBook>, quotes: List<Quote>, del: List<Mark>) {
+        prefs(c).edit().putString(KEY_CARRY, root(books, quotes, del).toString()).apply()
     }
 
     private fun finish(c: Context, r: Result): Result {
         var text = when {
             r.error != null -> r.error
-            r.got == 0 && r.sent == 0 && r.booksUp == 0 -> c.getString(R.string.sync_same)
+            r.got == 0 && r.sent == 0 && r.booksUp == 0 && r.gone == 0 ->
+                c.getString(R.string.sync_same)
             else -> c.getString(R.string.sync_counts, r.sent, r.got)
         }
         // Книги — отдельной строкой: «отправил 3, забрал 1» про места чтения, и
         // молчать о залитых книгах нельзя (владелец ждёт их появления на Диске).
         if (r.error == null && r.booksUp > 0) {
             text += " " + c.getString(R.string.sync_books_pushed, r.booksUp)
+        }
+        // Удалённое называем вслух: книга пропала с полки не сама, а потому что
+        // её удалили на другом устройстве (msg6142).
+        if (r.error == null && r.gone > 0) {
+            text += " " + c.getString(R.string.sync_gone, r.gone)
+        }
+        if (r.error == null && r.moved > 0) {
+            text += " " + c.getString(R.string.sync_moved, r.moved)
         }
         prefs(c).edit()
             .putLong(KEY_LAST_AT, System.currentTimeMillis())
@@ -550,10 +758,21 @@ object SyncStore {
 
     // ---------------- Файл ----------------
 
-    private fun parse(text: String): Pair<List<SBook>, List<Quote>>? = runCatching {
+    /** Разобранный файл синхронизации: книги, цитаты и метки удаления. */
+    private data class Content(
+        val books: List<SBook> = emptyList(),
+        val quotes: List<Quote> = emptyList(),
+        val del: List<Mark> = emptyList(),
+    )
+
+    private fun parse(text: String): Content? = runCatching {
         val o = JSONObject(text)
         if (o.optString("kind") != KIND) return@runCatching null
-        parseBooks(o.optJSONArray("books")) to parseQuotes(o.optJSONArray("quotes"))
+        Content(
+            parseBooks(o.optJSONArray("books")),
+            parseQuotes(o.optJSONArray("quotes")),
+            parseMarks(o.optJSONArray("del")),
+        )
     }.getOrNull()
 
     private fun parseBooks(arr: JSONArray?): List<SBook> {
@@ -605,14 +824,16 @@ object SyncStore {
 
     /** Пишем объединение: свои книги + чужие (в том числе те, которых у нас нет) +
      *  цитаты, объединённые по id. */
-    private fun writeRemote(c: Context, tree: Uri, books: List<SBook>, quotes: List<Quote>): Boolean {
-        val merged = root(books, unionQuotes(QuoteStore.all(c), quotes))
+    private fun writeRemote(
+        c: Context, tree: Uri, books: List<SBook>, quotes: List<Quote>, del: List<Mark>,
+    ): Boolean {
+        val merged = root(books, unionQuotes(QuoteStore.all(c), quotes), del)
         return writeFile(c, tree, merged.toString().toByteArray(Charsets.UTF_8))
     }
 
     /** Содержимое файла синхронизации. Одно и то же и для облачной папки, и для
      *  файла, который уносят руками (msg6086). */
-    private fun root(books: List<SBook>, quotes: List<Quote>): JSONObject = JSONObject().apply {
+    private fun root(books: List<SBook>, quotes: List<Quote>, del: List<Mark>): JSONObject = JSONObject().apply {
         put("app", "BookVoice")
         put("kind", KIND)
         put("version", VERSION)
@@ -639,6 +860,15 @@ object SyncStore {
             }
         })
         put("quotes", JSONArray().apply { quotes.forEach { put(it.toJson()) } })
+        // Метки удаления (msg6142) — третий блок. Пустой список не пишем: у тех,
+        // кто удалением ещё не пользовался, файл остаётся прежним.
+        if (del.isNotEmpty()) {
+            put("del", JSONArray().apply {
+                del.forEach { m ->
+                    put(JSONObject().put("key", m.key).put("name", m.name).put("at", m.at))
+                }
+            })
+        }
     }
 
     private fun deviceName(): String =
