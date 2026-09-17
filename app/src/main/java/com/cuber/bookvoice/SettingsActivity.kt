@@ -116,9 +116,6 @@ class SettingsActivity(private val act: SectionActivity) {
     // msg5604: строка-значение «Пауза между фразами» — сколько тишины движка
     // оставлять на стыке предложений (раздел «Чтение»).
     private var pauseKeepRow: Button? = null
-    // #85 (msg5919): строка-переключатель «Останавливать чтение» — выключено /
-    // при включении экрана / при разблокировке (раздел «Чтение» → «Прерывания»).
-    private var pauseOnScreenRow: Button? = null
     // msg5931: строка «Системные кнопки» в разделе «Экран книги» — показывать /
     // скрывать во время чтения / скрывать, пока открыта книга.
     private var readerBarsRow: Button? = null
@@ -560,12 +557,6 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         // #99: останавливать чтение, когда отключаются наушники.
         addCheck(R.string.headphones_pause_title, MainActivity.KEY_PAUSE_HEADSET, true)
-        // #85 (msg5895/5899/5919): включение экрана — тоже вторжение в чтение
-        // извне, поэтому рядом с наушниками. Три состояния строкой-переключателем,
-        // как у таймера сна (msg5919): выключено / при включении экрана / при
-        // разблокировке. Выключено по умолчанию — у тех, кто читает под
-        // погашенным экраном, поведение не должно меняться само.
-        pauseOnScreenRow = addValueButton { cyclePauseOnScreen() }
 
         // msg5711: «Прокрутка» — как лента книги связана с голосом.
         addHeading(getString(R.string.reading_section_scroll))
@@ -1472,7 +1463,6 @@ class SettingsActivity(private val act: SectionActivity) {
         startRewindRow?.text = getString(R.string.start_rewind_title) + ": " + startRewindLabel()
         // msg5604: «Пауза между фразами: <значение>».
         pauseKeepRow?.text = getString(R.string.pause_keep_title) + ": " + pauseKeepLabel()
-        pauseOnScreenRow?.text = getString(R.string.pause_on_screen_title) + ": " + pauseOnScreenLabel()
         readerBarsRow?.text = getString(R.string.reader_bars_title) + ": " + readerBarsLabel()
 
         val hiddenTabs = LibraryActivity.tabsHidden(prefs)
@@ -1622,47 +1612,6 @@ class SettingsActivity(private val act: SectionActivity) {
             else -> R.string.pause_keep_130
         }
     )
-
-    // ---------------- «Останавливать чтение» (#85, msg5919) ----------------
-    // Строка-переключатель в три состояния, как в «Настройках таймера сна»:
-    // касание переводит на следующее значение по кругу, окно не открывается.
-    // Текст строки правится НА МЕСТЕ и проговаривается целиком: пересборка
-    // окна убивала строку под курсором, и новое значение не звучало (msg5005),
-    // а одно название без значения ничего не сказало бы о состоянии.
-
-    /** Порядок перебора: выключено → при включении экрана → при разблокировке. */
-    private val pauseOnScreenValues = intArrayOf(
-        MainActivity.PAUSE_SCREEN_OFF,
-        MainActivity.PAUSE_SCREEN_ON,
-        MainActivity.PAUSE_SCREEN_UNLOCK,
-    )
-
-    private fun pauseOnScreenMode(): Int = prefs.getInt(
-        MainActivity.KEY_PAUSE_ON_SCREEN, MainActivity.PAUSE_SCREEN_OFF
-    ).takeIf { it in pauseOnScreenValues } ?: MainActivity.PAUSE_SCREEN_OFF
-
-    private fun pauseOnScreenLabel(): String = getString(
-        when (pauseOnScreenMode()) {
-            MainActivity.PAUSE_SCREEN_ON -> R.string.pause_on_screen_on
-            MainActivity.PAUSE_SCREEN_UNLOCK -> R.string.pause_on_screen_unlock
-            else -> R.string.pause_on_screen_off
-        }
-    )
-
-    /** Следующее состояние по кругу. Настройка работает сразу: [ScreenOnPause.sync]
-     *  ставит или снимает приёмник, не дожидаясь следующего старта чтения. */
-    private fun cyclePauseOnScreen() {
-        val next = pauseOnScreenValues[
-            (pauseOnScreenValues.indexOf(pauseOnScreenMode()) + 1) % pauseOnScreenValues.size
-        ]
-        prefs.edit().putInt(MainActivity.KEY_PAUSE_ON_SCREEN, next).apply()
-        ScreenOnPause.sync()
-        Diag.log(act, "power", "останавливать чтение: ${pauseOnScreenLabel()}")
-        val row = pauseOnScreenRow ?: return
-        val text = getString(R.string.pause_on_screen_title) + ": " + pauseOnScreenLabel()
-        row.text = text
-        row.announceForAccessibility(text)
-    }
 
     // ---------------- «Системные кнопки» (msg5931) ----------------
     // Та же механика: касание переводит на следующее состояние по кругу, текст
