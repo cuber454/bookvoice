@@ -63,8 +63,8 @@ android {
         // чужого файла (e738fdf, msg6148).
         // 0.4.45: падение по кругу на 0.4.44 (msg6161) — усечённый архив в
         // разборе метаданных полки ронял процесс (5616cda).
-        versionCode = 105
-        versionName = "0.4.45"
+        versionCode = 106
+        versionName = "0.4.46"
     }
 
     signingConfigs {
