@@ -265,6 +265,10 @@ class CatalogActivity(private val act: SectionActivity) {
                 true
             }
         }
+        // msg6288: framework после долгого нажатия рассылает LONG_CLICKED, и
+        // диктор объявляет кнопку второй раз — уже поверх открытого микрофона.
+        // Подсказка о жесте остаётся в подписи кнопки, повтор гасим.
+        A11y.muteLongClickAnnouncement(binding.btnSearch)
         // msg3214: панель поиска под шапкой — поле в фокусе с клавиатурой, рядом
         // кнопки голосового ввода и «Найти».
         binding.etSearch.setOnEditorActionListener { _, actionId, _ ->
@@ -1688,8 +1692,18 @@ class CatalogActivity(private val act: SectionActivity) {
         }
     }
 
-    /** Свой распознаватель (msg4755): микрофон внутри приложения. */
+    /** Свой распознаватель (msg4755): микрофон внутри приложения.
+     *
+     *  msg6288: открываем микрофон только в тишине — диктор объявляет нажатую
+     *  кнопку не в миг жеста, а следом за ним, и его голос приходил в уже
+     *  открытый микрофон. Сначала ждём, пока он смолкнет ([A11y.waitForQuiet]),
+     *  и лишь потом пускаем распознаватель. */
     private fun startOwnRecognition(s: FeedSession) {
+        A11y.waitForQuiet(act) { openOwnRecognition(s) }
+    }
+
+    /** Микрофон: распознаватель и слушатель (см. [startOwnRecognition]). */
+    private fun openOwnRecognition(s: FeedSession) {
         endRecognition()
         voiceFinished = false
         val r = runCatching { SpeechRecognizer.createSpeechRecognizer(act) }.getOrNull()

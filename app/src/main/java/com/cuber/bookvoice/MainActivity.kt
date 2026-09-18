@@ -313,6 +313,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             onSearchLongPress()
             true
         }
+        // msg6288: framework после долгого нажатия рассылает LONG_CLICKED, и
+        // диктор объявляет кнопку второй раз — уже поверх открытого микрофона.
+        A11y.muteLongClickAnnouncement(binding.btnSearch)
         binding.btnSearchGo.setOnClickListener { searchFromField() }
         binding.btnSearchMic.setOnClickListener { startVoiceSearch() }
         binding.btnSearchPrev.setOnClickListener { stepSearch(-1) }
@@ -2177,8 +2180,18 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
 
-    /** Свой распознаватель (msg6270): микрофон внутри приложения. */
+    /** Свой распознаватель (msg6270): микрофон внутри приложения.
+     *
+     *  msg6288: открываем микрофон только в тишине — диктор объявляет нажатую
+     *  кнопку не в миг жеста, а следом за ним, и его голос приходил в уже
+     *  открытый микрофон. Сначала ждём, пока он смолкнет ([A11y.waitForQuiet]),
+     *  и лишь потом пускаем распознаватель. */
     private fun startOwnRecognition() {
+        A11y.waitForQuiet(this) { openOwnRecognition() }
+    }
+
+    /** Микрофон: распознаватель и слушатель (см. [startOwnRecognition]). */
+    private fun openOwnRecognition() {
         endRecognition()
         voiceFinished = false
         val r = runCatching { SpeechRecognizer.createSpeechRecognizer(this) }.getOrNull()
