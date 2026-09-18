@@ -1,0 +1,175 @@
+package com.cuber.bookvoice
+
+import android.content.Context
+import android.graphics.Rect
+import android.os.Bundle
+import android.util.AttributeSet
+import androidx.appcompat.widget.AppCompatTextView
+import androidx.core.view.ViewCompat
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
+import androidx.customview.widget.ExploreByTouchHelper
+
+/**
+ * Абзац книги: обычный текст с переносами по словам, но каждое предложение
+ * внутри — отдельный узел для экранного диктора (msg6322).
+ *
+ * Зачем так. Диктор (TalkBack, Jieshuo) знает гранулярность «знак, слово,
+ * строка, абзац» — предложения в ней нет. Пока лента рисовала каждое
+ * предложение отдельной строкой списка, диктор ходил по предложениям просто
+ * потому, что строка = предложение. А зрячему это давало вид списка: каждое
+ * предложение всегда начиналось с новой строки, перенос через границу
+ * предложения был невозможен.
+ *
+ * Теперь строкой ленты стал абзац (см. [SentenceAdapter]), а предложения
+ * отданы диктору виртуальными узлами: [ExploreByTouchHelper] описывает их
+ * внутри одного TextView. Диктор свайпает по предложениям, зрячий видит
+ * нормальный книжный текст.
+ *
+ * Сам абзац как узел диктору не отдаём (текст хоста гасится,
+ * [ExploreByTouchHelper.onPopulateNodeForHost]): иначе он прочитал бы абзац
+ * целиком, а следом ещё раз по предложениям.
+ *
+ * Если предложения не заданы ([bindSentences] не звали — так эту разметку
+ * переиспользует окно «О программе»), поведение обычное: текст читается
+ * целиком, как у любого TextView.
+ */
+class ParagraphView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = android.R.attr.textViewStyle,
+) : AppCompatTextView(context, attrs, defStyleAttr) {
+
+    /** Начала предложений в [text] (смещения в символах). */
+    private var starts = IntArray(0)
+
+    /** Концы предложений в [text], [ends]\[i] — за последним символом. */
+    private var ends = IntArray(0)
+
+    /** Нажатие на предложение: индекс предложения внутри абзаца. */
+    var onSentenceClick: ((Int) -> Unit)? = null
+
+    /** Долгое нажатие на предложении: индекс предложения внутри абзаца. */
+    var onSentenceLongClick: ((Int) -> Unit)? = null
+
+    private val helper = object : ExploreByTouchHelper(this) {
+
+        /** Узел под точкой касания. Мимо предложений — сам хост. */
+        override fun getVirtualViewAt(x: Float, y: Float): Int {
+            val l = layout ?: return HOST_ID
+            val ly = y - totalPaddingTop
+            if (ly < 0f || ly > l.height.toFloat()) return HOST_ID
+            val line = l.getLineForVertical(ly.toInt())
+            val offset = l.getOffsetForHorizontal(line, x - totalPaddingLeft)
+            val i = sentenceAt(offset)
+            return if (i >= 0) i else HOST_ID
+        }
+
+        override fun getVisibleVirtualViews(virtualViewIds: MutableList<Int>) {
+            for (i in starts.indices) {
+                // Пустые предложения (в книге бывает) пропускаем: узла без текста
+                // диктору не отдаём.
+                if (ends[i] > starts[i]) virtualViewIds.add(i)
+            }
+        }
+
+        override fun onPopulateNodeForVirtualView(
+            virtualViewId: Int,
+            node: AccessibilityNodeInfoCompat,
+        ) {
+            val i = virtualViewId
+            if (i !in starts.indices) {
+                node.contentDescription = ""
+                node.setBoundsInParent(Rect(0, 0, 1, 1))
+                return
+            }
+            node.text = text.subSequence(starts[i], ends[i])
+            node.className = "android.widget.TextView"
+            node.isFocusable = true
+            node.isClickable = true
+            node.addAction(AccessibilityNodeInfoCompat.ACTION_CLICK)
+            node.addAction(AccessibilityNodeInfoCompat.ACTION_LONG_CLICK)
+            node.setBoundsInParent(boundsOfSentence(i))
+        }
+
+        /** Абзац целиком диктору не читаем: его читают предложения. Узел хоста
+         *  остаётся пустой ёмкостью, и диктор в него не встаёт. */
+        override fun onPopulateNodeForHost(node: AccessibilityNodeInfoCompat) {
+            if (starts.isEmpty()) return  // обычный TextView (окно «О программе»)
+            node.text = null
+            node.contentDescription = null
+            node.isFocusable = false
+            node.isClickable = false
+        }
+
+        override fun onPerformActionForVirtualView(
+            virtualViewId: Int,
+            action: Int,
+            arguments: Bundle?,
+        ): Boolean {
+            val i = virtualViewId
+            if (i !in starts.indices) return false
+            return when (action) {
+                AccessibilityNodeInfoCompat.ACTION_CLICK -> {
+                    onSentenceClick?.invoke(i)
+                    true
+                }
+                AccessibilityNodeInfoCompat.ACTION_LONG_CLICK -> {
+                    onSentenceLongClick?.invoke(i)
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    init {
+        ViewCompat.setAccessibilityDelegate(this, helper)
+    }
+
+    /** Задать границы предложений внутри уже выставленного [text].
+     *  Звать после `text = …` — смещения считаются по его длине. */
+    fun bindSentences(starts: IntArray, ends: IntArray) {
+        this.starts = starts
+        this.ends = ends
+        helper.invalidateRoot()
+    }
+
+    /** Верх предложения внутри абзаца (для доводки прокрутки); -1 — не знаем
+     *  такого предложения. */
+    fun sentenceTop(index: Int): Int {
+        if (index !in starts.indices) return -1
+        return boundsOfSentence(index).top
+    }
+
+    /** Предложение по смещению в тексте; -1 — не нашли. */
+    private fun sentenceAt(offset: Int): Int {
+        for (i in starts.indices) {
+            if (ends[i] <= starts[i]) continue
+            if (offset >= starts[i] && offset < ends[i]) return i
+        }
+        return -1
+    }
+
+    /** Рамка предложения в координатах представления (для диктора). Считаем по
+     *  разметке текста: предложение может занимать несколько строк, а строка —
+     *  кончаться на середине соседнего предложения. */
+    private fun boundsOfSentence(i: Int): Rect {
+        val l = layout ?: return Rect(0, 0, 1, 1)
+        val len = l.text.length
+        val s = starts[i].coerceIn(0, len)
+        val e = ends[i].coerceIn(s, len)
+        val firstLine = l.getLineForOffset(s)
+        val lastLine = if (e > s) l.getLineForOffset(e - 1) else firstLine
+        val left = l.getPrimaryHorizontal(s).toInt()
+        val right = if (e < len && l.getLineForOffset(e) == lastLine) {
+            l.getPrimaryHorizontal(e).toInt()
+        } else {
+            l.getLineRight(lastLine).toInt()
+        }
+        val top = l.getLineTop(firstLine)
+        val bottom = l.getLineBottom(lastLine)
+        val r = Rect(left, top, maxOf(right, left + 1), maxOf(bottom, top + 1))
+        r.offset(totalPaddingLeft, totalPaddingTop)
+        return r
+    }
+}

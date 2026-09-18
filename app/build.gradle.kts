@@ -63,8 +63,8 @@ android {
         // чужого файла (e738fdf, msg6148).
         // 0.4.45: падение по кругу на 0.4.44 (msg6161) — усечённый архив в
         // разборе метаданных полки ронял процесс (5616cda).
-        versionCode = 108
-        versionName = "0.4.48"
+        versionCode = 109
+        versionName = "0.4.49"
     }
 
     signingConfigs {
@@ -113,6 +113,10 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.media:media:1.7.0")
+    // ExploreByTouchHelper (ParagraphView, msg6322): предложения внутри абзаца —
+    // виртуальные узлы для диктора. Тянется и транзитивно (recyclerview →
+    // customview), но зависимость эта явная — держим её в списке.
+    implementation("androidx.customview:customview:1.1.0")
     // PDF: извлечение текстового слоя + дерево закладок (для PDF-инструкций).
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 }
