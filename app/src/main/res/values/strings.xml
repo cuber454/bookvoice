@@ -1096,6 +1096,9 @@
     <string name="sel_copied">Скопировано</string>
     <string name="sel_empty">Выделять нечего — сначала начни выделение</string>
     <string name="sel_long_hint">долгое нажатие — выделить или прочитать отсюда</string>
+    <!-- 0.4.52: именованные действия узла предложения — видны в меню «Действия» диктора -->
+    <string name="sel_action_mark">Выделить фрагмент отсюда</string>
+    <string name="sel_action_read">Читать отсюда</string>
     <string name="sel_quote_saved">Добавлено в цитаты</string>
 
     <string name="quotes_section">Цитаты (%1$d)</string>

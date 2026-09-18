@@ -48,6 +48,16 @@ class ParagraphView @JvmOverloads constructor(
     /** Концы предложений в [text], [ends]\[i] — за последним символом. */
     private var ends = IntArray(0)
 
+    /** Именованные действия узла предложения (msg6352). Диктор показывает их
+     *  словами в меню «Действия» — на случай, когда жест «двойной тап с
+     *  удержанием» не срабатывает или неудобен. */
+    private val actRead = AccessibilityNodeInfoCompat.AccessibilityActionCompat(
+        ACTION_ID_READ, context.getString(R.string.sel_action_read),
+    )
+    private val actMark = AccessibilityNodeInfoCompat.AccessibilityActionCompat(
+        ACTION_ID_MARK, context.getString(R.string.sel_action_mark),
+    )
+
     /** Нажатие на предложение: индекс предложения внутри абзаца. */
     var onSentenceClick: ((Int) -> Unit)? = null
 
@@ -96,6 +106,11 @@ class ParagraphView @JvmOverloads constructor(
             node.isLongClickable = true
             node.addAction(AccessibilityNodeInfoCompat.ACTION_CLICK)
             node.addAction(AccessibilityNodeInfoCompat.ACTION_LONG_CLICK)
+            // Именованные действия (msg6352): диктор показывает их словами в
+            // своём меню «Действия», и тогда выделение доступно не только
+            // жестом «двойной тап с удержанием».
+            node.addAction(actRead)
+            node.addAction(actMark)
             node.setBoundsInParent(boundsOfSentence(i))
         }
 
@@ -115,6 +130,10 @@ class ParagraphView @JvmOverloads constructor(
             arguments: Bundle?,
         ): Boolean {
             val i = virtualViewId
+            // msg6352/6354: видно в diag.log, доходит ли до нас действие диктора
+            // (двойной тап по тексту не срабатывал).
+            seenAct++
+            logSparse("действие", seenAct) { "предложение $i, action=$action" }
             if (i !in starts.indices) return false
             return when (action) {
                 AccessibilityNodeInfoCompat.ACTION_CLICK -> {
@@ -122,6 +141,15 @@ class ParagraphView @JvmOverloads constructor(
                     true
                 }
                 AccessibilityNodeInfoCompat.ACTION_LONG_CLICK -> {
+                    onSentenceLongClick?.invoke(i)
+                    true
+                }
+                // Именованные действия из меню «Действия» (msg6352).
+                ACTION_ID_READ -> {
+                    onSentenceClick?.invoke(i)
+                    true
+                }
+                ACTION_ID_MARK -> {
                     onSentenceLongClick?.invoke(i)
                     true
                 }
@@ -158,6 +186,10 @@ class ParagraphView @JvmOverloads constructor(
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             downX = event.x
             downY = event.y
+            // msg6354: видно в diag.log, доходит ли до текста настоящее касание
+            // (и включён ли обход касанием в этот момент).
+            seenTouch++
+            logSparse("палец", seenTouch) { "обход касанием: ${touchExploration()}" }
         }
         return super.onTouchEvent(event)
     }
@@ -166,6 +198,13 @@ class ParagraphView @JvmOverloads constructor(
     private fun touchExploration(): Boolean {
         val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
         return am?.isTouchExplorationEnabled == true
+    }
+
+    private companion object {
+        // Свои действия узла нумеруются с 0x01000000 — как в платформе
+        // (AccessibilityNodeInfo.ACTION_ID_FIRST_CUSTOM_ACTION).
+        const val ACTION_ID_READ = 0x01000001
+        const val ACTION_ID_MARK = 0x01000002
     }
 
     /** Предложение под точкой (координаты представления); -1 — мимо.
@@ -210,6 +249,8 @@ class ParagraphView @JvmOverloads constructor(
     private var seenAt = 0
     private var seenHover = 0
     private var seenKeys = 0
+    private var seenAct = 0
+    private var seenTouch = 0
 
     private fun logSparse(tag: String, n: Int, msg: () -> String) {
         if (n > 3 && n % 100 != 0) return
