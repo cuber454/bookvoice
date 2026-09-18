@@ -251,7 +251,9 @@
     <string name="catalog_already">„%1$s“ уже в библиотеке</string>
 
     <!-- Список-каталог (0.3.26): строки как в читалках, вторая строка — пояснение -->
-    <string name="catalog_search_top">Поиск. Долгое нажатие — голосовой поиск</string>
+    <!-- msg6292: подсказка о жесте убрана из подписи — диктор читал её дважды
+         (при фокусе и после долгого нажатия), второй раз уже в микрофон. -->
+    <string name="catalog_search_top">Поиск</string>
     <string name="catalog_search_icon">🔍</string>
     <string name="catalog_back_top">Назад</string>
     <string name="catalog_back_icon">←</string>
