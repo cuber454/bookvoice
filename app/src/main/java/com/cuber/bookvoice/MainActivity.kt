@@ -1164,12 +1164,19 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     /** Поставить предложение абзаца к верхнему краю ленты. Строка уже на экране
      *  (её выставил scrollToPosition), остаётся отсчитать смещение предложения
      *  внутри абзаца. Список короткий — дальше доедет сам, scrollBy обрежется. */
-    private fun alignSentence(row: Int, sentence: Int) {
+    private fun alignSentence(row: Int, sentence: Int, retry: Boolean = true) {
         if (suppressScroll) return
         if (!prefs.getBoolean(KEY_SCROLL, true)) return
         val first = adapter.firstInRow(row)
         if (first < 0) return
-        val v = layoutManager.findViewByPosition(row) as? ParagraphView ?: return
+        val v = layoutManager.findViewByPosition(row) as? ParagraphView
+        if (v == null) {
+            // Строка ещё не разложена: прокрутка только заказана, раскладка идёт
+            // следующим проходом. Один раз пробуем ещё — иначе на открытии книги
+            // абзац встал бы верхом, а читаемое предложение осталось под краем.
+            if (retry) binding.sentenceList.postDelayed({ alignSentence(row, sentence, false) }, 80)
+            return
+        }
         val top = v.sentenceTop(sentence - first)
         if (top < 0) return
         binding.sentenceList.scrollBy(0, v.top + top)
