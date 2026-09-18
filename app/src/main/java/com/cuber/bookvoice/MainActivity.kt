@@ -1219,6 +1219,20 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         Diag.log(this, "activity", "место по прокрутке: глава $chapterIdx, предл. $sentenceIdx")
     }
 
+    /** Место книги по верхней СТРОКЕ ленты (msg6322). Строка ленты — абзац, и он
+     *  бывает выше экрана: тогда верх абзаца уехал вверх, а читатель смотрит в
+     *  его середину. Спрашиваем у абзаца, какое предложение стоит на верхнем краю
+     *  экрана, — иначе место книги откатывалось бы к началу абзаца на целый экран. */
+    private fun scrollPlaceOf(row: Int): Pair<Int, Int>? {
+        val p = adapter.placeOf(row) ?: return null
+        val first = adapter.firstInRow(row)
+        val v = layoutManager.findViewByPosition(row) as? ParagraphView ?: return p
+        if (first < 0) return p
+        val i = v.sentenceAtHeight(-v.top.toFloat())
+        if (i < 0) return p
+        return p.first to (first + i)
+    }
+
     /** Пока читатель ведёт ленту рукой, помним верхнюю строку — она станет новым
      *  местом (msg4372). Наша авто-прокрутка за голосом цель не ставит: при ней
      *  читаемое предложение остаётся на экране, а условие — оно уехало вниз. */
@@ -1227,7 +1241,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
         val top = layoutManager.findFirstVisibleItemPosition()
         if (top < 0) return
-        val p = adapter.placeOf(top) ?: return
+        val p = scrollPlaceOf(top) ?: return
         val curRow = adapter.flatOf(chapterIdx, sentenceIdx)
         // Читаемое предложение снова на экране — читатель вернулся к своему
         // месту, менять нечего: прежнюю цель забываем.

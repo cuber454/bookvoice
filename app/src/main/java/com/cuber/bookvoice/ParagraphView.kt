@@ -141,11 +141,25 @@ class ParagraphView @JvmOverloads constructor(
         return boundsOfSentence(index).top
     }
 
-    /** Предложение по смещению в тексте; -1 — не нашли. */
+    /** Предложение, стоящее на этой высоте абзаца (координаты представления);
+     *  диктор берёт им узел под пальцем, читалка — место книги по верхнему краю
+     *  экрана: абзац выше экрана, и «верхняя строка» вовсе не начало абзаца.
+     *  -1 — не нашли. */
+    fun sentenceAtHeight(y: Float): Int {
+        val l = layout ?: return -1
+        val ly = y - totalPaddingTop
+        if (ly < 0f || ly > l.height.toFloat()) return -1
+        val line = l.getLineForVertical(ly.toInt())
+        return sentenceAt(l.getLineStart(line))
+    }
+
+    /** Предложение по смещению в тексте; -1 — не нашли. Пробел между
+     *  предложениями отдаём следующему: попадание в него (строка начинается с
+     *  пробела после переноса) не должно оставлять диктора и читалку без места. */
     private fun sentenceAt(offset: Int): Int {
         for (i in starts.indices) {
             if (ends[i] <= starts[i]) continue
-            if (offset >= starts[i] && offset < ends[i]) return i
+            if (offset < ends[i]) return i
         }
         return -1
     }
