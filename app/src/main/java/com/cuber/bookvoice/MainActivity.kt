@@ -257,7 +257,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // шапка читалки уедет под статус-бар, нижние кнопки — под жестовую зону.
         edgeToEdge(binding.root)
 
-        layoutManager = LinearLayoutManager(this)
+        // msg6260: лента отдаётся диктору без пометок коллекции — иначе он на
+        // каждой строке называет «12 из 340». См. NoListMarksLayoutManager.
+        layoutManager = NoListMarksLayoutManager(this)
         binding.sentenceList.layoutManager = layoutManager
         binding.sentenceList.adapter = adapter
         binding.sentenceList.setHasFixedSize(true)
