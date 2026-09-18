@@ -111,6 +111,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  цель потерялась бы. Ставится, когда читаемое предложение уехало с экрана;
      *  снимается на остановке прокрутки (там её и разбирает [applyScrollPlace]). */
     private var pendingScrollTarget: Pair<Int, Int>? = null
+    /** msg6416: строка, к которой лента едет НАШИМ заказом (переход по главе,
+     *  оглавление, закладка, автопрокрутка за голосом), и срок этой поездки.
+     *  −1 — ничего не заказано. Нужно, чтобы отличать свою прокрутку от
+     *  читательской: раньше на переходе мы двигали ленту к новому месту, тут же
+     *  срабатывал [noteScrollTarget], видел, что читаемое ещё не на экране, и
+     *  записывал в «цель руки» ВЕРХНЮЮ строку — ту, где лента стояла ДО перехода.
+     *  Через 300 мс [applyScrollPlace] эту цель применяла и возвращала место
+     *  назад, к прежней главе. Читатель листал вперёд — книга уезжала назад. */
+    private var scrollRequestRow = -1
+    private var scrollRequestUntil = 0L
     /** Последний процент, показанный на экране чтения (msg4377) — чтобы не
      *  писать в журнал одну и ту же строку на каждое обновление статистики. */
     private var lastLoggedPct = -1
@@ -225,7 +235,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             prefs.getBoolean(KEY_SCROLL, true) &&
             prefs.getBoolean(KEY_SCROLL_PLACE, true)
         ) {
-            binding.sentenceList.postDelayed({ applyScrollPlace() }, 300)
+            // msg6416: проверяем ещё раз на самом деле, а не «в момент паузы».
+            // goTo останавливает плеер, чтобы перезапустить чтение с нового места:
+            // пауза длится мгновение, и через 300 мс голос уже звучит снова. Тогда
+            // эта отложенная проверка попадала в ветку «читатель увёл ленту ПРИ
+            // чтении» и место прыгало по чужой цели.
+            binding.sentenceList.postDelayed({
+                if (!playing) applyScrollPlace()
+            }, 300)
         }
     }
 
@@ -1156,11 +1173,44 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // назад. Цель помним, на остановке прокрутки к ней вернёмся.
         if (pendingScrollTarget != null) return
         if (!prefs.getBoolean(KEY_SCROLL, true)) return
+        markSelfScroll(row)
         layoutManager.scrollToPosition(row)
         // msg6322: строка ленты — абзац, а абзац бывает выше экрана. Одной
         // прокрутки к нему мало: доводим до самого предложения, иначе читаемое
         // осталось бы под нижним краем.
         binding.sentenceList.post { alignSentence(row, sentence) }
+    }
+
+    /** msg6416: заказали прокрутку к строке [row]. Прежнюю цель руки снимаем —
+     *  она про место, от которого мы уходим. */
+    private fun markSelfScroll(row: Int) {
+        pendingScrollTarget = null
+        scrollRequestRow = row
+        scrollRequestUntil = SystemClock.uptimeMillis() + SELF_SCROLL_MS
+    }
+
+    /** Продлить срок заказа: [alignSentence] доводит ленту вторым движением. */
+    private fun extendSelfScroll() {
+        scrollRequestUntil = SystemClock.uptimeMillis() + SELF_SCROLL_MS
+    }
+
+    /** Идёт наша прокрутка: заказ выдан, а заказанная строка ещё не встала
+     *  наверх. Как только встала — заказ закрыт, и лента снова слушается руки
+     *  ([noteScrollTarget] и [applyScrollPlace] снова работают как раньше).
+     *  Срок — страховка: не встала за [SELF_SCROLL_MS] (строку не разложило,
+     *  лента у конца книги) — заказ забываем, иначе чтение места замерло бы. */
+    private fun selfScrolling(): Boolean {
+        val want = scrollRequestRow
+        if (want < 0) return false
+        if (layoutManager.findFirstVisibleItemPosition() == want) {
+            scrollRequestRow = -1
+            return false
+        }
+        if (SystemClock.uptimeMillis() > scrollRequestUntil) {
+            scrollRequestRow = -1
+            return false
+        }
+        return true
     }
 
     /** Поставить предложение абзаца к верхнему краю ленты. Строка уже на экране
@@ -1176,11 +1226,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             // Строка ещё не разложена: прокрутка только заказана, раскладка идёт
             // следующим проходом. Один раз пробуем ещё — иначе на открытии книги
             // абзац встал бы верхом, а читаемое предложение осталось под краем.
+            extendSelfScroll()
             if (retry) binding.sentenceList.postDelayed({ alignSentence(row, sentence, false) }, 80)
             return
         }
         val top = v.sentenceTop(sentence - first)
         if (top < 0) return
+        extendSelfScroll()
         binding.sentenceList.scrollBy(0, v.top + top)
     }
 
@@ -1208,6 +1260,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
         if (scrubbing) return
         if (bk.chapters.getOrNull(target.first)?.sentences.isNullOrEmpty()) return
+        // msg6416: в журнал — куда лента ушла и читает ли голос в этот момент.
+        // По этой строке видно, кто двинул место: рука читателя или наш переход.
+        Diag.log(
+            this, "activity",
+            "цель с ленты: глава ${target.first}, предл. ${target.second}; " +
+                "чтение ${if (playing) "идёт" else "стоит"}"
+        )
         if (playing) {
             // Вариант А (msg4372): чтение идёт, читатель отпустил прокрутку —
             // голос переезжает на верхнюю строку и читает дальше с неё. Галочка
@@ -1247,6 +1306,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  читаемое предложение остаётся на экране, а условие — оно уехало вниз. */
     private fun noteScrollTarget() {
         if (book == null || scrubbing) return
+        // msg6416: лента едет за читаемым (переход по главе, оглавление, закладка,
+        // возобновление чтения) — это не рука читателя, цель ставить нечего.
+        if (selfScrolling()) return
         if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
         val top = layoutManager.findFirstVisibleItemPosition()
         if (top < 0) return
@@ -1338,7 +1400,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg5220: по умолчанию свайп ходит по всем заголовкам — как ходил
         // раньше (прежний режим по умолчанию был «по всем заголовкам»).
         val def = if (dir < 0) G_PREV_HEADER else G_NEXT_HEADER
-        runGestureAction(prefs.getString(key, def) ?: def)
+        val act = prefs.getString(key, def) ?: def
+        // msg6416: в журнал — что именно назначено на свайп. Без этого по логу
+        // не отличить «читатель листает главы» от «лента сама уехала».
+        Diag.log(this, "activity", "свайп ${if (dir < 0) "влево" else "вправо"}: действие $act")
+        runGestureAction(act)
     }
 
     /** Выполнить действие свайпа по его id (см. [GESTURE_ACTIONS]). */
@@ -3628,6 +3694,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal fun rememberVoiceForEngine(prefs: SharedPreferences, pkg: String?, voice: String) {
             prefs.edit().putString(voiceEngineKey(pkg), voice).apply()
         }
+        /** msg6416: сколько ждём, пока заказанная нами строка встанет наверх
+         *  ленты. Пока ждём — прокрутка считается нашей, и место книги с неё
+         *  не берётся (иначе переход вперёд откатывался назад). Обычно строка
+         *  встаёт за один кадр; срок — только страховка от залипания. */
+        internal const val SELF_SCROLL_MS = 1500L
+
         internal const val KEY_AUTO = "auto"
         internal const val KEY_AUTO_START = "auto_start"
         // msg2685: сообщать голосом, если книга открывается дольше ~2 секунд.
