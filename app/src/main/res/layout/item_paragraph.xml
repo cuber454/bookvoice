@@ -7,13 +7,20 @@
      Воздух между абзацами — собственный paddingTop строки: между абзацами он
      даёт отбивку, а внутри абзаца строки идут встык, как в книге.
      focusable=false намеренно: цель диктора — предложения внутри, а не абзац
-     целиком (иначе он прочитал бы текст дважды). -->
+     целиком (иначе он прочитал бы текст дважды). ExploreByTouchHelper, впрочем,
+     всё равно делает представление фокусируемым — так требует его устройство.
+
+     Набор строки — как на веб-странице (msg6340/6342, просьба Сергея): выключка
+     по обоим краям (justificationMode, API 26+) и переносы по правилам языка
+     (hyphenationFrequency). На старых системах атрибуты просто не применяются. -->
 <com.cuber.bookvoice.ParagraphView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tvParagraph"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:focusable="false"
+    android:hyphenationFrequency="normal"
     android:importantForAccessibility="yes"
+    android:justificationMode="inter_word"
     android:lineSpacingMultiplier="1.3"
     android:paddingStart="4dp"
     android:paddingTop="10dp"

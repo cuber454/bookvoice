@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Rect
 import android.os.Bundle
 import android.util.AttributeSet
+import android.view.KeyEvent
+import android.view.MotionEvent
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.view.ViewCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
@@ -61,6 +63,9 @@ class ParagraphView @JvmOverloads constructor(
             val line = l.getLineForVertical(ly.toInt())
             val offset = l.getOffsetForHorizontal(line, x - totalPaddingLeft)
             val i = sentenceAt(offset)
+            // msg6338: диктор спрашивает узел под точкой — видно в diag.log.
+            seenAt++
+            logSparse("касание", seenAt) { "y=${y.toInt()}, предложение ${if (i >= 0) i else -1}" }
             return if (i >= 0) i else HOST_ID
         }
 
@@ -70,6 +75,9 @@ class ParagraphView @JvmOverloads constructor(
                 // диктору не отдаём.
                 if (ends[i] > starts[i]) virtualViewIds.add(i)
             }
+            // msg6338: диктор обошёл абзац — видно в diag.log, кто именно.
+            seenNodes++
+            logSparse("абзац", seenNodes) { "у диктора: предложений ${virtualViewIds.size}" }
         }
 
         override fun onPopulateNodeForVirtualView(
@@ -124,6 +132,42 @@ class ParagraphView @JvmOverloads constructor(
 
     init {
         ViewCompat.setAccessibilityDelegate(this, helper)
+    }
+
+    // Штатная часть подключения ExploreByTouchHelper (так же — в образце Google
+    // «custom view accessibility»), и её в 0.4.49 не было — отсюда msg6338:
+    // TalkBack не читал абзацы вовсе, Jieshuo читал (он обходится деревом
+    // узлов). Касание с обходом приходит в представление событием наведения, а
+    // клавиатурный обход — нажатием клавиши; и то и другое обязано дойти до
+    // помощника, иначе виртуальных узлов для диктора просто нет. Смену фокуса
+    // помощнику сообщаем отдельно — по ней он синхронизирует свой узел.
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean {
+        seenHover++
+        logSparse("наведение", seenHover) { "action=${event.action}" }
+        return helper.dispatchHoverEvent(event) || super.dispatchHoverEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        seenKeys++
+        logSparse("клавиша", seenKeys) { "код ${event.keyCode}, action=${event.action}" }
+        return helper.dispatchKeyEvent(event) || super.dispatchKeyEvent(event)
+    }
+
+    override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
+        super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        helper.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+    }
+
+    // Счётчики диагностики (msg6338): пишем в diag.log только первые три
+    // вызова каждого вида и дальше каждый сотый — иначе лог забьётся касаниями.
+    private var seenNodes = 0
+    private var seenAt = 0
+    private var seenHover = 0
+    private var seenKeys = 0
+
+    private fun logSparse(tag: String, n: Int, msg: () -> String) {
+        if (n > 3 && n % 100 != 0) return
+        Diag.log(context, "a11y", "$tag #$n: ${msg()}")
     }
 
     /** Задать границы предложений внутри уже выставленного [text].

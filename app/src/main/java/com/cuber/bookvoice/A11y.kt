@@ -1,5 +1,6 @@
 package com.cuber.bookvoice
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
@@ -22,6 +23,25 @@ object A11y {
         val am = ctx.getSystemService(Context.ACCESSIBILITY_SERVICE)
             as? AccessibilityManager ?: return
         runCatching { am.interrupt() }
+    }
+
+    /** Какие дикторы включены в системе (msg6338).
+     *
+     *  Нужно для разбора «TalkBack не видит текст, Jieshuo видит»: по логу видно,
+     *  кого именно мы обслуживаем, и менялся ли набор между запусками. Пишем один
+     *  раз при старте окна читалки — строка короткая, без личных данных. */
+    fun logReaders(ctx: Context) {
+        val am = ctx.getSystemService(Context.ACCESSIBILITY_SERVICE)
+            as? AccessibilityManager ?: return
+        val on = runCatching {
+            am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                .mapNotNull { it.resolveInfo?.serviceInfo?.packageName }
+                .distinct()
+        }.getOrDefault(emptyList())
+        Diag.log(
+            ctx, "a11y",
+            "дикторы в системе: ${if (on.isEmpty()) "нет" else on.joinToString()}",
+        )
     }
 
     /** Кнопка, долгое нажатие которой диктор не объявляет второй раз (msg6288).

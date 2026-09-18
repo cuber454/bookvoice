@@ -268,6 +268,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         Palette.applyTo(this)
         super.onCreate(savedInstanceState)
         Diag.header(this)
+        // msg6338: кого обслуживаем — TalkBack или Jieshuo — видно в diag.log.
+        A11y.logReaders(this)
         // Живой инстанс ридера: экран настроек достаёт через него плеер,
         // чтобы скорость/голос менялись сразу, без перезапуска книги.
         active = this
