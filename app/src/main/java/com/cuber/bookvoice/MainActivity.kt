@@ -275,11 +275,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // шапка читалки уедет под статус-бар, нижние кнопки — под жестовую зону.
         edgeToEdge(binding.root)
 
-        // msg6278: правка ленты из 0.4.46 («12 из 340») ОТКАЧЕНА — с ней у
-        // TalkBack перестала работать автоматическая прокрутка текста свайпами
-        // (диктору нужна пометка списка, чтобы понимать, что он прокручивает).
-        // Вернулись к обычному менеджеру — как было до 0.4.46.
-        layoutManager = LinearLayoutManager(this)
+        // msg6260 → msg6278 → msg6300. Шум «12 из 340» убираем, но осторожно:
+        // снимаем только счёт строк, а ленте метку списка оставляем — без неё
+        // TalkBack перестаёт прокручивать текст свайпами (проверено на 0.4.46,
+        // см. NoItemCountLayoutManager). Сергей: «поставь в эту партию, если что
+        // потом откатим». Откат — одна строка: LinearLayoutManager(this).
+        layoutManager = NoItemCountLayoutManager(this)
         binding.sentenceList.layoutManager = layoutManager
         binding.sentenceList.adapter = adapter
         binding.sentenceList.setHasFixedSize(true)
