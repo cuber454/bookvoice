@@ -10,7 +10,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.speech.tts.Voice
 import android.media.AudioManager
 import android.net.Uri
@@ -37,6 +39,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -171,6 +174,21 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private var searchCurrent = -1
     private var searchGen = 0
 
+    // Свой распознаватель речи (msg6270, перенос из каталога): микрофон внутри
+    // приложения вместо системного окна. voiceFinished глушит запоздалые
+    // колбэки погашенного распознавателя.
+    private var voiceRecognizer: SpeechRecognizer? = null
+    private var voiceFinished = false
+
+    /** Разрешение на микрофон. Спросили — своё распознавание, отказали — системное
+     *  окно: оно работает в своём процессе и нашего разрешения не требует. */
+    private val askMicPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        Diag.log(this, "voice", if (granted) "микрофон разрешён" else "микрофон запрещён")
+        if (granted) startOwnRecognition() else startDialogRecognition()
+    }
+
     // msg4308: список — вся книга одной лентой. Позиция в ленте (row) — не то же
     // самое, что предложение в главе, поэтому на входе переводим её обратно в
     // «главу + предложение» (placeOf), а в движок уже уходит привычное место.
@@ -257,9 +275,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // шапка читалки уедет под статус-бар, нижние кнопки — под жестовую зону.
         edgeToEdge(binding.root)
 
-        // msg6260: лента отдаётся диктору без пометок коллекции — иначе он на
-        // каждой строке называет «12 из 340». См. NoListMarksLayoutManager.
-        layoutManager = NoListMarksLayoutManager(this)
+        // msg6278: правка ленты из 0.4.46 («12 из 340») ОТКАЧЕНА — с ней у
+        // TalkBack перестала работать автоматическая прокрутка текста свайпами
+        // (диктору нужна пометка списка, чтобы понимать, что он прокручивает).
+        // Вернулись к обычному менеджеру — как было до 0.4.46.
+        layoutManager = LinearLayoutManager(this)
         binding.sentenceList.layoutManager = layoutManager
         binding.sentenceList.adapter = adapter
         binding.sentenceList.setHasFixedSize(true)
@@ -1062,6 +1082,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     }
 
     override fun onDestroy() {
+        // msg6270: окно уходит — гасим свой распознаватель: микрофон не должен
+        // остаться висеть за закрытой читалкой.
+        endRecognition()
         // Ридер закрыт. Если голос ЗВУЧИТ — #38 шаг 2: чтение остаётся жить без
         // окна (движок держит книгу, плеер и медиа-сервис; управление дальше —
         // гарнитура, «волшебное касание», кнопка в шторке). Если книга на паузе —
@@ -2108,9 +2131,17 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         return getString(R.string.search_counter, searchCurrent + 1, n)
     }
 
-    /** Голосовой ввод (системное распознавание речи) — из долгого нажатия на
-     *  «Поиск» и с кнопки-микрофона в панели. Распознанное слово подставляется
-     *  в поле и сразу запускает поиск (см. [onActivityResult]). */
+    /** Голосовой ввод — из долгого нажатия на «Поиск» и с кнопки-микрофона в
+     *  панели. Слушаем микрофон САМИ (msg6270, тот же путь, что в каталоге с
+     *  msg4755): системное окно распознавания поднималось ~2 с, и всё это
+     *  время диктор читал его подсказку — этот голос уходил в микрофон вместо
+     *  слова владельца. Своему распознавателю никто не мешает: о готовности
+     *  сообщает сигнал [SoundFx.listen] (ровно тогда и надо говорить), окно
+     *  никуда не уходит — после возврата перечитывать нечего.
+     *
+     *  Системное окно осталось запасным путём: своего распознавателя на
+     *  устройстве нет или не дали микрофон. Распознанное слово подставляется
+     *  в поле и сразу запускает поиск (см. [applyVoiceWord]). */
     private fun startVoiceSearch() {
         if (book == null) return
         // Чтение мешало бы распознаванию — ставим на паузу, фокус держим.
@@ -2119,12 +2150,121 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg6179: любой вход в голосовой ввод начинается с тишины — диктор не
         // должен говорить в микрофон (кнопка-микрофон в панели, долгое нажатие 🔍).
         A11y.hush(this)
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            startDialogRecognition()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            startOwnRecognition()
+            return
+        }
+        // Разрешения нет — просим один раз (без него микрофон не открыть).
+        Diag.log(this, "voice", "прошу разрешение на микрофон")
+        askMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    /** Настройки распознавания — общие для своего микрофона и системного окна. */
+    private fun recognizerIntent(): Intent =
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
+            // Язык — системный: владелец говорит на языке телефона.
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+
+    /** Свой распознаватель (msg6270): микрофон внутри приложения. */
+    private fun startOwnRecognition() {
+        endRecognition()
+        voiceFinished = false
+        val r = runCatching { SpeechRecognizer.createSpeechRecognizer(this) }.getOrNull()
+        if (r == null) {
+            startDialogRecognition()
+            return
+        }
+        voiceRecognizer = r
+        r.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                // Микрофон реально слушает — только теперь зовём говорить.
+                // Диктор мог начать озвучку уже после нажатия — гасим ещё раз,
+                // чтобы его голос не попал в открытый микрофон.
+                A11y.hush(this@MainActivity)
+                SoundFx.listen(this@MainActivity)
+                Diag.log(this@MainActivity, "voice", "микрофон слушает")
+            }
+
+            override fun onBeginningOfSpeech() {}
+
+            override fun onEndOfSpeech() {}
+
+            override fun onBufferReceived(buffer: ByteArray?) {}
+
+            override fun onRmsChanged(rmsdB: Float) {}
+
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+
+            override fun onPartialResults(partialResults: Bundle?) {}
+
+            override fun onResults(results: Bundle?) {
+                if (voiceFinished) return
+                val q = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()?.takeIf { it.isNotBlank() }
+                endRecognition()
+                Diag.log(this@MainActivity, "voice", if (q == null) "пусто" else "услышал: $q")
+                applyVoiceWord(q)
+            }
+
+            override fun onError(error: Int) {
+                if (voiceFinished) return
+                endRecognition()
+                Diag.log(this@MainActivity, "voice", "распознавание не вышло, код $error")
+                if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                    // Разрешение отобрали на ходу — старый путь ещё работает.
+                    startDialogRecognition()
+                    return
+                }
+                applyVoiceWord(null)
+            }
+        })
+        val intent = recognizerIntent().apply {
+            // Не обрывать фразу на первой паузе: название книги диктуют
+            // вразбивку, между словами человек дышит. Движки смотрят на эти
+            // подсказки по-разному, но без них результат приходил огрызком.
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                1500L
+            )
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
+        }
+        runCatching { r.startListening(intent) }.onFailure {
+            Diag.log(this, "voice", "старт распознавания упал: ${it.message}")
+            endRecognition()
+            startDialogRecognition()
+        }
+    }
+
+    /** Погасить свой распознаватель (новое нажатие, уход из окна).
+     *  Флаг [voiceFinished] глушит запоздалые колбэки — cancel() дёргает
+     *  onError. destroy() следом сгоряча не зовём: часть движков на это
+     *  ругается, поэтому даём распознавателю договорить с движком. */
+    private fun endRecognition() {
+        voiceFinished = true
+        val r = voiceRecognizer ?: return
+        voiceRecognizer = null
+        runCatching { r.cancel() }
+        binding.root.postDelayed({ runCatching { r.destroy() } }, 300)
+    }
+
+    /** Прежний путь: системное окно распознавания. Он же — запасной, когда
+     *  своего распознавателя нет или не дали микрофон. */
+    private fun startDialogRecognition() {
+        endRecognition()
+        val intent = recognizerIntent().apply {
             putExtra(RecognizerIntent.EXTRA_PROMPT, getString(R.string.search_voice_prompt))
         }
         try {
@@ -2134,21 +2274,29 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQ_VOICE_SEARCH || resultCode != RESULT_OK || data == null) return
-        val word = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-            ?.firstOrNull()?.takeIf { it.isNotBlank() }
+    /** Распознанное слово — в поле поиска, и сразу искать. null — не расслышали
+     *  (или движок не смог): об этом честно говорим, поиск не запускаем. */
+    private fun applyVoiceWord(word: String?) {
         if (word == null) {
             binding.sentenceList.announceForAccessibility(getString(R.string.search_voice_retry))
             return
         }
+        if (book == null) return
         // Панель показываем с распознанным словом в поле; клавиатуру после
         // диктовки не открываем — слово уже введено.
         openSearchPanel(focusField = false)
         binding.etSearch.setText(word)
         binding.etSearch.setSelection(word.length)
         runSearch(word)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_VOICE_SEARCH || resultCode != RESULT_OK || data == null) return
+        applyVoiceWord(
+            data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()?.takeIf { it.isNotBlank() }
+        )
     }
 
     // ---------------- Закладки ----------------
