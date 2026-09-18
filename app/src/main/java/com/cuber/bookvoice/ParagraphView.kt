@@ -3,6 +3,7 @@ package com.cuber.bookvoice
 import android.content.Context
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -135,21 +136,28 @@ class ParagraphView @JvmOverloads constructor(
             seenAct++
             logSparse("действие", seenAct) { "предложение $i, action=$action" }
             if (i !in starts.indices) return false
+            // msg6364: жест и действие на одно предложение — один и тот же
+            // поступок, второй раз не повторяем.
+            if (handledRecently(i)) return true
             return when (action) {
                 AccessibilityNodeInfoCompat.ACTION_CLICK -> {
+                    markHandled(i)
                     onSentenceClick?.invoke(i)
                     true
                 }
                 AccessibilityNodeInfoCompat.ACTION_LONG_CLICK -> {
+                    markHandled(i)
                     onSentenceLongClick?.invoke(i)
                     true
                 }
                 // Именованные действия из меню «Действия» (msg6352).
                 ACTION_ID_READ -> {
+                    markHandled(i)
                     onSentenceClick?.invoke(i)
                     true
                 }
                 ACTION_ID_MARK -> {
+                    markHandled(i)
                     onSentenceLongClick?.invoke(i)
                     true
                 }
@@ -160,22 +168,48 @@ class ParagraphView @JvmOverloads constructor(
 
     init {
         ViewCompat.setAccessibilityDelegate(this, helper)
-        // Обычное касание, без экранного диктора: жест по тексту должен попадать
-        // в предложение под пальцем — как раньше попадал в строку-предложение
-        // (msg6348). При включённом обходе касанием пальцем управляет диктор, и
-        // там работают виртуальные узлы: свои обработчики в этом режиме только
-        // задваивали бы жест (диктор шлёт ACTION_CLICK узлу, а палец — сюда).
-        if (!touchExploration()) {
-            setOnClickListener {
-                val i = sentenceAtPoint(downX, downY)
-                if (i >= 0) onSentenceClick?.invoke(i)
-            }
-            setOnLongClickListener {
-                val i = sentenceAtPoint(downX, downY)
-                if (i >= 0) onSentenceLongClick?.invoke(i)
-                true
+        // Касание по тексту попадает в предложение под пальцем — как раньше
+        // попадало в строку-предложение (msg6348).
+        //
+        // msg6364: обработчики ставятся ВСЕГДА, в том числе при включённом
+        // обходе касанием. Лог показал, что настоящее касание до текста всё
+        // равно доходит (`палец #1: обход касанием: true`), а диктор при этом
+        // своих ACTION_CLICK/ACTION_LONG_CLICK узлу не шлёт вовсе — за всю
+        // сессию пришло одно действие, и то служебное (ACTION_SHOW_ON_SCREEN,
+        // 16908342: диктор подводит узел к экрану). То есть прежняя защита
+        // «при дикторе обработчики не ставим, там жестом владеет диктор»
+        // оставляла такого пользователя вообще без жестов: палец доходил,
+        // слушателей не было. Двойного срабатывания тут не будет: если диктор
+        // когда-нибудь и позовёт ACTION_CLICK сам, его отсекает [handledRecently]
+        // — жест и действие на одно предложение считаются одним.
+        setOnClickListener {
+            val i = sentenceAtPoint(downX, downY)
+            if (i >= 0 && !handledRecently(i)) {
+                logSparse("нажатие", ++seenTap) { "предложение $i (жест)" }
+                onSentenceClick?.invoke(i)
             }
         }
+        setOnLongClickListener {
+            val i = sentenceAtPoint(downX, downY)
+            if (i >= 0 && !handledRecently(i)) {
+                logSparse("удержание", ++seenHold) { "предложение $i (жест)" }
+                onSentenceLongClick?.invoke(i)
+            }
+            true
+        }
+    }
+
+    /** Какое предложение и когда мы в последний раз обработали — чтобы жест и
+     *  действие диктора на одно и то же предложение не сработали дважды. */
+    private var lastIndex = -1
+    private var lastAt = 0L
+
+    private fun handledRecently(index: Int): Boolean =
+        index == lastIndex && SystemClock.uptimeMillis() - lastAt < DOUBLE_MS
+
+    private fun markHandled(index: Int) {
+        lastIndex = index
+        lastAt = SystemClock.uptimeMillis()
     }
 
     /** Точка последнего касания: по ней видно, какое предложение нажали. */
@@ -205,6 +239,9 @@ class ParagraphView @JvmOverloads constructor(
         // (AccessibilityNodeInfo.ACTION_ID_FIRST_CUSTOM_ACTION).
         const val ACTION_ID_READ = 0x01000001
         const val ACTION_ID_MARK = 0x01000002
+
+        /** Окно, в котором жест и действие диктора считаются одним поступком. */
+        const val DOUBLE_MS = 400L
     }
 
     /** Предложение под точкой (координаты представления); -1 — мимо.
@@ -251,6 +288,8 @@ class ParagraphView @JvmOverloads constructor(
     private var seenKeys = 0
     private var seenAct = 0
     private var seenTouch = 0
+    private var seenTap = 0
+    private var seenHold = 0
 
     private fun logSparse(tag: String, n: Int, msg: () -> String) {
         if (n > 3 && n % 100 != 0) return
