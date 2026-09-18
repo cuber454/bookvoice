@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.util.AttributeSet
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.accessibility.AccessibilityManager
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.view.ViewCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
@@ -57,15 +58,10 @@ class ParagraphView @JvmOverloads constructor(
 
         /** Узел под точкой касания. Мимо предложений — сам хост. */
         override fun getVirtualViewAt(x: Float, y: Float): Int {
-            val l = layout ?: return HOST_ID
-            val ly = y - totalPaddingTop
-            if (ly < 0f || ly > l.height.toFloat()) return HOST_ID
-            val line = l.getLineForVertical(ly.toInt())
-            val offset = l.getOffsetForHorizontal(line, x - totalPaddingLeft)
-            val i = sentenceAt(offset)
+            val i = sentenceAtPoint(x, y)
             // msg6338: диктор спрашивает узел под точкой — видно в diag.log.
             seenAt++
-            logSparse("касание", seenAt) { "y=${y.toInt()}, предложение ${if (i >= 0) i else -1}" }
+            logSparse("касание", seenAt) { "y=${y.toInt()}, предложение $i" }
             return if (i >= 0) i else HOST_ID
         }
 
@@ -94,6 +90,10 @@ class ParagraphView @JvmOverloads constructor(
             node.className = "android.widget.TextView"
             node.isFocusable = true
             node.isClickable = true
+            // msg6348: без этого диктор не считает узел удерживаемым, и жест
+            // «двойной тап с удержанием» не начинал выделение фрагмента —
+            // раньше это свойство выставлял сам TextView со слушателем.
+            node.isLongClickable = true
             node.addAction(AccessibilityNodeInfoCompat.ACTION_CLICK)
             node.addAction(AccessibilityNodeInfoCompat.ACTION_LONG_CLICK)
             node.setBoundsInParent(boundsOfSentence(i))
@@ -132,6 +132,52 @@ class ParagraphView @JvmOverloads constructor(
 
     init {
         ViewCompat.setAccessibilityDelegate(this, helper)
+        // Обычное касание, без экранного диктора: жест по тексту должен попадать
+        // в предложение под пальцем — как раньше попадал в строку-предложение
+        // (msg6348). При включённом обходе касанием пальцем управляет диктор, и
+        // там работают виртуальные узлы: свои обработчики в этом режиме только
+        // задваивали бы жест (диктор шлёт ACTION_CLICK узлу, а палец — сюда).
+        if (!touchExploration()) {
+            setOnClickListener {
+                val i = sentenceAtPoint(downX, downY)
+                if (i >= 0) onSentenceClick?.invoke(i)
+            }
+            setOnLongClickListener {
+                val i = sentenceAtPoint(downX, downY)
+                if (i >= 0) onSentenceLongClick?.invoke(i)
+                true
+            }
+        }
+    }
+
+    /** Точка последнего касания: по ней видно, какое предложение нажали. */
+    private var downX = 0f
+    private var downY = 0f
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            downX = event.x
+            downY = event.y
+        }
+        return super.onTouchEvent(event)
+    }
+
+    /** Включён ли обход касанием (диктор ведёт палец по экрану). */
+    private fun touchExploration(): Boolean {
+        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+        return am?.isTouchExplorationEnabled == true
+    }
+
+    /** Предложение под точкой (координаты представления); -1 — мимо.
+     *  Счёт общий: им пользуется и диктор ([ExploreByTouchHelper.getVirtualViewAt]),
+     *  и обычное нажатие без диктора. */
+    fun sentenceAtPoint(x: Float, y: Float): Int {
+        val l = layout ?: return -1
+        val ly = y - totalPaddingTop
+        if (ly < 0f || ly > l.height.toFloat()) return -1
+        val line = l.getLineForVertical(ly.toInt())
+        val offset = l.getOffsetForHorizontal(line, x - totalPaddingLeft)
+        return sentenceAt(offset)
     }
 
     // Штатная часть подключения ExploreByTouchHelper (так же — в образце Google
