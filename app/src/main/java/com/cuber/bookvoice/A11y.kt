@@ -1,12 +1,6 @@
 package com.cuber.bookvoice
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioManager
-import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
@@ -51,60 +45,6 @@ object A11y {
         }
     }
 
-    /** Идёт ли в системе воспроизведение (речь диктора идёт потоком доступности).
-     *  До API 26 списка воспроизведений нет — считаем, что тихо. */
-    private fun speaking(ctx: Context): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
-        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
-        return runCatching {
-            am.activePlaybackConfigurations.any { cfg ->
-                when (cfg.audioAttributes?.usage) {
-                    AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY,
-                    AudioAttributes.USAGE_ASSISTANCE_SONIFICATION,
-                    AudioAttributes.USAGE_ASSISTANT,
-                    AudioAttributes.USAGE_MEDIA,
-                    -> true
-
-                    else -> false
-                }
-            }
-        }.getOrDefault(false)
-    }
-
-    /** Отдать микрофон только в тишине (msg6288).
-     *
-     *  Диктор объявляет нажатую кнопку не в миг жеста, а следом за ним — при
-     *  фиксированной паузе его голос приходил в уже открытый микрофон, и вместо
-     *  слова владельца распознавалось объявление кнопки. Ждём, пока в системе
-     *  смолкнет воспроизведение, и лишь потом открываем микрофон.
-     *
-     *  [floorMs] — пол: жест должен улечься, диктор начинает говорить не
-     *  мгновенно. [capMs] — потолок: если диктор рассказывает что-то длинное,
-     *  ждать до конца нельзя, владелец уже готов диктовать.
-     */
-    fun waitForQuiet(
-        ctx: Context,
-        floorMs: Long = 400,
-        capMs: Long = 3500,
-        ready: () -> Unit,
-    ) {
-        val handler = Handler(Looper.getMainLooper())
-        val start = SystemClock.uptimeMillis()
-        val probe = object : Runnable {
-            override fun run() {
-                val waited = SystemClock.uptimeMillis() - start
-                if (waited < capMs && (waited < floorMs || speaking(ctx))) {
-                    handler.postDelayed(this, 150)
-                    return
-                }
-                // Только теперь — тишина: гасим хвост (мог начаться, пока
-                // считали) и открываем микрофон.
-                hush(ctx)
-                ready()
-            }
-        }
-        handler.postDelayed(probe, floorMs)
-    }
 }
 
 /**

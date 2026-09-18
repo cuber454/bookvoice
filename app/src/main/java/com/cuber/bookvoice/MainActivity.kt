@@ -2183,16 +2183,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     /** Свой распознаватель (msg6270): микрофон внутри приложения.
      *
-     *  msg6288: открываем микрофон только в тишине — диктор объявляет нажатую
-     *  кнопку не в миг жеста, а следом за ним, и его голос приходил в уже
-     *  открытый микрофон. Сначала ждём, пока он смолкнет ([A11y.waitForQuiet]),
-     *  и лишь потом пускаем распознаватель. */
+     *  msg6308: открываем микрофон сразу, без ожидания тишины. Ожидание
+     *  (msg6288) задумывалось против речи диктора, но держало микрофон до 3,5 с:
+     *  поток доступности числится активным и когда диктор молчит, так что
+     *  владелец ждал сигнала несколько секунд. Молчание кнопок даёт не оно, а
+     *  [A11y.muteLongClickAnnouncement] — она и осталась. */
     private fun startOwnRecognition() {
-        A11y.waitForQuiet(this) { openOwnRecognition() }
-    }
-
-    /** Микрофон: распознаватель и слушатель (см. [startOwnRecognition]). */
-    private fun openOwnRecognition() {
         endRecognition()
         voiceFinished = false
         val r = runCatching { SpeechRecognizer.createSpeechRecognizer(this) }.getOrNull()
