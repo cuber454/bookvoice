@@ -56,17 +56,19 @@ object WhatsNew {
             R.string.whats_new_102_9,
             R.string.whats_new_102_10,
         ),
-        // 0.4.43: тексты утверждены Сергеем (msg5969 → «да» msg5983).
-        103 to listOf(
-            R.string.whats_new_103_1,
-            R.string.whats_new_103_2,
-            R.string.whats_new_103_3,
-            R.string.whats_new_103_4,
-            R.string.whats_new_103_5,
-            R.string.whats_new_103_6,
-            R.string.whats_new_103_7,
-            R.string.whats_new_103_8,
-            R.string.whats_new_103_9,
+        // 0.4.56: блок 103 убран целиком — 0.4.43 публичным релизом не вышла,
+        // а её пункт про «Останавливать чтение» объявлял удалённую настройку.
+        // Всё накопленное с 0.4.42 идёт одним блоком, тексты утверждены
+        // Сергеем (msg6455, «да нормально так» msg6457).
+        116 to listOf(
+            R.string.whats_new_116_1,
+            R.string.whats_new_116_2,
+            R.string.whats_new_116_3,
+            R.string.whats_new_116_4,
+            R.string.whats_new_116_5,
+            R.string.whats_new_116_6,
+            R.string.whats_new_116_7,
+            R.string.whats_new_116_8,
         ),
     )
 
