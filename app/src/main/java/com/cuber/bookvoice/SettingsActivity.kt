@@ -566,6 +566,16 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         // #99: останавливать чтение, когда отключаются наушники.
         addCheck(R.string.headphones_pause_title, MainActivity.KEY_PAUSE_HEADSET, true)
+        // #85 (msg5895/5899): загорание экрана — тоже вторжение в чтение извне,
+        // поэтому рядом с наушниками. Ловим и разблокировку: при снятии замка на
+        // уже горящем экране отдельного SCREEN_ON может не прийти (msg5919).
+        // Выключено по умолчанию — у тех, кто читает под погашенным экраном,
+        // поведение не должно меняться само.
+        // onChange — потому что галочка меняет и живую работу: включили на ходу,
+        // во время чтения, — приёмник встаёт, не дожидаясь следующего старта.
+        addCheck(R.string.pause_on_screen_title, MainActivity.KEY_PAUSE_ON_SCREEN, false) {
+            ScreenOnPause.sync()
+        }
 
         // msg5711: «Прокрутка» — как лента книги связана с голосом.
         addHeading(getString(R.string.reading_section_scroll))
