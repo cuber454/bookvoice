@@ -119,10 +119,23 @@ object OpdsPrefs {
      *  установке и вычищаем у тех, у кого запись успела появиться от старых версий. */
     private const val DEAD_URL = "https://flibusta.site/opds"
 
-    /** Стартовый набор: живое зеркало. Запасное (flibusta.site) не работает —
+    /** Второе зеркало Флибусты (Сергей попросил добавить его рядом с основным:
+     *  адрес длинный, набирать его вслепую руками — мучение). Проверено живым
+     *  запросом: /opds отвечает 200 и отдаёт обычную ленту OPDS. */
+    private const val MIRROR_URL = "https://n.flibusta.is/opds"
+
+    /** Coollib (Сергей попросил третьим каталогом). Адрес он назвал по http, но
+     *  сервер сам переводит на https — берём сразу https, чтобы вход в «Мою
+     *  полку» не ругался на незашифрованный пароль (catalog_login_insecure).
+     *  Проверено живым запросом: /opds отвечает 200 и отдаёт ленту OPDS. */
+    private const val COOLLIB_URL = "https://coollib.net/opds"
+
+    /** Стартовый набор: живые зеркала. Запасное (flibusta.site) не работает —
      *  убрано (msg1776), чтобы не плодить мёртвые записи при чистой установке. */
     private val DEFAULT_SOURCES = listOf(
         "Flibusta" to DEFAULT_URL,
+        "Flibusta (зеркало)" to MIRROR_URL,
+        "Coollib" to COOLLIB_URL,
     )
 
     data class Source(val name: String, val url: String)

@@ -354,8 +354,11 @@ class VoicePicker(
             val idx = list.indexOfFirst { it.name == host.currentVoice() }
             val dlg = MaterialAlertDialogBuilder(ctx)
                 .setTitle(R.string.voice_pick_voice)
-                .setSingleChoiceItems(labels, idx) { d, which ->
-                    d.dismiss()
+                .setSingleChoiceItems(labels, idx) { _, which ->
+                    // Список остаётся открытым: голос подбирается на слух, и
+                    // закрывать окно после каждого касания — значит заново
+                    // открывать строку «Голос» и листать до того же места.
+                    // Закрывает список сам читатель, кнопкой «Закрыть».
                     val v = list[which]
                     p.selectVoice(v.name)
                     // msg5726: голос помним за движком, которому он выбран, —
@@ -364,6 +367,11 @@ class VoicePicker(
                     host.voiceApplied(v, pickLang)
                     refresh()
                     host.redraw()
+                    // Книги нет (Настройки) — сразу слушаем голос образцом фразы,
+                    // не выходя из списка. С открытой книгой перечитку текущего
+                    // предложения делает сам voiceApplied (msg5604), образец там
+                    // не нужен.
+                    if (!host.hasBook()) speakSample(p)
                 }
                 .setNegativeButton(R.string.toc_close, null)
                 .show()

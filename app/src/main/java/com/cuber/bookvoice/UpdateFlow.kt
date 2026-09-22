@@ -18,13 +18,27 @@ object UpdateFlow {
     private const val PREFS = "reader"
     private const val KEY_OFFERED = "update_offered_version"
 
-    /** Режим авто-проверки (0.3.91, msg1918): строка-резюме в «Разном» над кнопкой
-     *  «Проверить обновление». MODE_AUTO — тихая проверка при открытии не чаще раза
-     *  в день; MODE_MANUAL — только кнопка, GitHub зря не дёргаем. */
-    const val KEY_MODE = "update_mode"
-    const val MODE_AUTO = "auto"
-    const val MODE_MANUAL = "manual"
+    /** Автопроверка обновлений: флажок «Проверять обновления автоматически» в
+     *  «Разном», над кнопкой «Проверить обновление». Раньше здесь был выбор
+     *  «Автоматически / Вручную» (0.3.91, msg1918); Сергей попросил простое
+     *  «включено / не включено». Включено — тихая проверка при открытии полки, не
+     *  чаще раза в день; выключено — только кнопка, GitHub зря не дёргаем. */
+    const val KEY_AUTO = "update_auto"
+
+    /** Старая запись режима (0.3.91) — только на чтение: у кого стояло «Вручную»,
+     *  у того автопроверка не включится сама после обновления приложения. */
+    private const val KEY_MODE = "update_mode"
+    private const val MODE_MANUAL = "manual"
     private const val KEY_LAST_DAY = "update_auto_last_day"
+
+    /** Включена ли автопроверка. Флажок важнее старой записи; если флажка ещё нет
+     *  (обновились со старой версии и не трогали настройку) — считаем включённой,
+     *  как было по умолчанию. */
+    fun isAuto(c: Context): Boolean {
+        val p = prefs(c)
+        if (p.contains(KEY_AUTO)) return p.getBoolean(KEY_AUTO, true)
+        return p.getString(KEY_MODE, null) != MODE_MANUAL
+    }
 
     /** Ровно одна авто-проверка за процесс: первый «тихий» показ полки или
      *  возврат из книги её запускает, дальше GitHub до перезапуска не дёргаем. */
@@ -81,14 +95,14 @@ object UpdateFlow {
         }
     }
 
-    /** Тихая авто-проверка (полка). Режим «Вручную» (#37) её отключает: GitHub зря
-     *  не дёргаем. Иначе — не чаще раза в день (KEY_LAST_DAY) и только если эту
+    /** Тихая авто-проверка (полка). Выключенный флажок её отключает (#37): GitHub
+     *  зря не дёргаем. Иначе — не чаще раза в день (KEY_LAST_DAY) и только если эту
      *  версию ещё не предлагали («Позже»). Диалог — с паузой, чтобы не накрыть
      *  озвучку имени окна, на которую полка только что вернулась. */
     fun auto(act: SectionActivity) {
         if (autoCheckedRun) return
         autoCheckedRun = true
-        if (prefs(act).getString(KEY_MODE, MODE_AUTO) == MODE_MANUAL) return
+        if (!isAuto(act)) return
         thread {
             // Сегодня уже сверялись — повторный запрос до завтра не нужен.
             if (prefs(act).getString(KEY_LAST_DAY, null) == today()) return@thread

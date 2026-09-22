@@ -140,8 +140,6 @@ class SettingsActivity(private val act: SectionActivity) {
     // тот же самый, что в панели читалки: один код, один вид, одни списки.
     private var voicePicker: VoicePicker? = null
     private var backupAutoRow: Button? = null
-    // Режим авто-проверки обновлений (0.3.91): «Автоматически» / «Вручную».
-    private var updateModeRow: Button? = null
     // msg4895: строка «Разобранный текст» — занято из потолка (BookCache).
     private var cacheRow: Button? = null
     // msg5730: строка «Размер текста» — общая ручка размера для всего приложения.
@@ -1251,7 +1249,11 @@ class SettingsActivity(private val act: SectionActivity) {
     )
 
     private fun buildDiagGroup() {
-        updateModeRow = addValueButton { pickUpdateMode() }
+        // Автопроверку обновлений держим флажком «включено / не включено»: у
+        // незрячего одна галочка понятнее двух слов «Автоматически / Вручную»,
+        // которые ещё надо различать на слух. Кнопка ручной проверки ниже
+        // работает всегда, независимо от флажка.
+        addCheck(R.string.update_auto_check, UpdateFlow.KEY_AUTO, UpdateFlow.isAuto(act))
         addButton(getString(R.string.update_check)) { UpdateFlow.manual(act) }
         addButton(getString(R.string.diag_send)) { sendDiagLog() }
         addButton(getString(R.string.diag_clear)) {
@@ -1538,7 +1540,6 @@ class SettingsActivity(private val act: SectionActivity) {
             if (YandexDisk.connected(act)) getString(R.string.sync_dir_yandex) else syncDirLabel()
         syncLastRow?.text = getString(R.string.sync_last_title) + ": " +
             (SyncStore.lastResult(act) ?: getString(R.string.sync_last_never))
-        updateModeRow?.text = getString(R.string.update_mode_title) + ": " + updateModeLabel()
 
         cacheRow?.text = cacheText()
 
@@ -2383,34 +2384,9 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     )
 
-    // ---------------- Режим авто-проверки обновлений (0.3.91) ----------------
-
-    private fun pickUpdateMode() {
-        val values = arrayOf(UpdateFlow.MODE_AUTO, UpdateFlow.MODE_MANUAL)
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.update_mode_dialog)
-            .setMessage(R.string.update_mode_explain)
-            .setSingleChoiceItems(
-                arrayOf(
-                    getString(R.string.update_mode_auto),
-                    getString(R.string.update_mode_manual),
-                ),
-                values.indexOf(prefs.getString(UpdateFlow.KEY_MODE, UpdateFlow.MODE_AUTO))
-                    .coerceAtLeast(0),
-            ) { d, which ->
-                prefs.edit().putString(UpdateFlow.KEY_MODE, values[which]).apply()
-                d.dismiss()
-                refreshRows()
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-    }
-
-    private fun updateModeLabel(): String = getString(
-        if (prefs.getString(UpdateFlow.KEY_MODE, UpdateFlow.MODE_AUTO) == UpdateFlow.MODE_AUTO)
-            R.string.update_mode_auto
-        else R.string.update_mode_manual
-    )
+    // ---------------- Диагностика обновлений ----------------
+    // Выбор «Автоматически / Вручную» убран: автопроверка теперь флажок в
+    // «Разном» (UpdateFlow.KEY_AUTO), ручная — кнопка «Проверить обновление».
 
     private fun startIndex(): Int =
         if (prefs.getString(MainActivity.KEY_START, MainActivity.START_LAST) == MainActivity.START_LAST) 1 else 0
