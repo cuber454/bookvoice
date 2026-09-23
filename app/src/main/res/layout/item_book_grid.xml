@@ -5,11 +5,13 @@
      всю карточку; текст для TalkBack (название, автор, процент) и клики
      выставляет BookAdapter в коде.
 
-     23.09.2026, вторая правка: АВТОРА на карточке больше нет (решение Сергея).
-     Освободившуюся строку отдали названию — четыре строки вместо трёх, длинные
-     названия почти перестают обрезаться. Для диктора и для вида «Список» автор
-     остался: он читается в тексте карточки (cardText) и виден в строке списка,
-     так что на слух ничего не потеряно. -->
+     Автор (tvCardAuthor) на карточке есть, но показывается ТОЛЬКО когда
+     обложки не показаны — снята галочка «Показывать обложки книг» или картинку
+     взять неоткуда. Тогда карточка снова текстовая, и автор в ней нужнее всего.
+     С обложкой автора не показываем: строку отдали названию, у него четыре
+     строки вместо трёх, поэтому длинные названия почти не обрезаются. Диктор
+     автор слышит всегда — он приходит текстом карточки (cardText), а не из
+     разметки; в списке и в окне «О книге» автор тоже виден. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -41,4 +43,16 @@
         android:textColor="?attr/bvInk"
         android:textSize="16sp"
         android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tvCardAuthor"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:ellipsize="end"
+        android:importantForAccessibility="no"
+        android:maxLines="1"
+        android:textColor="?attr/bvDim"
+        android:textSize="14sp"
+        android:visibility="gone" />
 </LinearLayout>

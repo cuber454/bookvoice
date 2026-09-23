@@ -247,6 +247,24 @@ internal object ReaderEngine {
      *  читалка продолжит сама. */
     var pausedByFocusLoss = false
 
+    /** Чтение встало потому, что телефон положили экраном вниз (галочка
+     *  «Останавливать чтение, когда телефон перевёрнут экраном вниз»,
+     *  23.09.2026). Перевернули экраном вверх — продолжаем сами, и только если
+     *  это была НАША пауза: пауза человека ею не снимается (см. [FaceDownPause]). */
+    @Volatile
+    var pausedByFaceDown = false
+        private set
+
+    /** Телефон перевернули экраном вверх. Продолжаем, только если паузу ставили
+     *  мы и только если таймер сна сейчас не ждёт жест: там переворот его. */
+    fun resumeIfPausedByFaceDown() {
+        if (!pausedByFaceDown) return
+        pausedByFaceDown = false
+        if (playing || book == null || sleepWaiting) return
+        Diag.log(ctx, "power", "экран вверх — продолжаю чтение")
+        requestStart()
+    }
+
     private fun focusLabel(code: Int): String = when (code) {
         AudioManager.AUDIOFOCUS_GAIN -> "GAIN (фокус вернулся)"
         AudioManager.AUDIOFOCUS_LOSS -> "LOSS (забрали насовсем)"
@@ -817,8 +835,11 @@ internal object ReaderEngine {
         val bk = book ?: return
         val p = player ?: return
         // Читатель снова взялся за книгу — незачем говорить «книга прочитана»
-        // (и незачем договаривать её, если она уже звучит).
+        // (и незачем договаривать её, если она уже звучит). Заодно снимаем
+        // признак «пауза по перевороту»: дальше переворот экраном вверх уже
+        // ничего не продолжает, читает человек.
         cancelEndAnnounce()
+        pausedByFaceDown = false
         // msg1139: если позицию тихо сбросило к началу — стартуем не с (0,0),
         // а с места, на котором книга открылась.
         guardResetToStart()
@@ -1200,8 +1221,13 @@ internal object ReaderEngine {
     }
 
     /** Пауза чтения. См. исходную pausePlayback в MainActivity: keepFocus —
-     *  пользовательская пауза (фокус держим), byFocusLoss — прервал чужой плеер. */
-    fun pausePlayback(keepFocus: Boolean = false, byFocusLoss: Boolean = false) {
+     *  пользовательская пауза (фокус держим), byFocusLoss — прервал чужой плеер,
+     *  byFaceDown — телефон перевернули экраном вниз ([FaceDownPause]). */
+    fun pausePlayback(
+        keepFocus: Boolean = false,
+        byFocusLoss: Boolean = false,
+        byFaceDown: Boolean = false,
+    ) {
         // Служебная «книга прочитана» звучит при уже остановленном чтении
         // (playing = false), поэтому её гасим ДО раннего выхода: «пауза» значит
         // тишина, а не «фраза доскажет себя и умолкнет».
@@ -1209,19 +1235,27 @@ internal object ReaderEngine {
         if (!playing) return
         Diag.log(
             ctx, "activity",
-            "пауза: ${if (byFocusLoss) "прерван чужим плеером" else "по команде пользователя"}, " +
-                "keepFocus=$keepFocus"
+            "пауза: " + when {
+                byFocusLoss -> "прерван чужим плеером"
+                byFaceDown -> "телефон перевёрнут экраном вниз"
+                else -> "по команде пользователя"
+            } + ", keepFocus=$keepFocus"
         )
         playing = false
         player?.stop()
+        // Признаки «чья это пауза» ставим ДО KeepAwake.release: он зовёт сторожей
+        // (ScreenOnPause/FaceDownPause), а сторожу переворота надо знать, что
+        // пауза наша, — иначе он снимется и переворота вверх уже не увидит.
+        pausedByFocusLoss = byFocusLoss
+        pausedByFaceDown = byFaceDown
         // #19: чтение встало — процессор больше не держим (в т.ч. на паузе из-за
         // звонка: дальше чтение возобновит [startSpeakingCurrent]).
         KeepAwake.release()
-        pausedByFocusLoss = byFocusLoss
         // Пользовательская пауза/стоп снимает таймер сна: он ставился «уснуть
         // под чтение», а чтение уже прервали руками (msg2567). Прерывание чужим
-        // плеером (звонок) — временное, таймер продолжает тикать.
-        if (!byFocusLoss) cancelSleepTimer()
+        // плеером (звонок) и переворот экраном вниз — временные: таймер
+        // продолжает тикать, иначе перевёрнутый телефон отменял бы его молча.
+        if (!byFocusLoss && !byFaceDown) cancelSleepTimer()
         if (!keepFocus) dropAudioFocus()
         // msg1119: пауза — ключевой момент, позицию фиксируем сразу.
         savePosition()

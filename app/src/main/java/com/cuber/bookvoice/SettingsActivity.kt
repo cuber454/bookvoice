@@ -576,6 +576,14 @@ class SettingsActivity(private val act: SectionActivity) {
         addCheck(R.string.pause_on_screen_title, MainActivity.KEY_PAUSE_ON_SCREEN, false) {
             ScreenOnPause.sync()
         }
+        // 23.09.2026: пауза по перевороту экраном вниз. Стоит рядом с двумя
+        // предыдущими: это тоже про то, что чтение прерывают извне — только
+        // прерывает его сам человек, положив телефон экраном вниз. Выключено по
+        // умолчанию, как и сторож экрана.
+        addCheck(R.string.pause_face_down_title, MainActivity.KEY_PAUSE_FACE_DOWN, false) {
+            FaceDownPause.sync()
+        }
+        addHint(getString(R.string.pause_face_down_hint))
 
         // msg5711: «Прокрутка» — как лента книги связана с голосом.
         addHeading(getString(R.string.reading_section_scroll))

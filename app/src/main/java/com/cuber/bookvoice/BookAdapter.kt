@@ -96,9 +96,17 @@ class BookAdapter(
         val v = holder.itemView
         if (viewMode == VIEW_GRID) {
             v.findViewById<TextView>(R.id.tvCardTitle).text = rec.displayTitle
-            // Автора на карточке нет (23.09.2026): освободившуюся строку отдали
-            // названию. Диктор автор по-прежнему слышит — он приходит в тексте
-            // карточки ([cardText]), а не из разметки; в списке автор тоже есть.
+            // Автора на карточке с обложкой нет (23.09.2026): освободившуюся
+            // строку отдали названию — у него четыре строки вместо трёх. А вот
+            // БЕЗ обложки карточка снова текстовая, и там автор нужен: узнавать
+            // книгу больше не по чему. Поэтому строку показываем ровно тогда,
+            // когда картинки нет — снята галочка или взять её неоткуда.
+            // Диктор автор слышит всегда: он приходит текстом карточки.
+            val tvAuthor = v.findViewById<TextView>(R.id.tvCardAuthor)
+            val author = rec.author?.takeIf { it.isNotBlank() }
+            val showAuthor = author != null && !coversShown()
+            tvAuthor.visibility = if (showAuthor) View.VISIBLE else View.GONE
+            tvAuthor.text = if (showAuthor) author else ""
             v.contentDescription = cardText(rec)
             bindCover(v, rec)
         } else {
@@ -107,6 +115,11 @@ class BookAdapter(
         v.setOnClickListener { onBookClick(rec) }
         v.setOnLongClickListener { onBookLongClick(rec); true }
     }
+
+    /** Показывается ли на карточке обложка. От этого зависит и автор: нет
+     *  картинки — карточка текстовая, и автор в ней нужен. Условие ровно то же,
+     *  что у [bindCover]: галочка включена и источник обложек есть. */
+    private fun coversShown(): Boolean = coversEnabled && covers != null
 
     /** Обложка карточки-сетки. Диктор её не видит (в разметке помечена как
      *  неважная), поэтому на обход и на озвучку она не влияет. Пришедшую из

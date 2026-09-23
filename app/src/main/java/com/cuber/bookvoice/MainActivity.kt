@@ -3813,6 +3813,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Ключ НЕ переиспользует старый `pause_when_screen` — там лежало число.
         internal const val KEY_PAUSE_ON_SCREEN = "pause_on_screen"
 
+        /** 23.09.2026: пауза, когда телефон перевёрнут экраном вниз (и чтение
+         *  продолжается, когда перевернули экраном вверх). Галочка в «Чтении»,
+         *  по умолчанию снята. Ключ читает [FaceDownPause] сам. */
+        internal const val KEY_PAUSE_FACE_DOWN = "pause_face_down"
+
         // msg5923/5931: прятать системные кнопки («назад/домой/недавние») в окне
         // книги. Три состояния, как у соседней строки: показывать (default) /
         // скрывать во время чтения / скрывать, пока открыта книга. Default —
