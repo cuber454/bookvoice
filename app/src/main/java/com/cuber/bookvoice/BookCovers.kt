@@ -391,26 +391,46 @@ internal class BookCovers(
         val name = rec.name.lowercase(Locale.ROOT)
         val uri = runCatching { Uri.parse(rec.uri) }.getOrNull() ?: return null
         return runCatching {
-            when {
-                name.endsWith(".fb2") || name.endsWith(".xml") -> open(uri)?.use { fb2Cover(it) }
-                name.endsWith(".epub") -> epubCover { open(uri) }
-                // Книгу кладут в архив и целиком (fb2.zip, fbz) — Сергей держит
-                // библиотеку как раз так. Внутри ищем ту же книгу, что откроет
-                // читалка: сначала FB2, потом EPUB. Порядок важен, потому что
-                // разбор книги (BookParser.parseZip) тоже предпочитает FB2.
-                name.endsWith(".zip") || name.endsWith(".fb2.zip") || name.endsWith(".fbz") ->
-                    zipCover(uri)
-                // PDF: картинки-обложки в файле нет, её надо отрисовать из первой
-                // страницы (так делает и FBReader — Сергей сверил на одних и тех
-                // же книгах, 23.09.2026).
-                name.endsWith(".pdf") -> pdfCover(uri)
-                else -> null
+            // Архив определяем по СОДЕРЖИМОМУ, а не по имени: книги приходят
+            // архивом под именем .fb2 — Сергей прислал именно такую («Карточные
+            // игры России»), и разбор книги делает так же (BookParser.isZip).
+            // По имени мы бы прочли архив как XML и обложки не нашли.
+            if (looksLikeZip(uri)) {
+                zipCover(uri)
+            } else {
+                when {
+                    name.endsWith(".fb2") || name.endsWith(".xml") -> open(uri)?.use { fb2Cover(it) }
+                    name.endsWith(".epub") -> epubCover { open(uri) }
+                    // PDF: картинки-обложки в файле нет, её надо отрисовать из
+                    // первой страницы (так делает и FBReader — Сергей сверил на
+                    // одних и тех же книгах, 23.09.2026).
+                    name.endsWith(".pdf") -> pdfCover(uri)
+                    else -> null
+                }
             }
         }.onFailure {
             // Сбой разбора не должен ронять полку, но обязан быть виден в журнале:
             // иначе «у книги нет обложки» и «мы не смогли её достать» не различить.
             Diag.log(appContext, "covers", "обложка ${rec.name}: сбой разбора (${it.message})")
         }.getOrNull()
+    }
+
+    /** Архив ли это — по первым четырём байтам, как BookParser.isZip. Из потока
+     *  читаем ровно эти байты и закрываем: SAF-поток не перематывается, а тянуть
+     *  книгу целиком ради проверки нельзя. */
+    private fun looksLikeZip(uri: Uri): Boolean {
+        val head = open(uri)?.use { input ->
+            val buf = ByteArray(4)
+            var read = 0
+            while (read < 4) {
+                val n = input.read(buf, read, 4 - read)
+                if (n <= 0) break
+                read += n
+            }
+            if (read == 4) buf else null
+        } ?: return false
+        return head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte() &&
+            (head[2] == 3.toByte() || head[2] == 5.toByte() || head[2] == 7.toByte())
     }
 
     /** Обложка книги из архива. Открываем архив столько раз, сколько нужно
