@@ -26,6 +26,10 @@ class BookAdapter(
     private val onBookLongClick: (BookRecord) -> Unit = {},
     private val cardText: (BookRecord) -> String = rowText,
     private val covers: CoverSource? = null,
+    /** Процент прочитанного для цифры в углу обложки: null — цифру не показывать
+     *  (книгу ещё не открывали). Число приходит от библиотеки: она одна знает,
+     *  как у нас считается процент. */
+    private val progress: ((BookRecord) -> Int?)? = null,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
@@ -95,18 +99,23 @@ class BookAdapter(
         val rec = items[position]
         val v = holder.itemView
         if (viewMode == VIEW_GRID) {
-            v.findViewById<TextView>(R.id.tvCardTitle).text = rec.displayTitle
-            // Автора на карточке с обложкой нет (23.09.2026): освободившуюся
-            // строку отдали названию — у него четыре строки вместо трёх. А вот
-            // БЕЗ обложки карточка снова текстовая, и там автор нужен: узнавать
-            // книгу больше не по чему. Поэтому строку показываем ровно тогда,
-            // когда картинки нет — снята галочка или взять её неоткуда.
-            // Диктор автор слышит всегда: он приходит текстом карточки.
+            // Подписи под обложкой нет (23.09.2026): название и автор и так
+            // написаны на картинке — на настоящей обложке как нарисовано, на
+            // нашей заглушке крупными буквами. Подпись была повтором, а карточка
+            // от неё выше. Без обложек (снята галочка) карточка снова текстовая,
+            // и там подписи возвращаются: узнавать книгу больше не по чему.
+            // Диктор получает название, автора и процент всегда — они приходят
+            // текстом карточки ([cardText]), а не из разметки.
+            val showCaptions = !coversShown()
+            val tvTitle = v.findViewById<TextView>(R.id.tvCardTitle)
+            tvTitle.visibility = if (showCaptions) View.VISIBLE else View.GONE
+            tvTitle.text = if (showCaptions) rec.displayTitle else ""
             val tvAuthor = v.findViewById<TextView>(R.id.tvCardAuthor)
             val author = rec.author?.takeIf { it.isNotBlank() }
-            val showAuthor = author != null && !coversShown()
+            val showAuthor = showCaptions && author != null
             tvAuthor.visibility = if (showAuthor) View.VISIBLE else View.GONE
             tvAuthor.text = if (showAuthor) author else ""
+            bindProgress(v, if (showCaptions) null else progress?.invoke(rec))
             v.contentDescription = cardText(rec)
             bindCover(v, rec)
         } else {
@@ -116,10 +125,23 @@ class BookAdapter(
         v.setOnLongClickListener { onBookLongClick(rec); true }
     }
 
-    /** Показывается ли на карточке обложка. От этого зависит и автор: нет
-     *  картинки — карточка текстовая, и автор в ней нужен. Условие ровно то же,
-     *  что у [bindCover]: галочка включена и источник обложек есть. */
+    /** Показывается ли на карточке обложка. От этого зависит и подпись: нет
+     *  картинки — карточка текстовая, и название с автором в ней нужны. Условие
+     *  ровно то же, что у [bindCover]: галочка включена и источник обложек есть. */
     private fun coversShown(): Boolean = coversEnabled && covers != null
+
+    /** Цифра прочитанного в углу обложки. Только для глаз: диктору процент
+     *  приходит текстом карточки. [pct] = null — надпись убираем (книгу ещё не
+     *  открывали, «0%» на полке был бы шумом). */
+    private fun bindProgress(v: View, pct: Int?) {
+        val badge = v.findViewById<TextView>(R.id.tvCardProgress) ?: return
+        if (pct == null) {
+            badge.visibility = View.GONE
+            return
+        }
+        badge.text = v.context.getString(R.string.lib_cover_progress, pct)
+        badge.visibility = View.VISIBLE
+    }
 
     /** Обложка карточки-сетки. Диктор её не видит (в разметке помечена как
      *  неважная), поэтому на обход и на озвучку она не влияет. Пришедшую из

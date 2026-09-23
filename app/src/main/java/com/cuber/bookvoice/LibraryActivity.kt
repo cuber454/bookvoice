@@ -132,6 +132,8 @@ class LibraryActivity(private val act: SectionActivity) {
             // Карточка-сетка: говорим название и автора — то, что видно на карточке.
             cardText = { rec -> cardText(rec) },
             covers = covers,
+            // Цифра прочитанного в углу обложки (только для глаз).
+            progress = { rec -> coverPercent(rec) },
         )
     }
 
@@ -750,6 +752,19 @@ class LibraryActivity(private val act: SectionActivity) {
         val no = rec.seriesNo?.takeIf { it.isNotBlank() }
         return if (no == null) getString(R.string.series_row, s)
         else getString(R.string.series_row_no, s, no)
+    }
+
+    /** Процент для цифры в углу обложки (23.09.2026). Отличие от [progressText]
+     *  одно: у книги, которую НИ РАЗУ не открывали, цифры нет вовсе — на полке не
+     *  нужен ряд «0%», по нему не видно, что читается, а что нет. Начатая книга
+     *  с ещё не посчитанным процентом показывается как 0%, дочитанная — как 100.
+     *  Значение только для глаз: диктору процент приходит текстом карточки. */
+    private fun coverPercent(rec: BookRecord): Int? = when {
+        rec.status == BookRecord.STATUS_FINISHED -> 100
+        rec.readPct > 0 -> rec.readPct.coerceIn(0, 100)
+        rec.status == BookRecord.STATUS_READING -> 0
+        rec.chapter > 0 || rec.sentence > 0 -> 0
+        else -> null
     }
 
     /** «прочитано N%» (msg656): дочитанная книга — 100%, у остальных — процент,

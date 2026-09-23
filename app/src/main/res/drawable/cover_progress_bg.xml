@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Плашка под цифрой прочитанного в углу обложки (23.09.2026). Полупрозрачная
+     чёрная: цифра должна читаться и на светлой обложке, и на пёстрой картинке.
+     Размеры плашки задаёт сама надпись (padding в TextView), здесь только цвет
+     и скругление. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#B3000000" />
+    <corners android:radius="6dp" />
+</shape>
