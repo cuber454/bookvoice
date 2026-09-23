@@ -241,6 +241,21 @@ class SpeechPlayer(context: Context) {
     private var reqSeq = 0L
     private val pending = HashMap<Long, Pending>()
 
+    /** Очередь фраз, ОТДАННЫХ движку в альтернативном способе (прямая речь),
+     *  в порядке звучания; здесь только заявки вида [Pending.Kind.DIRECT].
+     *
+     *  msg (23.09.2026, просьба Сергея: «если синтезатору посылаешь предложение
+     *  за предложением, может, читает всё без пауз»). Раньше в этом режиме мы
+     *  отдавали движку ровно одну фразу и ждали «закончил» — на стыке слышалась
+     *  пауза, а если движок молчал, мы считали срок по длине фразы. Теперь
+     *  держим у движка впереди [prefetchDepth] фраз: он берёт их подряд, пауз
+     *  нет, а срок нужен только один — на всю очередь (см. [armDirectWatch]).
+     *
+     *  Место в книге от очереди не страдает: каждая фраза отдаётся со своим
+     *  номером, движок сообщает «закончил» по каждой отдельно, и закладку
+     *  читалки двигает тот же [onDone], что и раньше. */
+    private val directQueue = ArrayDeque<Long>()
+
     // ---------- Сторож молчания (msg4077) ----------
 
     /** Движок или плеер могут не отозваться ВООБЩЕ: в логе пользователя
@@ -282,8 +297,13 @@ class SpeechPlayer(context: Context) {
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     // msg1818: засечка фактического старта произнесения движком —
                     // для сопоставления с фразой TalkBack «управление мультимедиа».
+                    // 23.09.2026: этим же сигналом пользуется надзор за прямой
+                    // речью — до него срок ждём один, после него считаем по длине
+                    // фразы (см. directSpeechStarted).
                     override fun onStart(utteranceId: String?) {
                         Diag.log(appContext, "tts", "onStart: движок начал речь ($utteranceId)")
+                        val id = utteranceId?.toLongOrNull()
+                        main.post { directSpeechStarted(id) }
                     }
 
                     override fun onDone(utteranceId: String?) {
@@ -381,7 +401,7 @@ class SpeechPlayer(context: Context) {
                 appContext, "sound",
                 "альтернативный способ: отдаю фразу движку (${text.length} знаков)"
             )
-            fallbackDirect(text)
+            speakDirectQueued(text)
             return
         }
 
@@ -476,6 +496,7 @@ class SpeechPlayer(context: Context) {
         // файлы, чтобы после tts.stop() они не осиротели в pending.
         pending.values.forEach { it.cancelled = true; it.file?.delete() }
         pending.clear()
+        directQueue.clear()
     }
 
     fun selectVoice(name: String) {
@@ -520,7 +541,7 @@ class SpeechPlayer(context: Context) {
 
     // ---------- Сторож молчания (msg4077) ----------
 
-    /** Взвести надзор за синтезом [text]: не отозвался за [SYNTH_STALL_MS] —
+    /** Взвести надзор за синтезом [text]: не отозвался за [synthFuseMs] —
      *  считаем движок замолчавшим. Если эту фразу движок уже терял однажды
      *  ([softRetriedText] — переспрос не помог), ждём коротко
      *  ([SYNTH_REASK_STALL_MS]) и идём к следующей мере, а не отсчитываем
@@ -535,7 +556,7 @@ class SpeechPlayer(context: Context) {
      *  не обновлялся, повтор той же фразы через полчаса выдал бы «спал 1800 с». */
     private fun armSynthWatch(text: String, shortFuse: Boolean = softRetriedText == text) {
         watchFromMs = SystemClock.elapsedRealtime()
-        val fuse = if (shortFuse) SYNTH_REASK_STALL_MS else SYNTH_STALL_MS
+        val fuse = if (shortFuse) SYNTH_REASK_STALL_MS else synthFuseMs(text)
         val token = ++synthWatchToken
         main.postDelayed({ if (token == synthWatchToken) onSynthWatchdog(text) }, fuse)
     }
@@ -562,7 +583,7 @@ class SpeechPlayer(context: Context) {
         }
         // Реальное время молчания, а не номинал сторожа: если часы «убежали»
         // далеко за срок запала — значит процесс спал (msg4211, #19).
-        val nominalSec = if (softRetriedText == text) SYNTH_REASK_STALL_MS else SYNTH_STALL_MS
+        val nominalSec = if (softRetriedText == text) SYNTH_REASK_STALL_MS else synthFuseMs(text)
         val waited = ((SystemClock.elapsedRealtime() - watchFromMs) / 1000).toInt()
             .coerceAtLeast((nominalSec / 1000).toInt())
         stuck.forEach { (id, p) ->
@@ -704,19 +725,166 @@ class SpeechPlayer(context: Context) {
     }
 
     /** Взвести надзор за прямой речью движка: `speak()` мог отчитаться успехом и
-     *  потом промолчать — тогда `onDone` не придёт и чтение встанет. */
-    private fun armDirectWatch(id: Long) {
+     *  потом промолчать — тогда `onDone` не придёт и чтение встанет.
+     *
+     *  23.09.2026: срок считаем, а не берём одним числом (было 180 с — три минуты
+     *  тишины). Пока движок не подал сигнал «начал говорить», ждём
+     *  [DIRECT_START_MS] и пропускаем фразу: Сергей выбрал самую короткую тишину
+     *  («чем можно пренебречь»), поэтому переспроса и перезапуска движка в этом
+     *  режиме нет — они стоили бы ещё четыре секунды. Цена: если движок просто
+     *  потерял одну заявку, фраза теряется. Вернуть переспрос — правка на пять
+     *  строк, записано в docs/TODO.md. Пришёл сигнал «начал говорить» — считаем по
+     *  длине фразы ([directFuseMs]).
+     *
+     *  С очередью ([directQueue]) срок на СТАРТ взводится только у первой фразы:
+     *  у той, что стоит в очереди за другими, свой срок начинается не сейчас, а
+     *  после них, и короткий запал сработал бы вхолостую. Дальше надзор ведёт
+     *  сигнал «начал говорить» — он приходит на каждую фразу очереди. */
+    private fun armDirectWatch(id: Long, started: Boolean = false) {
         val token = ++directWatchToken
+        val text = pending[id]?.text
+        val fuse = if (started) directFuseMs(text) else DIRECT_START_MS
+        if (started) {
+            Diag.log(
+                appContext, "tts",
+                "прямая речь началась: стерегу ${fuse / 1000} с " +
+                    "(фраза ${text?.length ?: 0} знаков, скорость $speed)",
+            )
+        }
         main.postDelayed({
             if (token != directWatchToken) return@postDelayed
             if (pending.remove(id) == null) return@postDelayed
+            // Движок стоит на этой фразе, а следующие уже за ней у него в
+            // очереди: без очистки они прозвучат после молчания, и наша закладка
+            // разъедется со звуком. Гасим очередь и просим заново со следующей
+            // фразы — её пришлёт читалка по onDone (см. [speakDirectQueued]).
+            flushDirectQueue("фраза не зазвучала")
             Diag.log(
                 appContext, "tts",
-                "прямая речь молчит ${DIRECT_STALL_MS / 1000} с — пропускаю фразу, чтение идёт дальше"
+                "прямая речь молчит ${fuse / 1000} с — пропускаю фразу, чтение идёт дальше"
             )
             retriesInRow = 0
             onDone?.invoke()
-        }, DIRECT_STALL_MS)
+        }, fuse)
+    }
+
+    /** Фраза прямой речи от читалки. Обычный случай — она уже стоит в очереди
+     *  движка (мы наполнили её заранее, [topUpDirectQueue]): тогда не трогаем
+     *  ничего, движок сам её скажет, и паузы на стыке не будет вовсе. Другой
+     *  текст (прыжок по тексту, повтор предложения, пауза → продолжить) — старая
+     *  очередь движку больше не нужна, выбрасываем и начинаем с этой фразы. */
+    private fun speakDirectQueued(text: String) {
+        if (isDirectQueued(text)) {
+            Diag.log(
+                appContext, "sound",
+                "альтернативный способ: фраза уже в очереди движка (${text.length} знаков)"
+            )
+            topUpDirectQueue()
+            return
+        }
+        flushDirectQueue("пришла другая фраза")
+        if (!queueDirect(text)) {
+            onDone?.invoke()
+            return
+        }
+        topUpDirectQueue()
+    }
+
+    /** Стоит ли [text] в очереди движка (сравниваем по тексту: номера заявок
+     *  читалке неизвестны). Повтор одинаковых предложений подряд различению не
+     *  мешает — движок читает очередь по порядку, а закладку двигает «закончил»
+     *  по каждой фразе. */
+    private fun isDirectQueued(text: String): Boolean =
+        directQueue.any { pending[it]?.text == text }
+
+    /** Отдать движку ещё одну фразу В КОНЕЦ очереди. false — движок отказался. */
+    private fun queueDirect(text: String): Boolean {
+        val t = tts ?: return false
+        if (!ready) return false
+        val idle = directQueue.isEmpty()
+        val id = reqSeq++
+        pending[id] = Pending(Pending.Kind.DIRECT, text, null)
+        val r = runCatching { t.speak(text, TextToSpeech.QUEUE_ADD, null, id.toString()) }
+            .getOrDefault(TextToSpeech.ERROR)
+        if (r != TextToSpeech.SUCCESS) {
+            pending.remove(id)
+            return false
+        }
+        directQueue.addLast(id)
+        if (idle) armDirectWatch(id)
+        return true
+    }
+
+    /** Держать у движка [prefetchDepth] фраз впереди — тогда он берёт их подряд
+     *  без пауз. Сколько именно, спрашиваем у читалки тем же [onNeedNext], каким
+     *  в обычном режиме заказываем заготовки: она единственный источник правды о
+     *  том, что звучит следующим, и сама обрывает список на конце главы, конце
+     *  книги и на границе выделенного куска. */
+    private fun topUpDirectQueue() {
+        while (directQueue.size < prefetchDepth) {
+            val next = onNeedNext?.invoke(directQueue.size) ?: return
+            if (next.isBlank()) return
+            if (isDirectQueued(next)) return
+            if (!queueDirect(next)) return
+            Diag.log(
+                appContext, "sound",
+                "альтернативный способ: в очереди движка ${directQueue.size}/$prefetchDepth фраз"
+            )
+        }
+    }
+
+    /** Выбросить всё, что отдано движку в альтернативном способе, вместе с его
+     *  собственной очередью. Движок при этом останавливаем — иначе он дочитает
+     *  то, что мы уже не считаем своим (прыжок по тексту, пауза, пропуск
+     *  застрявшей фразы).
+     *
+     *  Разовую страховку обычного режима ([fallbackDirect]) это не задевает: там
+     *  очередь пуста, и первым же условием мы выходим — гасить движок нельзя, у
+     *  него могут быть заявки на синтез в файл. */
+    private fun flushDirectQueue(reason: String) {
+        if (directQueue.isEmpty()) return
+        directQueue.clear()
+        pending.entries.removeAll { it.value.kind == Pending.Kind.DIRECT }
+        directWatchToken++
+        runCatching { tts?.stop() }
+        Diag.log(appContext, "tts", "прямая речь: очередь движка выброшена ($reason)")
+    }
+
+    /** Сигнал движка «начал говорить» пришёл — переводим надзор на срок по длине
+     *  фразы. В обычном режиме тот же сигнал приходит про синтез в файл: там свой
+     *  надзор, и трогать его не надо. */
+    private fun directSpeechStarted(id: Long?) {
+        val real = id ?: return
+        val p = pending[real] ?: return
+        if (p.kind != Pending.Kind.DIRECT) return
+        armDirectWatch(real, started = true)
+    }
+
+    /** Сколько ждать прямую речь по длине фразы: сколько ей звучать при текущей
+     *  скорости, запас 1,4 и [DIRECT_TAIL_MS] сверху, в границах
+     *  [DIRECT_MIN_MS]…[DIRECT_MAX_MS]. [CHARS_PER_SEC] — наша оценка темпа на
+     *  скорости 1.0; её видно в журнале рядом со сроком, и если движок говорит
+     *  заметно медленнее, число правится по факту, а не на глаз. */
+    private fun directFuseMs(text: String?): Long {
+        val chars = text?.length ?: 0
+        val rate = speed.coerceAtLeast(0.5f)
+        val expected = chars / (CHARS_PER_SEC * rate) * 1000f
+        return (expected * 1.4f + DIRECT_TAIL_MS).toLong().coerceIn(DIRECT_MIN_MS, DIRECT_MAX_MS)
+    }
+
+    /** Сколько ждём движок на синтез [text] в файл: четверть того времени, что
+     *  фраза будет звучать, в границах [SYNTH_MIN_MS]…[SYNTH_MAX_MS]. Почему
+     *  четверть: наш замер — 13-секундная фраза собралась за 0,95 с, то есть
+     *  синтез идёт примерно в десять раз быстрее речи, и четверть даёт запас
+     *  в два с половиной раза на медленный движок или занятый процессор.
+     *  Срок виден в журнале, и если движок у Сергея окажется медленнее, число
+     *  правится по факту, а не на глаз. Короткая фраза теперь переспрашивается
+     *  через 2,5 с вместо прежних 6 — это и есть выигранная тишина. */
+    private fun synthFuseMs(text: String?): Long {
+        val chars = text?.length ?: 0
+        val rate = speed.coerceAtLeast(0.5f)
+        val speechMs = chars / (CHARS_PER_SEC * rate) * 1000f
+        return (speechMs / 4f).toLong().coerceIn(SYNTH_MIN_MS, SYNTH_MAX_MS)
     }
 
     // ---------- Синтез ----------
@@ -748,8 +916,14 @@ class SpeechPlayer(context: Context) {
         }
         when (p.kind) {
             Pending.Kind.DIRECT -> {
-                // Страховочное произнесение движком закончилось само.
+                // Звучащая фраза прямой речи (или разовая страховка) закончилась.
                 retriesInRow = 0 // движок жив — счётчик перезапусков обнуляем
+                if (directQueue.firstOrNull() == id) directQueue.removeFirst()
+                else directQueue.remove(id)
+                // Движок сейчас возьмёт следующую фразу очереди: переводим надзор
+                // на её длину. Сигнал «начал говорить» придёт и сам, но срок,
+                // отсчитанный отсюда, спасает движки, которые его не шлют.
+                directQueue.firstOrNull()?.let { armDirectWatch(it, started = true) }
                 onDone?.invoke()
             }
             Pending.Kind.FILE -> {
@@ -823,7 +997,26 @@ class SpeechPlayer(context: Context) {
         directWatchToken++
         val p = pending.remove(id) ?: return
         p.file?.delete()
-        if (p.cancelled || p.kind != Pending.Kind.FILE) return
+        if (p.cancelled) return
+        if (p.kind == Pending.Kind.DIRECT) {
+            // Движок отказался от фразы прямой речи. Раньше такие ошибки молчали
+            // вовсе: в этом режиме надзирало только молчание, а ошибка — не
+            // молчание, и о ней никто не узнавал.
+            val head = directQueue.firstOrNull() == id
+            directQueue.remove(id)
+            Diag.log(
+                appContext, "tts",
+                "прямая речь: движок отказался от фразы (код $errorCode)"
+            )
+            // Отказ по фразе ИЗ ОЧЕРЕДИ закладку не двигает: читалка попросит её
+            // снова, когда дойдёт до неё (см. [speakDirectQueued]), и текст не
+            // потеряется. А отказ по звучащей фразе — это пропуск, как по сторожу.
+            if (!head) return
+            flushDirectQueue("движок вернул ошибку")
+            retriesInRow = 0
+            onDone?.invoke()
+            return
+        }
         Diag.log(appContext, "tts", "синтез в файл не удался (код $errorCode)")
         onSynthLost(p.text)
     }
@@ -1403,6 +1596,7 @@ class SpeechPlayer(context: Context) {
         awaitingPlayText = null
         prefetchInFlightText = null
         softRetriedText = null
+        directQueue.clear()
         clearPrefetch()
         releaseMedia()
         currentText = null
@@ -1425,33 +1619,62 @@ class SpeechPlayer(context: Context) {
 
     companion object {
         /** Сторож молчания (msg4077): сколько ждём движок на синтез одной фразы.
-         *  msg5309: срок сокращён с 15 с до 6. Обычный синтез в логе занимает
-         *  доли секунды (13-секундная фраза собралась за 0,95 с, проба голоса —
-         *  за 0,2–0,39 с), а лишнее ожидание и есть то самое молчание, на
-         *  которое жалуются: за 15 с человек успевает нажать паузу, и сторож
-         *  не срабатывает вовсе. */
-        private const val SYNTH_STALL_MS = 6_000L
+         *  msg5309: срок сокращён с 15 с до 6. 23.09.2026: и 6 с оказалось много
+         *  (просьба Сергея «давай укорачиваем») — срок больше не одно число, а
+         *  расчёт по длине фразы, см. [synthFuseMs]. Границы: [SYNTH_MIN_MS]…
+         *  [SYNTH_MAX_MS]. Обычный синтез в логе занимает доли секунды
+         *  (13-секундная фраза собралась за 0,95 с, проба голоса — за 0,2–0,39 с),
+         *  а лишнее ожидание и есть то самое молчание, на которое жалуются. */
+        private const val SYNTH_MIN_MS = 2_500L
+
+        /** Потолок того же срока: длиннее шести секунд ждать нечего даже для
+         *  самой длинной нашей фразы в 220 знаков. */
+        private const val SYNTH_MAX_MS = 6_000L
 
         /** Тот же сторож после переспроса (msg5309): фразу у движка уже
          *  переспросили, и если он молчит ещё секунду — перезапускаем движок.
          *  Короткий срок и есть смысл второго шага: не отсчитывать срок заново,
-         *  а идти к следующей мере. Обе цифры вместе дают 7 с до перезапуска. */
+         *  а идти к следующей мере. Обе цифры вместе дают при обычной скорости
+         *  3,5–4,7 с до перезапуска вместо прежних 7 с (на самой медленной скорости
+         *  потолок в [SYNTH_MAX_MS] возвращает те же 7 с — но там и речь вдвое
+         *  длиннее). */
         private const val SYNTH_REASK_STALL_MS = 1_000L
 
-        /** Сколько ждём MediaPlayer на подготовку локального wav-файла. */
-        private const val PLAY_STALL_MS = 12_000L
+        /** Сколько ждём MediaPlayer на подготовку локального wav-файла.
+         *  23.09.2026: было 12 с. Файл лежит на диске и готовится десятые доли
+         *  секунды; если за пять секунд не подготовился — он не подготовится,
+         *  и выгоднее сразу перейти к прямой речи, чем держать тишину. */
+        private const val PLAY_STALL_MS = 5_000L
 
         /** Как часто сверяем позицию играющего плеера (23.09.2026). */
         private const val POSITION_CHECK_MS = 2_000L
 
         /** Сколько позиция должна стоять на месте, чтобы считать, что звука нет.
          *  Позиция у локального файла идёт по времени, а не по громкости, и файл
-         *  уже подготовлен: стоять шесть секунд на живой речи ей не с чего. */
-        private const val POSITION_STALL_MS = 6_000L
+         *  уже подготовлен: стоять четыре секунды на живой речи ей не с чего.
+         *  23.09.2026: было 6 с — укорочено вместе с остальными сроками. */
+        private const val POSITION_STALL_MS = 4_000L
 
-        /** Прямая речь движка: медленный темп и длинная фраза могут звучать долго,
-         *  поэтому срок щедрый — тишина дольше трёх минут уже точно сбой. */
-        private const val DIRECT_STALL_MS = 180_000L
+        /** Прямая речь: срок на СТАРТ. Движок подаёт сигнал «начал говорить» за
+         *  доли секунды — наши замеры: синтез 13-секундной фразы 0,95 с, проба
+         *  голоса 0,2…0,4 с. Поэтому ждём совсем немного (две секунды, просьба
+         *  Сергея 23.09.2026: «6 секунд — это очень много»); не начал — сначала
+         *  ПЕРЕСПРАШИВАЕМ фразу (см. [armDirectWatch]), и только если молчит и
+         *  после переспроса — пропускаем. Короткий срок при переспросе фразу не
+         *  теряет. Было 180 с на всё — три минуты тишины. */
+        private const val DIRECT_START_MS = 2_000L
+
+        /** Оценка темпа речи на скорости 1.0: знаков в секунду. */
+        private const val CHARS_PER_SEC = 15f
+
+        /** Запас сверх расчётного времени фразы: движок может говорить медленнее,
+         *  чем мы считаем, а оборвать живую речь хуже, чем подождать лишнее. */
+        private const val DIRECT_TAIL_MS = 4_000L
+
+        /** Границы срока по длине фразы: меньше шести секунд ждать нечего, а
+         *  больше сорока пяти — уже ни к чему (наша фраза ≤220 знаков). */
+        private const val DIRECT_MIN_MS = 6_000L
+        private const val DIRECT_MAX_MS = 45_000L
 
         /** Перезапусков движка подряд, после которых фразу просто пропускаем. */
         private const val MAX_RESTARTS = 2

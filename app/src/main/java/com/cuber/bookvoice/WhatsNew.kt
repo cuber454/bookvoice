@@ -70,6 +70,20 @@ object WhatsNew {
             R.string.whats_new_116_7,
             R.string.whats_new_116_8,
         ),
+        // 0.4.67: правило «только крупное» здесь сознательно нарушено по просьбе
+        // Сергея (23.09.2026): «по одной строчке буквально про каждое изменение,
+        // чтобы тестеры поняли, что изменилось». Выпуск почти целиком про сроки
+        // ожидания и очередь фраз — то есть ровно про то, что человек слышит как
+        // заминку и паузы, и молчать об этом в окне новостей было бы странно.
+        127 to listOf(
+            R.string.whats_new_127_1,
+            R.string.whats_new_127_2,
+            R.string.whats_new_127_3,
+            R.string.whats_new_127_4,
+            R.string.whats_new_127_5,
+            R.string.whats_new_127_6,
+            R.string.whats_new_127_7,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =
