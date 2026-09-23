@@ -84,6 +84,16 @@ object WhatsNew {
             R.string.whats_new_127_6,
             R.string.whats_new_127_7,
         ),
+        // 0.4.68: тот же порядок — по строке на изменение (просьба Сергея
+        // 24.09.2026 остаётся в силе: тестеры должны понимать, что поменялось).
+        // Здесь всё про задержку перед звуком и про темп — то, что слышно с
+        // первого нажатия.
+        128 to listOf(
+            R.string.whats_new_128_1,
+            R.string.whats_new_128_2,
+            R.string.whats_new_128_3,
+            R.string.whats_new_128_4,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

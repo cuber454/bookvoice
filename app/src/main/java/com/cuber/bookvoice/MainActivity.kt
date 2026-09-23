@@ -703,6 +703,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (explicit) goTo(eCh, eS)
         // Сервис мог прилечь, пока окна не было, — добиваем до живого состояния.
         if (playing) ensureMediaService(true)
+        // 24.09.2026: окно вернулось к книге и чтение стоит — готовим звук
+        // первой фразы заранее, чтобы «читать» начиналось со звука (при живом
+        // чтении вызов ничего не делает).
+        ReaderEngine.prewarmCurrent()
         Diag.log(this, "activity", "rejoin: окно вернулось к живой книге «${book?.title}»")
     }
 

@@ -799,21 +799,12 @@ internal object ReaderEngine {
         if (userMoved) return false // читатель уже сам выбрал место — не вмешиваемся
         if (playing) return false
         if (chapterIdx != rp.chapter || sentenceIdx != rp.sentence) return false
-        val bk = book ?: return false
+        if (book == null) return false
         if (rp.chapter == 0 && rp.sentence == 0) return false
         // Место остановки держим «полом», ниже которого не пишем позицию, пока
         // чтение не дойдёт до него (анти-дрейф: повторные открытия не сползают).
         rewindFloor = rp
-        var ch = chapterIdx
-        var s = sentenceIdx
-        repeat(n) {
-            if (s > 0) {
-                s--
-            } else if (ch > 0) {
-                ch--
-                s = bk.chapters[ch].sentences.size - 1
-            }
-        }
+        val (ch, s) = stepBack(chapterIdx, sentenceIdx, n)
         if (ch == chapterIdx && s == sentenceIdx) {
             rewindFloor = null // откатываться некуда — начало книги
             return false
@@ -827,6 +818,66 @@ internal object ReaderEngine {
         if (ch != rp.chapter) host?.onChapterLoaded() else host?.onMovedInChapter(s)
         pushCardLine()
         return true
+    }
+
+    /** Отступить на [n] предложений назад от места (ch0, s0) — то же движение,
+     *  что делает откат при старте (msg2093). Чистая арифметика без побочных
+     *  действий: ею же считает место [prewarmCurrent], чтобы приготовить звук
+     *  ровно той фразы, с которой чтение начнётся. */
+    private fun stepBack(ch0: Int, s0: Int, n: Int): Pair<Int, Int> {
+        val bk = book ?: return ch0 to s0
+        var ch = ch0
+        var s = s0
+        repeat(n) {
+            if (s > 0) {
+                s--
+            } else if (ch > 0) {
+                ch--
+                s = bk.chapters[ch].sentences.size - 1
+            }
+        }
+        return ch to s
+    }
+
+    /** Место, с которого реально начнётся чтение: с учётом отката при старте,
+     *  если он вооружён и применится. Побочных действий не делает — в отличие
+     *  от [applyStartRewindIfPending], которая двигает позицию. */
+    private fun startPlace(): Pair<Int, Int> {
+        val rp = restoredPlace
+        val applies = startRewindPending > 0 && !userMoved && !playing &&
+            rp != null && rp.chapter == chapterIdx && rp.sentence == sentenceIdx &&
+            !(rp.chapter == 0 && rp.sentence == 0)
+        return if (applies) stepBack(chapterIdx, sentenceIdx, startRewindPending)
+        else chapterIdx to sentenceIdx
+    }
+
+    /** Приготовить звук первой фразы заранее — чтобы «читать» начиналось со
+     *  звука, а не с синтеза (24.09.2026, просьба Сергея; замеры и риски —
+     *  в [SpeechPlayer.prewarm]).
+     *
+     *  Зовём при открытии книги и при возврате окна к книге. Неподходящий
+     *  момент ничего не ломает: движок не готов, голос книги ещё не применён,
+     *  чтение идёт или включён альтернативный способ — просто ничего не
+     *  готовим. Ждём готовности движка и списка голосов тем же способом, что и
+     *  смена голоса (msg3550): прогреть фразу чужим голосом хуже, чем не
+     *  прогревать вовсе. */
+    fun prewarmCurrent() {
+        if (playing || endAnnounceSpeaking || book == null) return
+        whenVoicesReady { prewarmNow() }
+    }
+
+    private fun prewarmNow() {
+        val p = player ?: return
+        if (playing || endAnnounceSpeaking || book == null) return
+        if (!p.isReady || p.voices.isEmpty()) return
+        // Голос книги мог ещё не примениться: спрашиваем тот, что для книги
+        // выбран, и греем только когда движок уже на нём.
+        val want = perBookVoice ?: prefs.getString(MainActivity.KEY_VOICE, null)
+        if (want != null && want != voiceName) return
+        val (ch, s) = startPlace()
+        if (book?.chapters?.getOrNull(ch)?.sentences.isNullOrEmpty()) return
+        val t = chunkText(ch, s, chunkSpan(ch, s)) ?: return
+        p.prewarm(t)
     }
 
     /** Начать чтение с текущей позиции (см. исходный startSpeakingCurrent в
@@ -1242,7 +1293,9 @@ internal object ReaderEngine {
             } + ", keepFocus=$keepFocus"
         )
         playing = false
-        player?.stop()
+        // 24.09.2026: пауза сохраняет звук звучащей фразы — продолжение
+        // зазвучит сразу, без повторного синтеза (см. pauseKeepingPhrase).
+        player?.pauseKeepingPhrase()
         // Признаки «чья это пауза» ставим ДО KeepAwake.release: он зовёт сторожей
         // (ScreenOnPause/FaceDownPause), а сторожу переворота надо знать, что
         // пауза наша, — иначе он снимется и переворота вверх уже не увидит.
@@ -1887,6 +1940,7 @@ internal object ReaderEngine {
                         voiceName = gVoice
                     }
                     host?.onSpeedUiRefresh()
+                    prewarmCurrent() // движок поднялся — готовим первую фразу
                 }
             }
         } else {
@@ -1895,6 +1949,7 @@ internal object ReaderEngine {
                 voiceName = gVoice
             }
             host?.onSpeedUiRefresh()
+            prewarmCurrent() // голос применён — можно готовить первую фразу
         }
     }
 
@@ -1953,6 +2008,7 @@ internal object ReaderEngine {
             }
             announceIfBookVoiceMissing(vce)
             host?.onSpeedUiRefresh()
+            prewarmCurrent() // голос книги применён — готовим первую фразу заранее
         }
     }
 

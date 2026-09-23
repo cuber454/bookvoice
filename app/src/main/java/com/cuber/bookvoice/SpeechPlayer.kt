@@ -49,8 +49,14 @@ class SpeechPlayer(context: Context) {
 
     var speed: Float = 1f
         set(value) {
+            if (field == value) return
             field = value
             tts?.setSpeechRate(value)
+            // 24.09.2026: заготовки сделаны прежней скоростью, и играть их
+            // прежним темпом нельзя (см. [Prepared]). Выбрасываем сразу, а не
+            // по одной на подходе: иначе три устаревшие фразы подряд собирались
+            // бы заново без упреждения и чтение спотыкалось бы на каждой.
+            dropStaleRate()
         }
 
     /** Высота голоса (тон). Норма = 1.0. Применяется к следующему синтезу. */
@@ -115,10 +121,21 @@ class SpeechPlayer(context: Context) {
     /** Текст фразы, которая звучит прямо сейчас. */
     private var playingText: String? = null
 
+    /** Файл звучащей фразы и скорость, которой он сделан. Нужны паузе: файл при
+     *  паузе никуда не удаляется, и продолжение можно начать с него же, не
+     *  заставляя движок синтезировать ту же фразу второй раз (см.
+     *  [pauseKeepingPhrase]). */
+    private var playingFile: File? = null
+    private var playingRate: Float = 1f
+
     /** Следующая фраза, прицепленная к играющему плееру встык (msg4598). */
     private var chainedPlayer: MediaPlayer? = null
     private var chainedText: String? = null
     private var chainedFile: File? = null
+
+    /** Скорость, которой сделан прицепленный файл: если её успели сменить,
+     *  возвращать заготовку в очередь нельзя (см. [unhookChain]). */
+    private var chainedRate: Float = 1f
 
     /** Прицепка готовится: файл отдан MediaPlayer, ответа ещё нет. В счёт
      *  заготовок входит наравне с готовой прицепкой (см. [requestPrefetch]) —
@@ -227,11 +244,25 @@ class SpeechPlayer(context: Context) {
     /** Текст, который синтезируется впрок (пока играет другое предложение). */
     private var prefetchInFlightText: String? = null
 
+    /** Заранее подготовленная фраза (см. [prewarm]): она одна и только она —
+     *  очередь впрок, пока чтение не идёт, не растёт. */
+    private var prewarmOnly = false
+
+    /** Фраза, сохранённая паузой для мгновенного продолжения: файл уже готов и
+     *  движку не нужно синтезировать её второй раз (см. [pauseKeepingPhrase]). */
+    private var keptPhrase: Prepared? = null
+
     /** Очередь уже синтезированных фраз — готовы к мгновенному старту, в том
      *  порядке, в каком прозвучат (msg4472). Раньше здесь лежала ровно одна
      *  заготовка: её хватало на паузу между фразами, но не на заминку движка,
-     *  которая длится дольше самой фразы. */
-    private val readyQueue = ArrayDeque<Pair<String, File>>()
+     *  которая длится дольше самой фразы.
+     *
+     *  [rate] — скорость, которой сделан файл (24.09.2026). Раньше сверять её
+     *  было негде, и после смены скорости до трёх фраз доигрывали прежним
+     *  темпом; теперь такая заготовка выбрасывается, а не звучит. */
+    private data class Prepared(val text: String, val file: File, val rate: Float)
+
+    private val readyQueue = ArrayDeque<Prepared>()
 
     /** Сколько фраз держим готовыми. Три — это 8–15 с звука при фразе в 4–6 с,
      *  то есть ровно длина заминок из лога тестера (12–15 с). Больше не нужно:
@@ -385,6 +416,9 @@ class SpeechPlayer(context: Context) {
         val t = tts
         if (t == null || !ready || text.isBlank()) return
         currentText = text
+        // Читалка просит фразу — упреждающая подготовка ([prewarm]) своё дело
+        // сделала, дальше очередь наполняется обычным порядком.
+        prewarmOnly = false
 
         // #57: альтернативный способ — наш конвейер не участвует вовсе.
         // Фразу целиком отдаём движку (он и синтезирует, и играет), поэтому
@@ -434,6 +468,14 @@ class SpeechPlayer(context: Context) {
         gaplessHopText = null
         releaseMedia()
 
+        // Пауза сохранила звук ровно этой фразы — продолжаем с него, синтез не
+        // нужен (см. [pauseKeepingPhrase]). Скорость сверяем: пауза могла
+        // пережить её смену.
+        takeKeptPhrase(text)?.let { kept ->
+            playFile(kept.file, kept.rate)
+            return
+        }
+
         // Готовая заранее заготовка этой же фразы — играем без задержки.
         // ВАЖНО: забираем файл из очереди, НЕ вызывая clearPrefetch() — она
         // удаляет файлы, и playFile падает с ENOENT (каждая вторая фраза уходила
@@ -441,11 +483,22 @@ class SpeechPlayer(context: Context) {
         // завершении. Очередь читаем с головы: заготовки копятся в том порядке,
         // в каком прозвучат, и голова — как раз следующая фраза.
         val head = readyQueue.firstOrNull()
-        if (head != null && head.first == text) {
+        if (head != null && head.text == text) {
+            if (head.rate == speed) {
+                readyQueue.removeFirst()
+                awaitingPlayText = null
+                playFile(head.file, head.rate)
+                return
+            }
+            // Заготовка сделана до смены скорости. Играть её прежним темпом
+            // нельзя — выбрасываем и собираем фразу заново текущей скоростью.
+            Diag.log(
+                appContext, "sound",
+                "заготовка сделана на скорости ${RateSteps.label(head.rate)}, " +
+                    "сейчас ${RateSteps.label(speed)} — синтезирую фразу заново"
+            )
             readyQueue.removeFirst()
-            awaitingPlayText = null
-            playFile(head.second)
-            return
+            head.file.delete()
         }
 
         // Синтез этого текста уже идёт впрок — просто ждём его и сыграем.
@@ -465,6 +518,12 @@ class SpeechPlayer(context: Context) {
     fun stop() {
         currentText = null
         awaitingPlayText = null
+        prewarmOnly = false
+        // Сохранённую паузой фразу здесь не трогаем: её ставит
+        // [pauseKeepingPhrase] уже ПОСЛЕ остановки. Настоящий стоп (прыжок,
+        // закрытие книги) её выбрасывает — продолжать с неё больше нечего.
+        keptPhrase?.let { runCatching { it.file.delete() } }
+        keptPhrase = null
         // msg4103: заявка, которая была «в полёте», здесь же и отменяется —
         // tts.stop() её гасит, а pending ниже чистится. Метку «синтез идёт»
         // снимаем вместе с ней: иначе speak() того же предложения (пауза →
@@ -956,11 +1015,23 @@ class SpeechPlayer(context: Context) {
                     "синтез готов: ${f.name} (${f.length()} байт), скорость ${RateSteps.label(p.rate)}"
                 )
                 trimSilence(f)
-                if (p.text == awaitingPlayText) {
+                if (p.text == awaitingPlayText && p.rate != speed) {
+                    // Скорость сменили, пока фраза синтезировалась: файл сделан
+                    // прежним темпом. Не играем его — заказываем заново текущим
+                    // (задержка тут только у той фразы, что была в работе).
+                    awaitingPlayText = null
+                    if (prefetchInFlightText == p.text) prefetchInFlightText = null
+                    f.delete()
+                    Diag.log(
+                        appContext, "sound",
+                        "скорость сменилась, пока фраза синтезировалась — собираю заново"
+                    )
+                    synthToFile(p.text)
+                } else if (p.text == awaitingPlayText) {
                     // Это тот текст, который уже попросили говорить.
                     awaitingPlayText = null
                     if (prefetchInFlightText == p.text) prefetchInFlightText = null
-                    playFile(f)
+                    playFile(f, p.rate)
                 } else if (p.text == prefetchInFlightText) {
                     // Упреждающий синтез завершился, пока его ещё не просили.
                     // msg4077: засечка в лог — без неё по логу не видно, доспела
@@ -971,14 +1042,16 @@ class SpeechPlayer(context: Context) {
                         // лишнее не копим.
                         f.delete()
                     } else {
-                        readyQueue.addLast(p.text to f)
+                        readyQueue.addLast(Prepared(p.text, f, p.rate))
                         Diag.log(
                             appContext, "sound",
                             "заготовка готова: ${f.name} (${f.length()} байт), в очереди ${readyQueue.size}/$prefetchDepth"
                         )
                         // msg4472: заготовка доспела — сразу просим следующую,
                         // пока играет текущая. Так очередь наполняется сама.
-                        requestPrefetch()
+                        // Кроме упреждающей подготовки ([prewarm]): там нужна
+                        // ровно одна фраза — та, с которой начнётся чтение.
+                        if (prewarmOnly) prewarmOnly = false else requestPrefetch()
                         // msg4598: прицепляем её встык, если звук уже идёт. Без
                         // этого стык бесшовным становился бы только у тех фраз,
                         // чья следующая была готова к моменту старта.
@@ -1218,7 +1291,10 @@ class SpeechPlayer(context: Context) {
         )
     }
 
-    private fun playFile(f: File) {
+    /** Сыграть готовый файл. [rate] — скорость, которой он сделан: её храним
+     *  вместе с играющим файлом, чтобы пауза не выдала прежний темп за текущий
+     *  (см. [pauseKeepingPhrase]). */
+    private fun playFile(f: File, rate: Float = speed) {
         val gen = ++playGen
         val text = currentText
         val mp = MediaPlayer()
@@ -1236,6 +1312,8 @@ class SpeechPlayer(context: Context) {
                 }
                 media = it
                 playingText = text
+                playingFile = f
+                playingRate = rate
                 it.setVolume(volume, volume)
                 it.start()
                 retriesInRow = 0 // звук пошёл — движок и плеер живы
@@ -1258,6 +1336,7 @@ class SpeechPlayer(context: Context) {
                 if (media === p) {
                     media = null
                     playingText = null
+                    playingFile = null
                 }
                 f.delete()
                 if (gen != playGen) return@setOnErrorListener true
@@ -1305,6 +1384,7 @@ class SpeechPlayer(context: Context) {
         if (gapless && next != null && media === mp && gen == playGen) {
             val nextText = chainedText
             val nextFile = chainedFile
+            val nextRate = chainedRate
             chainedPlayer = null
             chainedText = null
             chainedFile = null
@@ -1312,6 +1392,8 @@ class SpeechPlayer(context: Context) {
             f.delete()
             media = next
             playingText = nextText
+            playingFile = nextFile
+            playingRate = nextRate
             playWatchToken++ // сторож надзора за «подготовкой» к этому звуку не относится
             Diag.log(appContext, "sound", "встык сработал: ${nextFile?.name ?: "?"}")
             // Играющим стал прицепленный плеер — надзор за позицией переезжает
@@ -1331,6 +1413,7 @@ class SpeechPlayer(context: Context) {
         if (media === mp) {
             media = null
             playingText = null
+            playingFile = null
         }
         f.delete()
         onDone?.invoke()
@@ -1345,7 +1428,18 @@ class SpeechPlayer(context: Context) {
         if (!gapless || chainedPlayer != null || chainInFlight) return
         if (gen != playGen) return
         val head = readyQueue.firstOrNull() ?: return
-        if (head.first == playingText) return
+        if (head.text == playingText) return
+        // 24.09.2026: заготовка прежней скорости в цепочку не годится — стык
+        // прозвучал бы старым темпом. Выбрасываем и заказываем следующую: на
+        // подходе эта фраза всё равно была бы собрана заново, но тогда стык
+        // откатился бы на перезапуск и это было бы слышно паузой.
+        if (head.rate != speed) {
+            readyQueue.removeFirst()
+            head.file.delete()
+            Diag.log(appContext, "sound", "встык: заготовка прежней скорости — заказываю заново")
+            requestPrefetch()
+            return
+        }
         // msg4643 (тестер: «пропускаются куски текста»): прицепляем заготовку
         // только если читалка ПРЯМО СЕЙЧАС называет её следующей фразой.
         // Тексты для очереди и для живого чтения считает один и тот же код, но
@@ -1364,15 +1458,16 @@ class SpeechPlayer(context: Context) {
         // что звучит, — спрашиваем следующую за ней.
         var wanted = onNeedNext?.invoke(1)
         if (wanted != null && wanted == playingText) wanted = onNeedNext?.invoke(2)
-        if (wanted == null || wanted != head.first) {
+        if (wanted == null || wanted != head.text) {
             Diag.log(
                 appContext, "sound",
                 "встык пропущен: заготовка не от следующей фразы " +
-                    "(в очереди ${head.first.length} знаков, ждём ${wanted?.length ?: 0})"
+                    "(в очереди ${head.text.length} знаков, ждём ${wanted?.length ?: 0})"
             )
             return
         }
-        val (text, file) = head
+        val text = head.text
+        val file = head.file
         // Заготовка уходит из очереди в цепочку сразу: и очередь, и счётчик
         // глубины в requestPrefetch обязаны видеть её занятой.
         readyQueue.removeFirst()
@@ -1404,6 +1499,7 @@ class SpeechPlayer(context: Context) {
                 chainedPlayer = next
                 chainedText = text
                 chainedFile = file
+                chainedRate = head.rate
                 next.setVolume(volume, volume)
                 next.setOnCompletionListener { onPhraseCompleted(next, file, gen) }
                 Diag.log(appContext, "sound", "встык прицеплено: ${file.name} (${file.length()} байт)")
@@ -1434,6 +1530,7 @@ class SpeechPlayer(context: Context) {
         chainedText = null
         chainedFile?.delete()
         chainedFile = null
+        chainedRate = 1f
     }
 
     /** Выбросить всё, что заготовлено впрок (msg5604). Зовётся, когда на ходу
@@ -1446,6 +1543,10 @@ class SpeechPlayer(context: Context) {
     fun dropPrepared() {
         prefetchInFlightText = null
         awaitingPlayText = null
+        prewarmOnly = false
+        // Голос сменился — сохранённый паузой звук сделан прежним.
+        keptPhrase?.let { runCatching { it.file.delete() } }
+        keptPhrase = null
         // Метку перехода тоже снимаем: если смена голоса пришлась ровно на
         // момент перехода встык, следующий speak() должен фразу СЫГРАТЬ (новым
         // голосом), а не решить «она и так звучит».
@@ -1467,7 +1568,8 @@ class SpeechPlayer(context: Context) {
         chainedText = null
         chainedFile = null
         runCatching { p.release() }
-        if (text != null && file != null && file.exists()) readyQueue.addFirst(text to file)
+        if (text != null && file != null && file.exists() && chainedRate == speed)
+            readyQueue.addFirst(Prepared(text, file, chainedRate))
         else file?.delete()
     }
 
@@ -1502,6 +1604,7 @@ class SpeechPlayer(context: Context) {
         // таймер иначе дождался бы чужого плеера.
         dropPositionWatch()
         playingText = null
+        playingFile = null
         gaplessHopText = null
         media?.let { m ->
             runCatching { m.stop() }
@@ -1534,7 +1637,7 @@ class SpeechPlayer(context: Context) {
         val chainedNow = chainedPlayer != null && chainedText != null
         val ahead = ArrayList<String>(readyQueue.size + 1)
         if (chainedNow) ahead.add(chainedText!!)
-        for ((text, _) in readyQueue) ahead.add(text)
+        for (p in readyQueue) ahead.add(p.text)
         for (i in ahead.indices) {
             val word = ask(i + 1) ?: return null
             if (word != ahead[i]) return i
@@ -1550,8 +1653,8 @@ class SpeechPlayer(context: Context) {
         if (chainedNow && from <= 0) dropChain()
         val keep = if (chainedNow) (from - 1).coerceAtLeast(0) else from.coerceAtLeast(0)
         while (readyQueue.size > keep) {
-            val (_, f) = readyQueue.removeLast()
-            runCatching { f.delete() }
+            val p = readyQueue.removeLast()
+            runCatching { p.file.delete() }
         }
     }
 
@@ -1583,7 +1686,7 @@ class SpeechPlayer(context: Context) {
         val offset = readyQueue.size + inFlight + chained + 1
         val next = onNeedNext?.invoke(offset) ?: return
         if (next.isBlank() || next == currentText) return
-        if (readyQueue.any { it.first == next }) return
+        if (readyQueue.any { it.text == next }) return
         prefetchInFlightText = next
         synthToFile(next)
     }
@@ -1595,6 +1698,7 @@ class SpeechPlayer(context: Context) {
         directWatchToken++
         awaitingPlayText = null
         prefetchInFlightText = null
+        prewarmOnly = false
         softRetriedText = null
         directQueue.clear()
         clearPrefetch()
@@ -1603,8 +1707,102 @@ class SpeechPlayer(context: Context) {
     }
 
     private fun clearPrefetch() {
-        readyQueue.forEach { (_, f) -> runCatching { f.delete() } }
+        readyQueue.forEach { runCatching { it.file.delete() } }
         readyQueue.clear()
+    }
+
+    // ---------- Первая фраза заранее и пауза без повторного синтеза ----------
+    // (24.09.2026, просьба Сергея: «чтение начиналось бы быстрее»)
+
+    /** Приготовить звук фразы, с которой начнётся чтение, ДО нажатия «читать».
+     *
+     *  Зачем. Единственная задержка перед первым звуком — синтез первой фразы:
+     *  по журналу Сергея это 0,54 с на фразу в 10,6 с речи (движок берёт
+     *  40–50 мс на секунду звука), плюс 0,03 с на запуск нашего плеера. Отсюда
+     *  и 0,58 с между «читать» и звуком; убрать их можно только тем, что файл
+     *  готов заранее — окно читалки открывается на нужном месте за секунды до
+     *  нажатия. Это ровно та же заготовка, что и во время чтения, только
+     *  заказанная раньше.
+     *
+     *  Готовим ОДНУ фразу ([prewarmOnly]) и только когда ничего не читается:
+     *  очередь впрок без звука — это лишняя работа процессора. Не пригодилась
+     *  (прыжок, другая книга, чтение так и не начали) — файл осиротеет и будет
+     *  удалён, как любая незапрошенная заготовка. */
+    fun prewarm(text: String) {
+        if (altDirect || text.isBlank()) return
+        val t = tts
+        if (t == null || !ready) return
+        if (currentText != null || awaitingPlayText != null || media != null) return
+        if (prefetchInFlightText == text) return
+        if (readyQueue.any { it.text == text && it.rate == speed }) return
+        if (keptPhrase?.let { it.text == text && it.rate == speed } == true) return
+        clearPrefetch()
+        prefetchInFlightText = text
+        prewarmOnly = true
+        Diag.log(appContext, "sound", "готовлю первую фразу заранее (${text.length} знаков)")
+        synthToFile(text)
+    }
+
+    /** Пауза с сохранением звука звучащей фразы: продолжение зазвучит сразу.
+     *
+     *  В паузе файл звучащей фразы никуда не девается — его удаляют только конец
+     *  фразы или ошибка. А продолжение начинается с ТОЙ ЖЕ фразы (позицию
+     *  читалка держит по предложениям и на паузе сохраняет её начало), поэтому
+     *  его можно сыграть из того же файла, не заказывая синтез заново: по
+     *  журналу это те же 0,5 с на фразу в десять секунд речи.
+     *
+     *  Скорость держим рядом с файлом: сменили её на паузе — файл прежнего
+     *  темпа не играем (см. [takeKeptPhrase]).
+     *
+     *  Порядок важен: сначала [stop] (он чистит очередь, надзоры и заявки),
+     *  потом ставим сохранённую фразу — иначе stop() снёс бы её как старую. */
+    fun pauseKeepingPhrase() {
+        val text = playingText
+        val file = playingFile
+        val rate = playingRate
+        stop()
+        if (text != null && file != null && file.exists() && rate == speed) {
+            keptPhrase = Prepared(text, file, rate)
+            Diag.log(
+                appContext, "sound",
+                "пауза: звук фразы сохранён (${file.name}, ${file.length()} байт) — продолжение зазвучит сразу"
+            )
+        } else {
+            file?.delete() // продолжать не с чего — файл не копим
+        }
+    }
+
+    /** Взять фразу, сохранённую паузой. Пригодилась — отдаём файл, играть его
+     *  будет наш плеер. Не та фраза, сменившаяся скорость или пропавший файл —
+     *  выбрасываем и читаем как обычно. */
+    private fun takeKeptPhrase(text: String): Prepared? {
+        val kept = keptPhrase ?: return null
+        keptPhrase = null
+        if (kept.text == text && kept.rate == speed && kept.file.exists()) {
+            Diag.log(appContext, "sound", "продолжаю с сохранённого звука (${kept.file.name})")
+            return kept
+        }
+        if (kept.text == text) {
+            Diag.log(
+                appContext, "sound",
+                "сохранённый звук сделан на скорости ${RateSteps.label(kept.rate)}, " +
+                    "сейчас ${RateSteps.label(speed)} — синтезирую заново"
+            )
+        }
+        kept.file.delete()
+        return null
+    }
+
+    /** Выбросить заготовки, сделанные прежней скоростью ([speed]). Текущий звук
+     *  не трогаем: он уже звучит. Фразу в работе ([awaitingPlayText]) тоже не
+     *  снимаем — её судьбу решит [synthFinished] по скорости самого файла. */
+    private fun dropStaleRate() {
+        prefetchInFlightText = null
+        prewarmOnly = false
+        clearPrefetch()
+        dropChain()
+        keptPhrase?.let { runCatching { it.file.delete() } }
+        keptPhrase = null
     }
 
     fun shutdown() {
