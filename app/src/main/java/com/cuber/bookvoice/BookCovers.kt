@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -438,21 +439,78 @@ internal class BookCovers(
     // ---------------- PDF ----------------
 
     /** Обложка PDF: в файле картинки-обложки нет, «обложка» — первая страница,
-     *  её надо отрисовать. Рисуем pdfbox-ом: он и так уже в проекте для текста
-     *  PDF (PdfParser), второй движок ради картинки не заводим. Сразу в размер
-     *  карточки: страница 72 точки на дюйм, поэтому dpi = ширина_карточки × 72 /
-     *  ширина_страницы, с разумными границами — иначе на A4 получилась бы
-     *  картинка в пару тысяч точек, то есть память впустую.
+     *  её надо отрисовать. Рисуем системным отрисовщиком Android
+     *  ([android.graphics.pdf.PdfRenderer], внутри PDFium): он нативный, быстрый
+     *  и понимает то, чего нет у pdfbox-android, — в первую очередь JPEG 2000.
+     *  На этом и споткнулась первая версия: у «Человека и мира» (5 класс) обложка
+     *  в JPEG 2000, pdfbox отдавал вместо неё пустой лист, и книга получала
+     *  нарисованную заглушку — Сергей прислал файл, и это видно по нему
+     *  (23.09.2026). pdfbox остаётся ЗАПАСНЫМ путём: он открывает файл потоком и
+     *  снимает пустой пароль там, где системный отрисовщик откажет.
      *
-     *  Пустая (почти белая или почти ровная) первая страница обложкой не
-     *  считается: у многих книг там титул с мелким текстом или вовсе пустой
-     *  лист, и белый прямоугольник на полке хуже нарисованной обложки с
-     *  названием. Долю «пустоты» пишем в журнал — по ней видно, где порог
-     *  промахнулся, если промахнётся.
+     *  Картинку берём сразу в размер карточки: страница задана в точках (1/72
+     *  дюйма), поэтому ширина картинки = ширина карточки, а высота — по
+     *  пропорции страницы.
      *
+     *  Пустой (ровный светлый) лист обложкой не считается — см. [looksBlank].
      *  Отдаём JPEG-байты: дальше путь тот же, что у FB2 и EPUB — кэш на диск,
      *  проверка размера оригинала, декодирование под карточку. */
     private fun pdfCover(uri: Uri): ByteArray? {
+        val bmp = renderFirstPage(uri) ?: return null
+        return try {
+            val ink = pageInk(bmp)
+            val blank = ink.backgroundShare >= BLANK_UNIFORM && ink.brightness >= BLANK_LIGHT
+            Diag.log(
+                appContext, "covers",
+                "обложка PDF: первая страница, фон ${(ink.backgroundShare * 1000).toInt() / 10f}% " +
+                    "(яркость ${(ink.brightness * 100).toInt()}%, чернил " +
+                    "${((1f - ink.backgroundShare) * 1000).toInt() / 10f}%) — " +
+                    if (blank) "пустой лист, рисую заглушку" else "показываю",
+            )
+            if (blank) null else encodeJpeg(bmp)
+        } finally {
+            bmp.recycle()
+        }
+    }
+
+    private fun renderFirstPage(uri: Uri): Bitmap? =
+        renderWithPdfRenderer(uri) ?: renderWithPdfbox(uri)
+
+    /** Первая страница системным отрисовщиком. Ошибки не пробрасываем: не вышло —
+     *  пробуем pdfbox-ом, а не выйдет и там — карточка получит заглушку. */
+    private fun renderWithPdfRenderer(uri: Uri): Bitmap? {
+        val fd = runCatching { appContext.contentResolver.openFileDescriptor(uri, "r") }
+            .getOrNull() ?: return null
+        return fd.use { descriptor ->
+            runCatching {
+                PdfRenderer(descriptor).use { renderer ->
+                    if (renderer.pageCount <= 0) return@use null
+                    renderer.openPage(0).use { page ->
+                        val ptWidth = page.width
+                        val ptHeight = page.height
+                        if (ptWidth <= 0 || ptHeight <= 0) return@use null
+                        val scale = widthPx.toFloat() / ptWidth
+                        val w = (ptWidth * scale).toInt().coerceAtLeast(1)
+                        val h = (ptHeight * scale).toInt().coerceAtLeast(1)
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                        // Белая подложка: страница бывает с прозрачностью, и тогда
+                        // пустой лист выглядел бы чёрным прямоугольником.
+                        bmp.eraseColor(Color.WHITE)
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        bmp
+                    }
+                }
+            }.onFailure {
+                Diag.log(appContext, "covers", "обложка PDF: системный отрисовщик не смог (${it.message})")
+            }.getOrNull()
+        }
+    }
+
+    /** Запасной путь: pdfbox. Он уже в проекте для текста PDF, умеет открывать
+     *  файл потоком и снимать пустой пароль — но, в отличие от системного
+     *  отрисовщика, НЕ умеет JPEG 2000 (в pdfbox-android нет такого декодера),
+     *  поэтому на таких страницах получается пустой лист. */
+    private fun renderWithPdfbox(uri: Uri): Bitmap? {
         var doc: PDDocument? = null
         return try {
             val scratch = File(appContext.cacheDir, "pdf_covers").apply { mkdirs() }
@@ -466,40 +524,23 @@ internal class BookCovers(
             val ptWidth = box?.width ?: 0f
             if (ptWidth <= 0f) return null
             val dpi = (widthPx * 72f / ptWidth).coerceIn(MIN_PDF_DPI, MAX_PDF_DPI)
-            val bmp = PDFRenderer(doc).renderImageWithDPI(0, dpi, ImageType.RGB) ?: return null
-            val ink = pageInk(bmp)
-            // Пустым считаем ТОЛЬКО ровный светлый лист без единой точки «чернил».
-            // Порог строгий нарочно: первая версия (97% фона) считала пустым
-            // титульный лист с парой строк текста — а это как раз текстовые PDF,
-            // и настоящая первая страница подменялась нарисованной заглушкой.
-            // Одновременно отсекается и вторая крайность: однотонная ТЁМНАЯ
-            // обложка — не пустой лист, её показываем.
-            val blank = ink.backgroundShare >= BLANK_UNIFORM && ink.brightness >= BLANK_LIGHT
-            Diag.log(
-                appContext, "covers",
-                "обложка PDF: первая страница, фон ${(ink.backgroundShare * 1000).toInt() / 10f}% " +
-                    "(яркость ${(ink.brightness * 100).toInt()}%, чернил " +
-                    "${((1f - ink.backgroundShare) * 1000).toInt() / 10f}%) — " +
-                    if (blank) "пустой лист, рисую заглушку" else "показываю",
-            )
-            if (blank) {
-                bmp.recycle()
-                return null
-            }
-            val out = ByteArrayOutputStream()
-            val ok = bmp.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
-            bmp.recycle()
-            if (ok) out.toByteArray() else null
+            PDFRenderer(doc).renderImageWithDPI(0, dpi, ImageType.RGB)
         } catch (_: OutOfMemoryError) {
             // Большой PDF на слабом телефоне: не роняем полку, показываем заглушку.
             Diag.log(appContext, "covers", "обложка PDF: не влезла в память")
             null
         } catch (t: Throwable) {
-            Diag.log(appContext, "covers", "обложка PDF: не отрисовалась (${t.message})")
+            Diag.log(appContext, "covers", "обложка PDF: pdfbox не отрисовал (${t.message})")
             null
         } finally {
             runCatching { doc?.close() }
         }
+    }
+
+    private fun encodeJpeg(bmp: Bitmap): ByteArray? {
+        val out = ByteArrayOutputStream()
+        val ok = bmp.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+        return if (ok) out.toByteArray() else null
     }
 
     /** Что на отрисованной странице: доля точек фона (самого частого цвета) и
