@@ -611,6 +611,98 @@ class SpeechPlayer(context: Context) {
         fallbackDirect(text)
     }
 
+    // ---------- Надзор за нашим плеером: звук идёт или стоит (23.09.2026) ----------
+
+    /** Токен надзора: растёт, когда надзор больше не нужен (фраза закрыта, плеер
+     *  отпущен, началась другая). */
+    private var posWatchToken = 0L
+
+    /** За каким плеером следим и что играем: по смене плеера надзор взводится
+     *  заново (в т.ч. после перехода встык, когда играющим становится
+     *  прицепленный плеер). */
+    private var posWatchPlayer: MediaPlayer? = null
+    private var posWatchFile: File? = null
+    private var posWatchGen = 0L
+
+    /** Последняя виденная позиция и когда она была такой. */
+    private var posLast = -1
+    private var posLastAt = 0L
+
+    /** Видели ли мы хоть раз, что позиция РАСТЁТ. Пока не видели — судить
+     *  нельзя: на отдельной прошивке `currentPosition` может всегда отдавать
+     *  ноль, и тогда мы бы обрывали каждую фразу на ровном месте. */
+    private var posSawProgress = false
+    private var posWarnedNoProgress = false
+
+    /** Чей конец фразы уже обработан: плеер живёт ровно одну фразу, поэтому
+     *  хватает одной ссылки. Нужен, чтобы поздний `onCompletion` от платформы не
+     *  прошёл второй раз по уже закрытой фразе (иначе чтение перескочит
+     *  предложение). */
+    private var completedPlayer: MediaPlayer? = null
+
+    /** Взять играющий плеер под надзор: раз в [POSITION_CHECK_MS] сверяем
+     *  позицию. Файл отдан, звука нет — увидим это сами, не спрашивая движок:
+     *  он как раз и бывает тем, кто молчит. */
+    private fun armPositionWatch(mp: MediaPlayer, f: File?, gen: Long) {
+        if (f == null) return
+        val token = ++posWatchToken
+        posWatchPlayer = mp
+        posWatchFile = f
+        posWatchGen = gen
+        posLast = -1
+        posLastAt = SystemClock.elapsedRealtime()
+        posSawProgress = false
+        posWarnedNoProgress = false
+        main.postDelayed({ if (token == posWatchToken) checkPosition(token) }, POSITION_CHECK_MS)
+    }
+
+    /** Снять надзор: фраза закрылась, плеер отпущен или звук больше не наш. */
+    private fun dropPositionWatch() {
+        posWatchToken++
+        posWatchPlayer = null
+        posWatchFile = null
+    }
+
+    private fun checkPosition(token: Long) {
+        if (token != posWatchToken) return
+        val mp = posWatchPlayer ?: return
+        // Плеер уже не тот, что мы сторожим: фраза сменилась, чтение встало или
+        // звук перешёл встык к следующему плееру (за него взведён свой надзор).
+        if (media !== mp) return
+        val pos = runCatching { mp.currentPosition }.getOrDefault(-1)
+        val now = SystemClock.elapsedRealtime()
+        if (pos > posLast) {
+            posLast = pos
+            posLastAt = now
+            posSawProgress = true
+        } else if (!posSawProgress) {
+            // Позиция не растёт с самого начала: либо файл только-только отдан
+            // (ждать нечего, время идёт), либо прошивка врёт про позицию. Второй
+            // случай в журнале виден строкой ниже — по ней и разберёмся, если
+            // такая прошивка найдётся.
+            if (!posWarnedNoProgress && now - posLastAt >= POSITION_STALL_MS) {
+                posWarnedNoProgress = true
+                Diag.log(
+                    appContext, "sound",
+                    "позиция плеера не растёт с начала фразы (${pos}) — по времени не сужу",
+                )
+            }
+        } else if (now - posLastAt >= POSITION_STALL_MS) {
+            val dur = runCatching { mp.duration }.getOrDefault(-1)
+            val still = (now - posLastAt) / 1000
+            Diag.log(
+                appContext, "sound",
+                "позиция плеера стоит $still с ($pos из $dur) — звука нет, " +
+                    "считаю фразу доигранной и иду дальше",
+            )
+            val f = posWatchFile
+            dropPositionWatch()
+            if (f != null) onPhraseCompleted(mp, f, posWatchGen)
+            return
+        }
+        main.postDelayed({ if (token == posWatchToken) checkPosition(token) }, POSITION_CHECK_MS)
+    }
+
     /** Взвести надзор за прямой речью движка: `speak()` мог отчитаться успехом и
      *  потом промолчать — тогда `onDone` не придёт и чтение встанет. */
     private fun armDirectWatch(id: Long) {
@@ -955,6 +1047,11 @@ class SpeechPlayer(context: Context) {
                 it.start()
                 retriesInRow = 0 // звук пошёл — движок и плеер живы
                 Diag.log(appContext, "sound", "играю свой звук: ${f.name} (${f.length()} байт)")
+                // 23.09.2026: взяли звук под надзор — «играю» или «позиция стоит».
+                // С этого момента видно то, чего не видит движок: файл отдан, а
+                // звука нет (в т.ч. когда файл доиграл, а onCompletion потерялся —
+                // раньше это было молчание навсегда).
+                armPositionWatch(it, f, gen)
                 // msg4598: следующую заготовку прицепляем СРАЗУ, до requestPrefetch —
                 // она уходит из очереди и обязана считаться занятой в её глубине.
                 chainNext(it, gen)
@@ -1000,6 +1097,12 @@ class SpeechPlayer(context: Context) {
      *  нашей задержки: текущим становится прицепленный плеер, а движку мы
      *  сообщаем о сдвиге на фразу так же, как в обычном пути. */
     private fun onPhraseCompleted(mp: MediaPlayer, f: File, gen: Long) {
+        // Фразу могли уже закрыть надзором за позицией, а платформенный
+        // onCompletion способен прийти вдогонку. Второй проход по той же фразе
+        // дёрнул бы onDone ещё раз, и чтение перескочило бы предложение —
+        // поэтому каждый плеер закрываем ровно один раз (плеер живёт одну фразу).
+        if (mp === completedPlayer) return
+        completedPlayer = mp
         // msg4402 (диагностика пауз): конец фразы. Разница отметок «фраза
         // доиграла» → следующее «играю свой звук» — это и есть пауза между
         // предложениями; по ней видно, помогла ли обрезка. В режиме встык вместо
@@ -1018,6 +1121,9 @@ class SpeechPlayer(context: Context) {
             playingText = nextText
             playWatchToken++ // сторож надзора за «подготовкой» к этому звуку не относится
             Diag.log(appContext, "sound", "встык сработал: ${nextFile?.name ?: "?"}")
+            // Играющим стал прицепленный плеер — надзор за позицией переезжает
+            // на него: старый уже отпущен, и следить за ним нечего.
+            armPositionWatch(next, nextFile, gen)
             // Движок сдвинется на эту же фразу (onDone отложен в главный поток):
             // его speak() узнает текст по метке и не станет играть его заново.
             gaplessHopText = nextText
@@ -1199,6 +1305,9 @@ class SpeechPlayer(context: Context) {
     private fun releaseMedia() {
         playGen++
         dropChain() // прицепленная фраза играет тем же трактом — её тоже отпускаем
+        // Надзор за позицией снимаем вместе со звуком: сторожить нечего, а его
+        // таймер иначе дождался бы чужого плеера.
+        dropPositionWatch()
         playingText = null
         gaplessHopText = null
         media?.let { m ->
@@ -1331,6 +1440,14 @@ class SpeechPlayer(context: Context) {
 
         /** Сколько ждём MediaPlayer на подготовку локального wav-файла. */
         private const val PLAY_STALL_MS = 12_000L
+
+        /** Как часто сверяем позицию играющего плеера (23.09.2026). */
+        private const val POSITION_CHECK_MS = 2_000L
+
+        /** Сколько позиция должна стоять на месте, чтобы считать, что звука нет.
+         *  Позиция у локального файла идёт по времени, а не по громкости, и файл
+         *  уже подготовлен: стоять шесть секунд на живой речи ей не с чего. */
+        private const val POSITION_STALL_MS = 6_000L
 
         /** Прямая речь движка: медленный темп и длинная фраза могут звучать долго,
          *  поэтому срок щедрый — тишина дольше трёх минут уже точно сбой. */
