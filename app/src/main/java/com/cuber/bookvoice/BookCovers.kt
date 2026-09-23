@@ -13,6 +13,10 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.LruCache
+import com.tom_roush.pdfbox.io.MemoryUsageSetting
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.rendering.ImageType
+import com.tom_roush.pdfbox.rendering.PDFRenderer
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.ByteArrayInputStream
@@ -23,6 +27,7 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.zip.ZipInputStream
+import kotlin.math.abs
 
 /**
  * Обложки для карточек-сетки на полке (23.09.2026, просьба Сергея: «хочу, чтобы
@@ -89,6 +94,27 @@ internal class BookCovers(
         /** С какого времени чтение обложки из кэша считаем медленным (обычно
          *  единицы миллисекунд; всё, что дольше, — повод посмотреть в журнал). */
         const val SLOW_LOAD_MS = 50L
+
+        /** Обложка PDF: границы плотности отрисовки. Ниже 24 dpi получается
+         *  каша, выше 200 — картинка в тысячи точек, то есть память впустую. */
+        const val MIN_PDF_DPI = 24f
+        const val MAX_PDF_DPI = 200f
+
+        /** Качество JPEG для отрисованной страницы: обложка в карточке, потерь
+         *  не видно, а весит в разы меньше PNG. */
+        const val JPEG_QUALITY = 85
+
+        /** Сколько точек страницы считаем «пустой» страницей. Порог мягкий:
+         *  белый лист с заголовком — это 97-99% фона, и обложкой он быть не
+         *  должен, а настоящая обложка с картинкой редко даёт больше 90%. */
+        const val BLANK_LIMIT = 0.97f
+
+        /** Сетка выборки для оценки пустоты: 64×64 точек на страницу. */
+        const val BLANK_GRID = 64
+
+        /** Насколько цвет точки может отличаться от фона и всё ещё считаться
+         *  фоном (по каждой составляющей). */
+        const val BLANK_TOLERANCE = 16
 
         /** Сколько файлов обложек держим на диске. */
         const val MAX_CACHE_FILES = 300
@@ -368,6 +394,10 @@ internal class BookCovers(
                 // разбор книги (BookParser.parseZip) тоже предпочитает FB2.
                 name.endsWith(".zip") || name.endsWith(".fb2.zip") || name.endsWith(".fbz") ->
                     zipCover(uri)
+                // PDF: картинки-обложки в файле нет, её надо отрисовать из первой
+                // страницы (так делает и FBReader — Сергей сверил на одних и тех
+                // же книгах, 23.09.2026).
+                name.endsWith(".pdf") -> pdfCover(uri)
                 else -> null
             }
         }.onFailure {
@@ -399,6 +429,100 @@ internal class BookCovers(
 
     private fun open(uri: Uri): InputStream? =
         runCatching { appContext.contentResolver.openInputStream(uri) }.getOrNull()
+
+    // ---------------- PDF ----------------
+
+    /** Обложка PDF: в файле картинки-обложки нет, «обложка» — первая страница,
+     *  её надо отрисовать. Рисуем pdfbox-ом: он и так уже в проекте для текста
+     *  PDF (PdfParser), второй движок ради картинки не заводим. Сразу в размер
+     *  карточки: страница 72 точки на дюйм, поэтому dpi = ширина_карточки × 72 /
+     *  ширина_страницы, с разумными границами — иначе на A4 получилась бы
+     *  картинка в пару тысяч точек, то есть память впустую.
+     *
+     *  Пустая (почти белая или почти ровная) первая страница обложкой не
+     *  считается: у многих книг там титул с мелким текстом или вовсе пустой
+     *  лист, и белый прямоугольник на полке хуже нарисованной обложки с
+     *  названием. Долю «пустоты» пишем в журнал — по ней видно, где порог
+     *  промахнулся, если промахнётся.
+     *
+     *  Отдаём JPEG-байты: дальше путь тот же, что у FB2 и EPUB — кэш на диск,
+     *  проверка размера оригинала, декодирование под карточку. */
+    private fun pdfCover(uri: Uri): ByteArray? {
+        var doc: PDDocument? = null
+        return try {
+            val scratch = File(appContext.cacheDir, "pdf_covers").apply { mkdirs() }
+            val mem = MemoryUsageSetting.setupTempFileOnly().setTempDir(scratch)
+            doc = open(uri)?.use { PDDocument.load(it, mem) } ?: return null
+            if (doc.numberOfPages <= 0) return null
+            // Зашифрованные с пустым паролем открываем — как в PdfParser.
+            if (doc.isEncrypted) runCatching { doc.setAllSecurityToBeRemoved(true) }
+            val page = doc.getPage(0)
+            val box = page.mediaBox ?: page.cropBox
+            val ptWidth = box?.width ?: 0f
+            if (ptWidth <= 0f) return null
+            val dpi = (widthPx * 72f / ptWidth).coerceIn(MIN_PDF_DPI, MAX_PDF_DPI)
+            val bmp = PDFRenderer(doc).renderImageWithDPI(0, dpi, ImageType.RGB) ?: return null
+            val blank = blankShare(bmp)
+            Diag.log(
+                appContext, "covers",
+                "обложка PDF: первая страница, пустоты ${(blank * 100).toInt()}%, " +
+                    if (blank >= BLANK_LIMIT) "рисую заглушку" else "показываю",
+            )
+            if (blank >= BLANK_LIMIT) {
+                bmp.recycle()
+                return null
+            }
+            val out = ByteArrayOutputStream()
+            val ok = bmp.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+            bmp.recycle()
+            if (ok) out.toByteArray() else null
+        } catch (_: OutOfMemoryError) {
+            // Большой PDF на слабом телефоне: не роняем полку, показываем заглушку.
+            Diag.log(appContext, "covers", "обложка PDF: не влезла в память")
+            null
+        } catch (t: Throwable) {
+            Diag.log(appContext, "covers", "обложка PDF: не отрисовалась (${t.message})")
+            null
+        } finally {
+            runCatching { doc?.close() }
+        }
+    }
+
+    /** Доля точек страницы, совпадающих с фоном (самым частым цветом кадра).
+     *  Берём разреженную сетку — нам нужен не портрет страницы, а ответ «лист
+     *  почти пустой или нет», а полный проход по картинке стоил бы сотни
+     *  миллисекунд на каждой книге. */
+    private fun blankShare(bmp: Bitmap): Float {
+        val stepX = (bmp.width / BLANK_GRID).coerceAtLeast(1)
+        val stepY = (bmp.height / BLANK_GRID).coerceAtLeast(1)
+        val samples = ArrayList<Int>(BLANK_GRID * BLANK_GRID)
+        val counts = HashMap<Int, Int>()
+        var y = 0
+        while (y < bmp.height) {
+            var x = 0
+            while (x < bmp.width) {
+                val p = runCatching { bmp.getPixel(x, y) }.getOrDefault(0)
+                samples.add(p)
+                // Грубая корзина цвета: фон ищем «на глаз», дрожание оттенков не мешает.
+                val key = p and 0xF0F0F0
+                counts[key] = (counts[key] ?: 0) + 1
+                x += stepX
+            }
+            y += stepY
+        }
+        if (samples.isEmpty()) return 0f
+        val bg = counts.maxByOrNull { it.value }?.key ?: return 0f
+        var same = 0
+        for (p in samples) {
+            if (abs(((p shr 16) and 0xFF) - ((bg shr 16) and 0xFF)) <= BLANK_TOLERANCE &&
+                abs(((p shr 8) and 0xFF) - ((bg shr 8) and 0xFF)) <= BLANK_TOLERANCE &&
+                abs((p and 0xFF) - (bg and 0xFF)) <= BLANK_TOLERANCE
+            ) {
+                same++
+            }
+        }
+        return same.toFloat() / samples.size
+    }
 
     /** Прочитать запись архива по имени (без учёта регистра). Каждый вызов —
      *  свой проход: поток из SAF не перематывается, поэтому архив открывается
