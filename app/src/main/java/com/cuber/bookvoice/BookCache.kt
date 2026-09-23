@@ -186,14 +186,17 @@ object BookCache {
     private fun entryBytes(context: Context, e: Entry): Long =
         if (e.bytes > 0) e.bytes else runCatching { File(dir(context), e.file).length() }.getOrDefault(0L)
 
-    /** Сколько места занимает разобранный текст прямо сейчас. Считаем по факту
-     *  (в обход индекса): так в цифру попадают и файлы-сироты прошлых версий. */
+    /** Сколько места занимает кэш прямо сейчас. Считаем по факту (в обход
+     *  индекса): так в цифру попадают и файлы-сироты прошлых версий.
+     *  23.09.2026: сюда же входят обложки полки ([BookCovers]) — Сергей просил
+     *  оставить в настройках ОДНУ строку кэша, как было, без отдельной для
+     *  обложек. Поэтому и размер, и очистка у них общие с разобранным текстом. */
     fun usedBytes(context: Context): Long {
         var total = 0L
         dir(context).listFiles()?.forEach { f ->
             if (f.isFile && f.name != "index.json") total += f.length()
         }
-        return total
+        return total + BookCovers.usedBytes(context)
     }
 
     /** Потолок для показа пользователю (Настройки → «Разобранный текст»). */
@@ -202,19 +205,26 @@ object BookCache {
     /** Сколько разобранных книг лежит в кэше. */
     fun count(context: Context): Int = loadIndex(context).size
 
-    /** Полная очистка разобранного текста (строка в Настройках, msg4895).
-     *  Файлы книг, настройки и места чтения не трогаются — книги просто
-     *  разберутся заново при следующем открытии. */
+    /** Полная очистка кэша (строка в Настройках, msg4895). Файлы книг,
+     *  настройки и места чтения не трогаются — книги просто разберутся заново
+     *  при следующем открытии, а обложки достанутся снова. Одна кнопка на весь
+     *  кэш: и разобранный текст, и обложки полки (23.09.2026). */
     fun clearAll(context: Context) {
         val d = dir(context)
         var n = 0
         d.listFiles()?.forEach { if (it.isFile && it.delete()) n++ }
         Diag.log(context, "cache", "разобранный текст очищен вручную: файлов $n")
+        BookCovers.clearAll(context)
     }
 
-    /** Книга удалена из библиотеки — убрать и её кэш сразу. */
+    /** Книга удалена из библиотеки — убрать и её кэш сразу: разобранный текст
+     *  и обложку (23.09.2026, чтобы картинки удалённых книг не лежали сиротами). */
     fun remove(context: Context, uri: Uri) {
         val u = uri.toString()
+        // Сначала обложка: у книги может не быть разобранного текста (её ещё
+        // не открывали), а картинка в кэше уже лежит — ранний выход ниже
+        // оставил бы её сиротой.
+        BookCovers.remove(context, uri)
         val idx = loadIndex(context)
         val old = idx.firstOrNull { it.uri == u } ?: return
         runCatching { File(dir(context), old.file).delete() }

@@ -3,6 +3,7 @@ package com.cuber.bookvoice
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
@@ -11,15 +12,20 @@ import androidx.recyclerview.widget.RecyclerView
  * собирает библиотека ([rowText] для списка, [cardText] для карточки-сетки).
  *
  * Два вида (msg649): «список» — полная строка «название + мета»; «сетка» —
- * текстовая карточка с названием и автором (обложек нет). Вид живёт в
- * [viewMode] и отдаётся как itemViewType, поэтому RecyclerView не смешивает
- * холдеры разных видов и при переключении пересоздаёт их начисто.
+ * карточка с обложкой, названием и автором. Вид живёт в [viewMode] и отдаётся
+ * как itemViewType, поэтому RecyclerView не смешивает холдеры разных видов и
+ * при переключении пересоздаёт их начисто.
+ *
+ * Обложка (23.09.2026) приходит из [covers] и для диктора не существует: узел
+ * по-прежнему один — карточка, её текст задаёт [cardText]. Пока настоящая
+ * картинка едет из файла, в карточке стоит нарисованная из названия.
  */
 class BookAdapter(
     private val rowText: (BookRecord) -> String,
     private val onBookClick: (BookRecord) -> Unit,
     private val onBookLongClick: (BookRecord) -> Unit = {},
     private val cardText: (BookRecord) -> String = rowText,
+    private val covers: CoverSource? = null,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
@@ -29,6 +35,17 @@ class BookAdapter(
 
     /** Текущий вид полки. Смена вида немедленно пересоздаёт холдеры. */
     var viewMode: Int = VIEW_LIST
+        set(value) {
+            if (field == value) return
+            field = value
+            notifyDataSetChanged()
+        }
+
+    /** Показывать ли обложки в карточках-сетки. Галочка живёт в настройках
+     *  («Библиотека и скачанные»), по умолчанию включена. Выключенная —
+     *  карточка выглядит как раньше, только название и автор, и книгу ради
+     *  картинки мы вообще не открываем: выключенное не должно стоить работы. */
+    var coversEnabled: Boolean = true
         set(value) {
             if (field == value) return
             field = value
@@ -62,9 +79,9 @@ class BookAdapter(
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder =
         if (viewType == VIEW_GRID) {
-            // Карточка-сетка: корень — LinearLayout с двумя TextView. Дети не
-            // важны для доступности (importantForAccessibility="no" в layout);
-            // единый узел — карточка, текст для TalkBack ставим в onBind.
+            // Карточка-сетка: корень — LinearLayout с обложкой и двумя TextView.
+            // Дети не важны для доступности (importantForAccessibility="no" в
+            // layout); единый узел — карточка, текст для TalkBack ставим в onBind.
             val card = LayoutInflater.from(parent.context)
                 .inflate(R.layout.item_book_grid, parent, false)
             object : RecyclerView.ViewHolder(card) {}
@@ -86,10 +103,42 @@ class BookAdapter(
             tvAuthor.visibility = if (author == null) View.GONE else View.VISIBLE
             tvAuthor.text = author ?: ""
             v.contentDescription = cardText(rec)
+            bindCover(v, rec)
         } else {
             (v as TextView).text = rowText(rec)
         }
         v.setOnClickListener { onBookClick(rec) }
         v.setOnLongClickListener { onBookLongClick(rec); true }
+    }
+
+    /** Обложка карточки-сетки. Диктор её не видит (в разметке помечена как
+     *  неважная), поэтому на обход и на озвучку она не влияет. Пришедшую из
+     *  файла картинку ставим, только если холдер всё ещё показывает ту же
+     *  книгу: RecyclerView отдаёт вьюхи по кругу, и обложка соседней книги
+     *  иначе оказалась бы не на своём месте. */
+    private fun bindCover(v: View, rec: BookRecord) {
+        val iv = v.findViewById<ImageView>(R.id.ivCardCover) ?: return
+        val source = covers
+        if (!coversEnabled || source == null) {
+            // Обложки выключены галочкой (или их неоткуда взять): карточка
+            // возвращается к прежнему виду — название и автор, без картинки.
+            iv.tag = null
+            iv.visibility = View.GONE
+            iv.setImageDrawable(null)
+            return
+        }
+        iv.visibility = View.VISIBLE
+        iv.tag = rec.uri
+        val ready = source.cached(rec)
+        if (ready != null) {
+            iv.setImageBitmap(ready)
+            return
+        }
+        // Ставим заглушку ВСЕГДА, даже если нарисовать её не вышло: холдер
+        // приходит из переработки, и в нём могла остаться чужая картинка.
+        iv.setImageBitmap(source.placeholder(rec))
+        source.request(rec) { bmp ->
+            if (iv.tag == rec.uri) iv.setImageBitmap(bmp)
+        }
     }
 }

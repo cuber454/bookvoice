@@ -309,9 +309,11 @@ internal object ReaderEngine {
 
     private fun initPlayer() {
         val sp = SpeechPlayer(ctx)
-        sp.onDone = { main.post { if (playing) onUtteranceDone() } }
         // msg4472: плеер держит очередь заготовок и спрашивает фразу не только
         // «следующую», но и через одну-две вперёд — отсюда параметр offset.
+        // 23.09.2026: фраза доиграла — разбираем, чья она: служебная «книга
+        // прочитана» (у неё нет места в тексте) или очередная фраза книги.
+        sp.onDone = { main.post { onPlayerDone() } }
         sp.onNeedNext = { offset -> peekNextText(offset) }
         sp.speed = prefs.getFloat(MainActivity.KEY_SPEED, 1f)
         sp.pitch = prefs.getFloat(MainActivity.KEY_PITCH, 1f)
@@ -341,6 +343,9 @@ internal object ReaderEngine {
      *  отдаём и авто-продолжение гасим: вернуться «по фокусу» уже некому. */
     @Synchronized
     fun close() {
+        // Служебное «книга прочитана» может ждать своей секунды или звучать —
+        // закрытие читалки гасит и её, вместе с её фокусом и будильником.
+        cancelEndAnnounce()
         unregisterNoisyReceiver()
         unregisterPhoneListener()
         host = null
@@ -811,6 +816,9 @@ internal object ReaderEngine {
     fun startSpeakingCurrent() {
         val bk = book ?: return
         val p = player ?: return
+        // Читатель снова взялся за книгу — незачем говорить «книга прочитана»
+        // (и незачем договаривать её, если она уже звучит).
+        cancelEndAnnounce()
         // msg1139: если позицию тихо сбросило к началу — стартуем не с (0,0),
         // а с места, на котором книга открылась.
         guardResetToStart()
@@ -877,7 +885,11 @@ internal object ReaderEngine {
         var guard = 0
         while (t == null && guard++ < 8) {
             if (!advanceUnits(spokenUnits.coerceAtLeast(1))) {
+                // Та же остановка, что и в onUtteranceDone: если это настоящий
+                // конец книги — скажем об этом, а не просто замолчим.
+                val finished = atBookEnd()
                 stopAtEnd()
+                if (finished) scheduleBookEnd()
                 return
             }
             spokenUnits = chunkSpan(chapterIdx, sentenceIdx)
@@ -1000,10 +1012,117 @@ internal object ReaderEngine {
             return
         }
         if (!advanceUnits(spokenUnits)) {
+            // Конец книги — не то же самое, что «чтение встало»: сюда же
+            // приходят таймер сна «до конца главы» и конец выделенного куска
+            // (#106), поэтому проверяем место, а не сам факт остановки.
+            val finished = atBookEnd()
             stopAtEnd()
+            if (finished) scheduleBookEnd()
             return
         }
         startSpeakingCurrent()
+    }
+
+    /** Фраза доиграла: [onUtteranceDone] — про фразы книги, а служебное
+     *  «книга прочитана» живёт своей жизнью и позиции в тексте не имеет. */
+    private fun onPlayerDone() {
+        if (endAnnounceSpeaking) {
+            finishEndAnnounce()
+            return
+        }
+        if (playing) onUtteranceDone()
+    }
+
+    // ——— «Книга прочитана» (23.09.2026, просьба Сергея) ———
+
+    /** Книга дочитана до конца: через [END_ANNOUNCE_DELAY_MS] скажем об этом
+     *  голосом чтения. Говорим НАШИМ синтезатором, а не диктором: чтение живёт
+     *  и с закрытым окном (host == null), и голос должен быть тот же, что читал
+     *  книгу, — иначе фраза выпадает из чтения. */
+    private var endAnnouncePending = false
+    private var endAnnounceSpeaking = false
+    private val endAnnounceRunnable = Runnable { speakBookEnd() }
+
+    /** Секунда — просьба Сергея: чтобы фраза не наезжала на хвост последнего
+     *  предложения и было слышно, что чтение действительно кончилось. */
+    private const val END_ANNOUNCE_DELAY_MS = 1000L
+
+    /** Позиция — последнее предложение последней главы с текстом. Хвостовые
+     *  главы без предложений (одна разметка) за конец книги не считаем: иначе
+     *  фраза звучала бы на середине. */
+    private fun atBookEnd(): Boolean {
+        val bk = book ?: return false
+        val ch = chapterIdx
+        if (ch < 0 || ch >= bk.chapters.size) return false
+        val cur = bk.chapters[ch].sentences
+        if (cur.isEmpty() || sentenceIdx < cur.size - 1) return false
+        for (i in ch + 1 until bk.chapters.size) {
+            if (bk.chapters[i].sentences.isNotEmpty()) return false
+        }
+        return true
+    }
+
+    private fun scheduleBookEnd() {
+        // Сначала полка: дочитанная книга помечается прочитанной (просьба
+        // Сергея 23.09.2026). Делаем это ДО фразы и до проверки «уже сказано»:
+        // фразу читатель может отменить, а книга всё равно дочитана. Возврат на
+        // полку обновит строку сам (refreshRowsInPlace, msg4356) — в строке
+        // появится «дочитана» и сто процентов.
+        markBookFinished()
+        if (endAnnouncePending || endAnnounceSpeaking) return
+        endAnnouncePending = true
+        Diag.log(
+            ctx, "activity",
+            "книга дочитана до конца — через секунду скажу «${ctx.getString(R.string.book_finished)}»",
+        )
+        main.postDelayed(endAnnounceRunnable, END_ANNOUNCE_DELAY_MS)
+    }
+
+    /** Полка: книга дочитана — статус «прочитана». Пишем в реестр, откуда полка
+     *  берёт статус и процент; position и prefs тут ни при чём. */
+    private fun markBookFinished() {
+        val u = currentUri ?: return
+        val ex = BookStore.byUri(ctx, u) ?: return
+        if (ex.status == BookRecord.STATUS_FINISHED) return
+        BookStore.upsert(ctx, ex.copy(status = BookRecord.STATUS_FINISHED, readPct = 100))
+        Diag.log(ctx, "activity", "книга дочитана — отметил прочитанной в реестре книг")
+    }
+
+    private fun speakBookEnd() {
+        endAnnouncePending = false
+        val p = player
+        if (p == null || !p.isReady) {
+            Diag.log(ctx, "activity", "«книга прочитана»: движок не готов — молчу")
+            return
+        }
+        // Чтение к этому моменту уже отпустило фокус и процессор (stopAtEnd),
+        // поэтому берём их на время фразы — и отпускаем, когда она доиграет.
+        requestAudioFocus()
+        KeepAwake.acquire(ctx)
+        endAnnounceSpeaking = true
+        Diag.log(ctx, "activity", "говорю «${ctx.getString(R.string.book_finished)}»")
+        p.speak(ctx.getString(R.string.book_finished))
+    }
+
+    private fun finishEndAnnounce() {
+        endAnnounceSpeaking = false
+        KeepAwake.release()
+        dropAudioFocus()
+    }
+
+    /** Отменить несказанное (или оборвать звучащее): читатель снова взялся за
+     *  книгу — нажал «читать», перешёл по главе, закрыл читалку, поставил паузу. */
+    private fun cancelEndAnnounce() {
+        if (!endAnnouncePending && !endAnnounceSpeaking) return
+        endAnnouncePending = false
+        main.removeCallbacks(endAnnounceRunnable)
+        if (endAnnounceSpeaking) {
+            endAnnounceSpeaking = false
+            player?.stop()
+            KeepAwake.release()
+            dropAudioFocus()
+            Diag.log(ctx, "activity", "«книга прочитана» прервана читателем")
+        }
     }
 
     /** Промотать вперёд ровно столько предложений, сколько было в озвученной
@@ -1083,6 +1202,10 @@ internal object ReaderEngine {
     /** Пауза чтения. См. исходную pausePlayback в MainActivity: keepFocus —
      *  пользовательская пауза (фокус держим), byFocusLoss — прервал чужой плеер. */
     fun pausePlayback(keepFocus: Boolean = false, byFocusLoss: Boolean = false) {
+        // Служебная «книга прочитана» звучит при уже остановленном чтении
+        // (playing = false), поэтому её гасим ДО раннего выхода: «пауза» значит
+        // тишина, а не «фраза доскажет себя и умолкнет».
+        cancelEndAnnounce()
         if (!playing) return
         Diag.log(
             ctx, "activity",
@@ -1955,6 +2078,9 @@ internal object ReaderEngine {
             return
         }
         val wasPlaying = playing
+        // Переход — это тоже «взялся за книгу»: несказанное «книга прочитана»
+        // отменяем, иначе фраза догнала бы читателя уже в другом месте.
+        cancelEndAnnounce()
         if (wasPlaying) {
             playing = false
             player?.stop()

@@ -109,12 +109,18 @@ class LibraryActivity(private val act: SectionActivity) {
     private val filterInds = ArrayList<View>()
     private var currentTabModes: List<Int> = emptyList()
 
+    // Обложки карточек-сетки (23.09.2026, просьба Сергея: «как в FBReader»).
+    // Создаётся ДО адаптера: адаптер берёт её в конструкторе, а порядок
+    // инициализации полей в Kotlin — сверху вниз.
+    private val covers = BookCovers(act.applicationContext, coverCardWidthPx(), coverCardHeightPx())
+
     private val adapter = BookAdapter(
         rowText = { rec -> rowText(rec) },
         onBookClick = { rec -> openReader(rec) },
         onBookLongClick = { rec -> showBookMenu(rec) },
         // Карточка-сетка: говорим название и автора — то, что видно на карточке.
         cardText = { rec -> cardText(rec) },
+        covers = covers,
     )
 
     /** Построить полку в контейнере [container] хоста. Зовётся один раз при
@@ -233,6 +239,11 @@ class LibraryActivity(private val act: SectionActivity) {
         // каждом возврате сюда (в т.ч. из настроек). У вкладки может быть своя
         // (msg2713/2717): фильтр в поле, сортировка — под него.
         sortMode = LibraryActivity.tabSort(prefs, filterMode)
+        // Обложки можно выключить в настройках («Библиотека и скачанные») —
+        // перечитываем галочку при каждом возврате, как сортировку: окно полки
+        // живёт всё время, пока живёт окно-дом, и само о правке не узнает.
+        // Адаптер перерисовывается только если значение правда изменилось.
+        adapter.coversEnabled = coversEnabled()
         // Синхронизация чтения (msg6046…6078): ставим её здесь, до возврата из
         // ридера ниже, — именно возврат после чтения и есть главный момент, когда
         // место изменилось. Проверка галочки дешёвая, сама работа уходит в фон.
@@ -766,6 +777,19 @@ class LibraryActivity(private val act: SectionActivity) {
 
     private fun dp(v: Int): Int = (act.resources.displayMetrics.density * v).toInt()
 
+    /** Размер обложки карточки-сетки, под который BookCovers декодирует
+     *  картинку и рисует заглушку. Ширина — колонка сетки минус отступы
+     *  (поля окна, поля и внутренние поля карточки), высота — та же, что у
+     *  ImageView в item_book_grid (170dp): размер карточки обязан быть
+     *  одинаковым у всех книг, иначе полка «дышит». */
+    private fun coverCardWidthPx(): Int {
+        val columns = GRID_COLUMNS.coerceAtLeast(1)
+        val side = dp(12) + columns * dp(16) + columns * dp(24)
+        return ((act.resources.displayMetrics.widthPixels - side) / columns).coerceAtLeast(dp(80))
+    }
+
+    private fun coverCardHeightPx(): Int = dp(170)
+
     // ——— msg2713/2717: гибкая сортировка по вкладкам ———
     // У каждой вкладки-фильтра своя запомненная сортировка (tabSortKey). Долгое
     // удержание вкладки открывает диалог для НЕЁ; «⋮ → Сортировка» (showGlobalSortDialog)
@@ -1079,15 +1103,21 @@ class LibraryActivity(private val act: SectionActivity) {
     }
 
     /** Применить вид к полке: сетка — две колонки карточек, список — строки.
-     *  Зовётся при первом показе и при смене в меню «Ещё». */
+     *  Зовётся при первом показе и при смене в меню «Ещё». Вместе с видом
+     *  ставим галочку обложек: она имеет смысл только в сетке, и держать её
+     *  в двух местах незачем. */
     private fun applyViewMode() {
         adapter.viewMode = viewMode
+        adapter.coversEnabled = coversEnabled()
         binding.bookList.layoutManager = if (viewMode == BookAdapter.VIEW_GRID) {
             GridLayoutManager(act, GRID_COLUMNS)
         } else {
             LinearLayoutManager(act)
         }
     }
+
+    private fun coversEnabled(): Boolean =
+        prefs.getBoolean(KEY_LIB_COVERS, LIB_COVERS_DEFAULT)
 
     /** Озвучка карточки-сетки: то, что видно на карточке (название, автор), и
      *  прогресс чтения — чтобы в сетке тоже было слышно, сколько прочитано
@@ -2233,6 +2263,14 @@ class LibraryActivity(private val act: SectionActivity) {
         private const val KEY_HIDDEN_PATHS = "hidden_paths"
         private const val KEY_LIB_FILTER = "lib_filter"
         private const val KEY_LIB_VIEW = "lib_view"
+
+        /** Обложки карточек-сетки (23.09.2026): галочка в настройках, раздел
+         *  «Библиотека и скачанные». Внутренняя, а не private: настройки пишут
+         *  её из своего окна (как KEY_TREE у папки книг). По умолчанию включены —
+         *  владелец просил именно обложки, а выключить их можно галочкой. */
+        internal const val KEY_LIB_COVERS = "lib_covers"
+        internal const val LIB_COVERS_DEFAULT = true
+
         private const val GRID_COLUMNS = 2
 
         // Ставит MainActivity перед «назад в библиотеку»: полка не должна
