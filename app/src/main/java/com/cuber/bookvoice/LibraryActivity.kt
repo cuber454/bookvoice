@@ -789,13 +789,23 @@ class LibraryActivity(private val act: SectionActivity) {
 
     private fun dp(v: Int): Int = (act.resources.displayMetrics.density * v).toInt()
 
+    /** Сколько колонок в сетке. При крупном шрифте — одна: это слой для
+     *  слабовидящих, а в двух колонках крупная подпись не помещается. Им важнее
+     *  читаемое название под большой обложкой, чем плотность полки (решение
+     *  Сергея 23.09.2026). Множитель спрашиваем у TextScale: «обычный» — это
+     *  ровно 1, то есть поведение не меняется. Смена размера шрифта пересоздаёт
+     *  окно (TextScale.wrap в attachBaseContext), поэтому колонки пересчитаются
+     *  сами. */
+    private fun gridColumns(): Int =
+        if (TextScale.factor(TextScale.value(act)) > 1f) 1 else GRID_COLUMNS
+
     /** Размер обложки карточки-сетки, под который BookCovers декодирует
      *  картинку и рисует заглушку. Ширина — колонка сетки минус отступы
      *  (поля окна, поля и внутренние поля карточки), высота — та же, что у
      *  ImageView в item_book_grid (170dp): размер карточки обязан быть
      *  одинаковым у всех книг, иначе полка «дышит». */
     private fun coverCardWidthPx(): Int {
-        val columns = GRID_COLUMNS.coerceAtLeast(1)
+        val columns = gridColumns().coerceAtLeast(1)
         val side = dp(12) + columns * dp(16) + columns * dp(24)
         return ((act.resources.displayMetrics.widthPixels - side) / columns).coerceAtLeast(dp(80))
     }
@@ -1114,15 +1124,15 @@ class LibraryActivity(private val act: SectionActivity) {
             .show()
     }
 
-    /** Применить вид к полке: сетка — две колонки карточек, список — строки.
-     *  Зовётся при первом показе и при смене в меню «Ещё». Вместе с видом
-     *  ставим галочку обложек: она имеет смысл только в сетке, и держать её
-     *  в двух местах незачем. */
+    /** Применить вид к полке: сетка — колонки карточек (одна при крупном
+     *  шрифте, см. [gridColumns]), список — строки. Зовётся при первом показе и
+     *  при смене в меню «Ещё». Вместе с видом ставим галочку обложек: она имеет
+     *  смысл только в сетке, и держать её в двух местах незачем. */
     private fun applyViewMode() {
         adapter.viewMode = viewMode
         adapter.coversEnabled = coversEnabled()
         binding.bookList.layoutManager = if (viewMode == BookAdapter.VIEW_GRID) {
-            GridLayoutManager(act, GRID_COLUMNS)
+            GridLayoutManager(act, gridColumns())
         } else {
             LinearLayoutManager(act)
         }

@@ -96,12 +96,9 @@ class BookAdapter(
         val v = holder.itemView
         if (viewMode == VIEW_GRID) {
             v.findViewById<TextView>(R.id.tvCardTitle).text = rec.displayTitle
-            val author = rec.author?.takeIf { it.isNotBlank() }
-            val tvAuthor = v.findViewById<TextView>(R.id.tvCardAuthor)
-            // Без автора строку скрываем, чтобы карточка не «дырявила» пустым
-            // местом — высоту карточкам задаёт minHeight в layout.
-            tvAuthor.visibility = if (author == null) View.GONE else View.VISIBLE
-            tvAuthor.text = author ?: ""
+            // Автора на карточке нет (23.09.2026): освободившуюся строку отдали
+            // названию. Диктор автор по-прежнему слышит — он приходит в тексте
+            // карточки ([cardText]), а не из разметки; в списке автор тоже есть.
             v.contentDescription = cardText(rec)
             bindCover(v, rec)
         } else {

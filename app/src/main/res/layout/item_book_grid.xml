@@ -3,10 +3,13 @@
      (23.09.2026, просьба Сергея: «как в FBReader»): картинка помечена как
      неважная для доступности, поэтому диктор по-прежнему видит ОДИН узел —
      всю карточку; текст для TalkBack (название, автор, процент) и клики
-     выставляет BookAdapter в коде. Видимые TextView тоже помечены как
-     несущественные, чтобы TalkBack не спотыкался о них отдельно от карточки.
-     Что показать в картинке — настоящую обложку, а если её в книге нет,
-     нарисованную из названия, — решает BookCovers. -->
+     выставляет BookAdapter в коде.
+
+     23.09.2026, вторая правка: АВТОРА на карточке больше нет (решение Сергея).
+     Освободившуюся строку отдали названию — четыре строки вместо трёх, длинные
+     названия почти перестают обрезаться. Для диктора и для вида «Список» автор
+     остался: он читается в тексте карточки (cardText) и виден в строке списка,
+     так что на слух ничего не потеряно. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -34,19 +37,8 @@
         android:layout_marginTop="8dp"
         android:ellipsize="end"
         android:importantForAccessibility="no"
-        android:maxLines="3"
+        android:maxLines="4"
         android:textColor="?attr/bvInk"
         android:textSize="16sp"
         android:textStyle="bold" />
-
-    <TextView
-        android:id="@+id/tvCardAuthor"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:ellipsize="end"
-        android:importantForAccessibility="no"
-        android:maxLines="1"
-        android:textColor="?attr/bvDim"
-        android:textSize="14sp" />
 </LinearLayout>
