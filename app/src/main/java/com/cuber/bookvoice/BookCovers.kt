@@ -104,10 +104,15 @@ internal class BookCovers(
          *  не видно, а весит в разы меньше PNG. */
         const val JPEG_QUALITY = 85
 
-        /** Сколько точек страницы считаем «пустой» страницей. Порог мягкий:
-         *  белый лист с заголовком — это 97-99% фона, и обложкой он быть не
-         *  должен, а настоящая обложка с картинкой редко даёт больше 90%. */
-        const val BLANK_LIMIT = 0.97f
+        /** Пустой лист: сколько точек должно совпасть с фоном. Порог строгий
+         *  нарочно — титульный лист текстового PDF (пара строк на белом) обязан
+         *  показываться, а не подменяться заглушкой. 99,85% значит, что «чернил»
+         *  на странице меньше 0,15% — это уже действительно пустой лист. */
+        const val BLANK_UNIFORM = 0.9985f
+
+        /** Пустым считаем только СВЕТЛЫЙ ровный лист: однотонная тёмная обложка —
+         *  это обложка, а не пустая страница. */
+        const val BLANK_LIGHT = 0.85f
 
         /** Сетка выборки для оценки пустоты: 64×64 точек на страницу. */
         const val BLANK_GRID = 64
@@ -462,13 +467,22 @@ internal class BookCovers(
             if (ptWidth <= 0f) return null
             val dpi = (widthPx * 72f / ptWidth).coerceIn(MIN_PDF_DPI, MAX_PDF_DPI)
             val bmp = PDFRenderer(doc).renderImageWithDPI(0, dpi, ImageType.RGB) ?: return null
-            val blank = blankShare(bmp)
+            val ink = pageInk(bmp)
+            // Пустым считаем ТОЛЬКО ровный светлый лист без единой точки «чернил».
+            // Порог строгий нарочно: первая версия (97% фона) считала пустым
+            // титульный лист с парой строк текста — а это как раз текстовые PDF,
+            // и настоящая первая страница подменялась нарисованной заглушкой.
+            // Одновременно отсекается и вторая крайность: однотонная ТЁМНАЯ
+            // обложка — не пустой лист, её показываем.
+            val blank = ink.backgroundShare >= BLANK_UNIFORM && ink.brightness >= BLANK_LIGHT
             Diag.log(
                 appContext, "covers",
-                "обложка PDF: первая страница, пустоты ${(blank * 100).toInt()}%, " +
-                    if (blank >= BLANK_LIMIT) "рисую заглушку" else "показываю",
+                "обложка PDF: первая страница, фон ${(ink.backgroundShare * 1000).toInt() / 10f}% " +
+                    "(яркость ${(ink.brightness * 100).toInt()}%, чернил " +
+                    "${((1f - ink.backgroundShare) * 1000).toInt() / 10f}%) — " +
+                    if (blank) "пустой лист, рисую заглушку" else "показываю",
             )
-            if (blank >= BLANK_LIMIT) {
+            if (blank) {
                 bmp.recycle()
                 return null
             }
@@ -488,11 +502,13 @@ internal class BookCovers(
         }
     }
 
-    /** Доля точек страницы, совпадающих с фоном (самым частым цветом кадра).
-     *  Берём разреженную сетку — нам нужен не портрет страницы, а ответ «лист
-     *  почти пустой или нет», а полный проход по картинке стоил бы сотни
-     *  миллисекунд на каждой книге. */
-    private fun blankShare(bmp: Bitmap): Float {
+    /** Что на отрисованной странице: доля точек фона (самого частого цвета) и
+     *  яркость этого фона. Берём разреженную сетку — нам нужен не портрет
+     *  страницы, а ответ «лист совсем пустой или нет», а полный проход по
+     *  картинке стоил бы сотни миллисекунд на каждой книге. */
+    private class PageInk(val backgroundShare: Float, val brightness: Float)
+
+    private fun pageInk(bmp: Bitmap): PageInk {
         val stepX = (bmp.width / BLANK_GRID).coerceAtLeast(1)
         val stepY = (bmp.height / BLANK_GRID).coerceAtLeast(1)
         val samples = ArrayList<Int>(BLANK_GRID * BLANK_GRID)
@@ -510,8 +526,8 @@ internal class BookCovers(
             }
             y += stepY
         }
-        if (samples.isEmpty()) return 0f
-        val bg = counts.maxByOrNull { it.value }?.key ?: return 0f
+        if (samples.isEmpty()) return PageInk(0f, 0f)
+        val bg = counts.maxByOrNull { it.value }?.key ?: return PageInk(0f, 0f)
         var same = 0
         for (p in samples) {
             if (abs(((p shr 16) and 0xFF) - ((bg shr 16) and 0xFF)) <= BLANK_TOLERANCE &&
@@ -521,7 +537,11 @@ internal class BookCovers(
                 same++
             }
         }
-        return same.toFloat() / samples.size
+        val r = (bg shr 16) and 0xFF
+        val g = (bg shr 8) and 0xFF
+        val b = bg and 0xFF
+        val brightness = (0.299f * r + 0.587f * g + 0.114f * b) / 255f
+        return PageInk(same.toFloat() / samples.size, brightness)
     }
 
     /** Прочитать запись архива по имени (без учёта регистра). Каждый вызов —
