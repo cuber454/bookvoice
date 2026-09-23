@@ -302,6 +302,86 @@ object BookParser {
 
     // ---------------- ZIP ----------------
 
+    /** Потолок распаковки одной записи архива. Архив приходит из чужого
+     *  каталога и может развернуться во что угодно, а памяти у нас не
+     *  бесконечно: книга в 64 МБ — это уже подозрительно (fb2 такого размера
+     *  не бывает), и лучше оставить файл архивом, чем уронить приложение. */
+    private const val UNPACK_MAX = 64 * 1024 * 1024
+
+    /** Расширения, которые бывают в упаковках каталога, и как их сохранять:
+     *  `.htm` пишем как `.html`. Порядок = предпочтение (первое, что нашли,
+     *  побеждает только внутри своего ранга). `.xml` здесь НАМЕРЕННО нет: под
+     *  него маскируются чужие архивы, которые сами являются форматом, —
+     *  META-INF/container.xml у EPUB, word/document.xml у DOCX,
+     *  `[Content_Types].xml` у OOXML. Приняв такую запись за книгу, мы
+     *  сохранили бы обломок вместо книги. */
+    private val UNPACK_EXT = listOf(
+        ".fb2" to ".fb2",
+        ".html" to ".html",
+        ".htm" to ".html",
+        ".txt" to ".txt",
+        ".rtf" to ".rtf",
+    )
+
+    /**
+     * Книга внутри архива, пришедшего вместо файла: байты и расширение.
+     *
+     * Нужна там, где файл надо СОХРАНИТЬ честно, а не просто прочитать
+     * ([CatalogActivity] при скачивании из каталога). flibusta помечает такие
+     * ссылки «+zip» (fb2+zip, txt+zip, html+zip, rtf+zip) и отдаёт
+     * `application/zip` с именем «Название.fb2.zip»; мы писали это под книжным
+     * расширением — .fb2, внутри которого архив. Внутри BookVoice это не мешало
+     * (архив определяется по содержимому, [isZip]), но в папке и на Диске файл
+     * врал о себе, и любая другая программа видела архив.
+     *
+     * null — книги внутри нет или архив битый: тогда файл сохраняют архивом.
+     *
+     * Картинки, которые лежат в упаковке рядом с книгой (у txt и html на
+     * flibusta это обложка и иллюстрации), не сохраняем: текст книги целиком в
+     * самом файле, а картинки мы всё равно не показываем.
+     */
+    fun unpackBookFile(data: ByteArray): Pair<ByteArray, String>? {
+        if (!isZip(data)) return null
+        var best: Pair<ByteArray, String>? = null
+        var bestRank = UNPACK_EXT.size
+        ZipInputStream(ByteArrayInputStream(data)).use { zis ->
+            var entry = nextEntry(zis)
+            while (entry != null) {
+                if (!entry.isDirectory) {
+                    val en = entry.name.lowercase(Locale.ROOT)
+                    val rank = UNPACK_EXT.indexOfFirst { en.endsWith(it.first) }
+                    if (rank in 0 until bestRank) {
+                        val bytes = readCapped(zis, UNPACK_MAX) ?: return null
+                        best = bytes to UNPACK_EXT[rank].second
+                        bestRank = rank
+                        // Верхний ранг — это FB2: лучше уже не будет.
+                        if (rank == 0) return@use
+                    }
+                }
+                entry = nextEntry(zis)
+            }
+        }
+        return best
+    }
+
+    /** Прочитать запись архива целиком, но не больше [max] байт. null — запись
+     *  больше потолка или оборвалась: и то и другое значит «книги тут нет». */
+    private fun readCapped(zis: ZipInputStream, max: Int): ByteArray? {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(64 * 1024)
+        while (true) {
+            val n = try {
+                zis.read(buf)
+            } catch (_: Exception) {
+                return null
+            }
+            if (n < 0) break
+            if (out.size() + n > max) return null
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
+
     /**
      * Найти внутри архива любую читаемую книжку: .fb2, .txt, .xml или даже
      * вложенный архив. Не обрывается на первом попавшемся битом файле —

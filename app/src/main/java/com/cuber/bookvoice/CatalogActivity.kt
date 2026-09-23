@@ -2215,11 +2215,16 @@ class CatalogActivity(private val act: SectionActivity) {
     ): Pair<String, String> {
         val tree = dlTree()
         val base = safeName(b.title)
+        // 0.4.69: каталог отдаёт часть книг АРХИВОМ под книжным расширением
+        // (flibusta: fb2+zip, txt+zip, html+zip, rtf+zip — проверено на живом
+        // OPDS: тип application/zip, имя у сервера «Название.fb2.zip»). Пишем
+        // то, что внутри: файл должен быть тем, чем называется.
+        val (data, ext) = honestFile(fmt, bytes)
         return if (tree == null) {
-            writeInternal(base, fmt.ext, bytes)
+            writeInternal(base, ext, data)
         } else {
             try {
-                writeToTree(Uri.parse(tree), base, fmt.ext, bytes)
+                writeToTree(Uri.parse(tree), base, ext, data)
             } catch (e: Exception) {
                 // 0.3.47 (msg1165/1167): выбранная SAF-папка не умеет
                 // createDocument (сторонние проводники вроде MixPlorer). Раньше
@@ -2233,8 +2238,8 @@ class CatalogActivity(private val act: SectionActivity) {
                     if (!AllFiles.granted(act)) return@runCatching null
                     val dir = AllFiles.resolveDir(t) ?: return@runCatching null
                     if (!dir.isDirectory) dir.mkdirs()
-                    val f = uniqueFile(dir, base, fmt.ext)
-                    f.writeBytes(bytes)
+                    val f = uniqueFile(dir, base, ext)
+                    f.writeBytes(data)
                     f
                 }.getOrNull()
                 if (real != null) {
@@ -2246,9 +2251,44 @@ class CatalogActivity(private val act: SectionActivity) {
                 Diag.log(act, "opds", "папка не пишет файлы, качаю во внутреннюю: ${e.message}")
                 prefs.edit().remove(OpdsPrefs.KEY_DL_DIR).apply()
                 dlFallback = true
-                writeInternal(base, fmt.ext, bytes)
+                writeInternal(base, ext, data)
             }
         }
+    }
+
+    /** Форматы, у которых zip — это и есть сам формат: их не разворачиваем
+     *  никогда. EPUB — контейнер из zip по стандарту, DOCX и ODT тоже архивы
+     *  (из чужого каталога они тоже могут прийти). */
+    private val zippedFormats = setOf(".epub", ".docx", ".odt")
+
+    /** Что сохранить и под каким расширением (0.4.69).
+     *
+     *  Каталог помечает упакованные ссылки «+zip», и файл приходит архивом с
+     *  книжным расширением. Разворачиваем один файл книги и сохраняем под его
+     *  собственным расширением. Не вышло (внутри не книга, архив битый, запись
+     *  больше потолка) — сохраняем как есть, но с честным `.zip`: читалка
+     *  открывает архив по содержимому, а имя больше не врёт.
+     *
+     *  Решаем по СОДЕРЖИМОМУ, а не по типу ссылки: архив — это первые байты PK,
+     *  как и везде у нас. Тип ссылки врёт и сам (flibusta отдаёт pdf как
+     *  application/pdf файлом, а fb2 и txt — архивом под тем же «application/
+     *  fb2+zip»/«txt+zip»), а содержимое не врёт никогда. */
+    private fun honestFile(fmt: OpdsFormat, bytes: ByteArray): Pair<ByteArray, String> {
+        if (fmt.ext in zippedFormats) return bytes to fmt.ext
+        if (!BookParser.isZip(bytes)) return bytes to fmt.ext
+        val inner = BookParser.unpackBookFile(bytes)
+        if (inner == null) {
+            Diag.log(
+                act, "opds",
+                "книга пришла архивом, а книги внутри нет (${bytes.size} байт) — сохраняю как .zip"
+            )
+            return bytes to ".zip"
+        }
+        Diag.log(
+            act, "opds",
+            "книга пришла архивом ${fmt.ext} — разворачиваю: ${bytes.size} → ${inner.first.size} байт, ${inner.second}"
+        )
+        return inner
     }
 
     /** Внутренняя папка приложения (всегда работает). */

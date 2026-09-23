@@ -94,6 +94,13 @@ object WhatsNew {
             R.string.whats_new_128_3,
             R.string.whats_new_128_4,
         ),
+        // 0.4.69: по строке на изменение (вопрос Сергея 24.09.2026: «говорит,
+        // что скачивает FB2, а скачивает в zip»).
+        129 to listOf(
+            R.string.whats_new_129_1,
+            R.string.whats_new_129_2,
+            R.string.whats_new_129_3,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =
