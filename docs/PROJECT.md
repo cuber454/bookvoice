@@ -280,6 +280,11 @@ bash scratch/smoke/compile.sh [лог]
   `BookAdapter.kt`, `BookCovers.kt` (обложки карточек-сетки: достаёт из FB2 и
   EPUB, кэширует на диск и в память, рисует заглушку из названия),
   `CatalogActivity.kt` + `Opds.kt` (сетевые каталоги), `AllFiles.kt`.
+  **Страница полки создаётся в конструкторе окна**
+  (`LibraryWindowActivity`: `private val library = LibraryActivity(this)`) — то
+  есть до того, как у Activity появится базовый контекст. Поэтому в её
+  конструкторе нельзя трогать `act` как контекст: поля, которым нужен контекст
+  или ресурсы, обязаны быть ленивыми (см. урок 10 в разделе 12).
 
 **Настройки**
 - `SettingsActivity.kt` (сборка строк), `SettingsWindowActivity.kt` (окно
@@ -740,6 +745,17 @@ PDF в RAR**. Пометка стоит прямо в подписи форма�
 8. **Имена интерфейса** — проверять на слух.
 9. **Отложенная проверка с задержкой** — всегда перечитывать состояние внутри
    лямбды: за 300 мс мир успевает измениться (см. раздел 7).
+10. **В конструкторе страницы-«дома» нет контекста.** `LibraryWindowActivity`
+    создаёт страницу полем: `private val library = LibraryActivity(this)`, а
+    значит её конструктор работает ещё ДО `attachBaseContext`. Любое обращение
+    к `act.applicationContext`, `act.resources` или `act.getSharedPreferences`
+    прямо в поле — `NullPointerException`, и приложение не запускается совсем
+    («Unable to instantiate activity»). Так ушла в народ сборка 0.4.57: поле
+    обложек читало `act.applicationContext`, стек
+    `LibraryActivity.<init>(LibraryActivity.kt:115) ← LibraryWindowActivity.<init>`.
+    Правило: поля страницы, которым нужен контекст, создаются **лениво**
+    (`by lazy`) и только внутри методов, которые зовутся после `onCreate`.
+    Собрано и проверено локально — этого мало: падение видно лишь на устройстве.
 
 ---
 

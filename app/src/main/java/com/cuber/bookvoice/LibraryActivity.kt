@@ -110,18 +110,30 @@ class LibraryActivity(private val act: SectionActivity) {
     private var currentTabModes: List<Int> = emptyList()
 
     // Обложки карточек-сетки (23.09.2026, просьба Сергея: «как в FBReader»).
-    // Создаётся ДО адаптера: адаптер берёт её в конструкторе, а порядок
-    // инициализации полей в Kotlin — сверху вниз.
-    private val covers = BookCovers(act.applicationContext, coverCardWidthPx(), coverCardHeightPx())
+    // ЛЕНИВО, и только так: страница создаётся прямо в конструкторе окна
+    // (LibraryWindowActivity: `private val library = LibraryActivity(this)`), а в
+    // этот момент у Activity ещё НЕТ базового контекста — обращение к
+    // act.applicationContext падает с NullPointerException, и приложение не
+    // запускается вовсе. Так и случилось в 0.4.57: стек
+    // LibraryActivity.<init>(LibraryActivity.kt:115) ← LibraryWindowActivity.<init>.
+    // Размер тоже считаем лениво: dp() читает act.resources.
+    private val covers by lazy {
+        BookCovers(act.applicationContext, coverCardWidthPx(), coverCardHeightPx())
+    }
 
-    private val adapter = BookAdapter(
-        rowText = { rec -> rowText(rec) },
-        onBookClick = { rec -> openReader(rec) },
-        onBookLongClick = { rec -> showBookMenu(rec) },
-        // Карточка-сетка: говорим название и автора — то, что видно на карточке.
-        cardText = { rec -> cardText(rec) },
-        covers = covers,
-    )
+    // Адаптер — тоже лениво: он берёт [covers], а та не должна создаваться раньше
+    // времени. Оба поля нужны только внутри методов (build/resume/refresh), а те
+    // зовутся уже после attachBaseContext.
+    private val adapter by lazy {
+        BookAdapter(
+            rowText = { rec -> rowText(rec) },
+            onBookClick = { rec -> openReader(rec) },
+            onBookLongClick = { rec -> showBookMenu(rec) },
+            // Карточка-сетка: говорим название и автора — то, что видно на карточке.
+            cardText = { rec -> cardText(rec) },
+            covers = covers,
+        )
+    }
 
     /** Построить полку в контейнере [container] хоста. Зовётся один раз при
      *  создании хоста; страница остаётся живой всё время, переключение вкладок
