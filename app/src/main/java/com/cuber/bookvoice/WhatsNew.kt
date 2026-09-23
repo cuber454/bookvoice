@@ -101,6 +101,12 @@ object WhatsNew {
             R.string.whats_new_129_2,
             R.string.whats_new_129_3,
         ),
+        // 0.4.70: по строке на изменение (архив «Жизнь в поместье» от Сергея
+        // 24.09.2026 — внутри книга в PDF и служебный файл описания).
+        130 to listOf(
+            R.string.whats_new_130_1,
+            R.string.whats_new_130_2,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

@@ -21,6 +21,10 @@ object BookParser {
     fun parse(fileName: String, data: ByteArray): BookDocument? {
         if (data.isEmpty()) return null
         val lower = fileName.lowercase(Locale.ROOT)
+        // 0.4.70: файл описания flibusta (см. [FBD_EXT]) — не книга: в нём одни
+        // метаданные и ни одной главы. Разобравшись как FB2, он открылся бы
+        // пустой книгой, поэтому честно говорим «не читается».
+        if (lower.endsWith(FBD_EXT)) return null
         // DOCX и ODT — ТОЖЕ zip, и раскладка у них другая. Проверяем их по
         // расширению ДО общей zip-ветки: иначе epub-парсер не найдёт у них
         // META-INF/container.xml, отвалится в parseZip, тот возьмёт первую
@@ -315,12 +319,18 @@ object BookParser {
      *  META-INF/container.xml у EPUB, word/document.xml у DOCX,
      *  `[Content_Types].xml` у OOXML. Приняв такую запись за книгу, мы
      *  сохранили бы обломок вместо книги. */
+    /** Служебный файл описания flibusta: `.fbd` — это FB2, в котором есть только
+     *  `<description>` (название, автор, аннотация), но нет ни одной главы.
+     *  Лежит в архиве рядом с самой книгой и книгой не является (см. [parseZip]). */
+    internal const val FBD_EXT = ".fbd"
+
     private val UNPACK_EXT = listOf(
         ".fb2" to ".fb2",
         ".html" to ".html",
         ".htm" to ".html",
         ".txt" to ".txt",
         ".rtf" to ".rtf",
+        ".pdf" to ".pdf",
     )
 
     /**
@@ -338,7 +348,8 @@ object BookParser {
      *
      * Картинки, которые лежат в упаковке рядом с книгой (у txt и html на
      * flibusta это обложка и иллюстрации), не сохраняем: текст книги целиком в
-     * самом файле, а картинки мы всё равно не показываем.
+     * самом файле, а картинки мы всё равно не показываем. Служебный файл
+     * `.fbd` (см. [FBD_EXT]) тоже не книга и в списке расширений его нет.
      */
     fun unpackBookFile(data: ByteArray): Pair<ByteArray, String>? {
         if (!isZip(data)) return null
@@ -395,6 +406,16 @@ object BookParser {
             while (entry != null && fb2 == null) {
                 if (!entry.isDirectory) {
                     val en = entry.name.lowercase(Locale.ROOT)
+                    // 0.4.70 (архив «Жизнь в поместье» от Сергея): рядом с книгой
+                    // flibusta кладёт СЛУЖЕБНЫЙ файл описания `.fbd` — а это
+                    // настоящий FB2 из одной `<description>`: название, автор,
+                    // аннотация, ни одной главы. Идёт он ПЕРВОЙ записью архива,
+                    // разбирается как FB2 и закрывал дорогу самой книге: она
+                    // открывалась пустой. Файл описания книгой не считаем.
+                    if (en.endsWith(FBD_EXT)) {
+                        entry = zis.nextEntry
+                        continue
+                    }
                     val bytes = zis.readBytes()
                     if (bytes.isEmpty()) {
                         entry = zis.nextEntry
