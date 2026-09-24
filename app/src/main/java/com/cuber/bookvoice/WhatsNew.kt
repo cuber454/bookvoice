@@ -130,6 +130,10 @@ object WhatsNew {
             R.string.whats_new_134_1,
             R.string.whats_new_134_2,
         ),
+        // 0.4.76: переключение синтезатора откатывалось на системный движок.
+        136 to listOf(
+            R.string.whats_new_136_1,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

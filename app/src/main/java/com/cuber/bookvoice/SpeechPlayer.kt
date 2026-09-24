@@ -320,73 +320,90 @@ class SpeechPlayer(context: Context) {
         var cancelled = false
     }
 
-    private val initListener = TextToSpeech.OnInitListener { status ->
-        main.post {
-            val ok = status == TextToSpeech.SUCCESS && tts != null
-            ready = ok
-            // 0.4.75: засечка «движок поднялся» — без неё в журнале не видно,
-            // чем кончилось переключение синтезатора (жалоба Сергея: «проблема с
-            // переключением синтезаторов»; в присланном журнале были только
-            // последствия — страховка прямой речью и поздние голоса).
+    /** Поколение запусков движка. Ответ об инициализации приходит от КОНКРЕТНОГО
+     *  запуска, а слушатель у нас один на всех: без номера поколения ответ
+     *  ПРЕЖНЕГО движка принимался за ответ нового. Так и получалось «проблема с
+     *  переключением синтезаторов» (жалоба тестера): при смене движка мы гасим
+     *  прежний (`shutdown`), а если он в этот момент ещё инициализировался, его
+     *  ответ приходит с ошибкой — и мы объявляем ошибкой НОВЫЙ движок: тост
+     *  «Движок не запустился, вернул системный» и откат на системный движок. */
+    private var engineGen = 0L
+
+    /** Ответ движка об инициализации. [gen] — какой запуск отвечает: ответ
+     *  прежнего запуска (мы уже переключились) отбрасываем. */
+    private fun onEngineInit(gen: Long, status: Int) {
+        if (gen != engineGen) {
             Diag.log(
                 appContext, "tts",
-                "движок ${enginePackage ?: "системный"}: init status=$status, готов=$ok"
+                "ответ прежнего запуска движка (поколение $gen из $engineGen, " +
+                    "status=$status) — игнорирую: сейчас ${enginePackage ?: "системный"}"
             )
-            if (ok) {
-                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    // msg1818: засечка фактического старта произнесения движком —
-                    // для сопоставления с фразой TalkBack «управление мультимедиа».
-                    // 23.09.2026: этим же сигналом пользуется надзор за прямой
-                    // речью — до него срок ждём один, после него считаем по длине
-                    // фразы (см. directSpeechStarted).
-                    override fun onStart(utteranceId: String?) {
-                        Diag.log(appContext, "tts", "onStart: движок начал речь ($utteranceId)")
-                        val id = utteranceId?.toLongOrNull()
-                        main.post { directSpeechStarted(id) }
-                    }
-
-                    override fun onDone(utteranceId: String?) {
-                        val id = utteranceId?.toLongOrNull() ?: return
-                        main.post { synthFinished(id) }
-                    }
-
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(utteranceId: String?) {
-                        val id = utteranceId?.toLongOrNull() ?: return
-                        main.post { synthFailed(id, -1) }
-                    }
-
-                    override fun onError(utteranceId: String?, errorCode: Int) {
-                        val id = utteranceId?.toLongOrNull() ?: return
-                        main.post { synthFailed(id, errorCode) }
-                    }
-                })
-                // msg3550: список голосов движок отдаёт не в момент init, а
-                // позже — выбранный голос (в т.ч. свой у книги) в этот момент
-                // поставить нечем. Публичного уведомления «список готов» в SDK
-                // нет (сборка 0.4.25: setOnVoicesChangedListener не резолвится),
-                // поэтому спрашиваем сами несколько раз.
-                applySpeedAndVoice()
-                if (tts?.voices.isNullOrEmpty()) waitForVoices(voiceWaitSteps.size)
-                // Сторож (msg4077): движок перезапущен после молчания — переспросить
-                // фразу, которую он не досказал. Скорость и голос уже применены выше.
-                // Состояние «эту фразу ждут» восстанавливаем руками: start() его
-                // обнулил (resetPipeline), а synthFinished играет только то, что ждут.
-                retryAfterRestart?.let { t ->
-                    retryAfterRestart = null
-                    currentText = t
-                    awaitingPlayText = t
-                    synthToFile(t)
-                }
-            } else {
-                retryAfterRestart?.let {
-                    retryAfterRestart = null
-                    Diag.log(appContext, "tts", "движок не поднялся после перезапуска (status=$status)")
-                }
-            }
-            engineReadyCallback?.invoke(ok)
-            engineReadyCallback = null
+            return
         }
+        val ok = status == TextToSpeech.SUCCESS && tts != null
+        ready = ok
+        // 0.4.75: засечка «движок поднялся» — без неё в журнале не видно, чем
+        // кончилось переключение синтезатора (в присланном журнале были только
+        // последствия — страховка прямой речью и поздние голоса).
+        Diag.log(
+            appContext, "tts",
+            "движок ${enginePackage ?: "системный"}: init status=$status, готов=$ok"
+        )
+        if (ok) {
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                // msg1818: засечка фактического старта произнесения движком —
+                // для сопоставления с фразой TalkBack «управление мультимедиа».
+                // 23.09.2026: этим же сигналом пользуется надзор за прямой
+                // речью — до него срок ждём один, после него считаем по длине
+                // фразы (см. directSpeechStarted).
+                override fun onStart(utteranceId: String?) {
+                    Diag.log(appContext, "tts", "onStart: движок начал речь ($utteranceId)")
+                    val id = utteranceId?.toLongOrNull()
+                    main.post { directSpeechStarted(id) }
+                }
+
+                override fun onDone(utteranceId: String?) {
+                    val id = utteranceId?.toLongOrNull() ?: return
+                    main.post { synthFinished(id) }
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    val id = utteranceId?.toLongOrNull() ?: return
+                    main.post { synthFailed(id, -1) }
+                }
+
+                override fun onError(utteranceId: String?, errorCode: Int) {
+                    val id = utteranceId?.toLongOrNull() ?: return
+                    main.post { synthFailed(id, errorCode) }
+                }
+            })
+            // msg3550: список голосов движок отдаёт не в момент init, а позже —
+            // выбранный голос (в т.ч. свой у книги) в этот момент поставить
+            // нечем. Публичного уведомления «список готов» в SDK нет (сборка
+            // 0.4.25: setOnVoicesChangedListener не резолвится), поэтому
+            // спрашиваем сами несколько раз.
+            applySpeedAndVoice()
+            if (tts?.voices.isNullOrEmpty()) waitForVoices(voiceWaitSteps.size)
+            // Сторож (msg4077): движок перезапущен после молчания — переспросить
+            // фразу, которую он не досказал. Скорость и голос уже применены
+            // выше. Состояние «эту фразу ждут» восстанавливаем руками: start()
+            // его обнулил (resetPipeline), а synthFinished играет только то, что
+            // ждут.
+            retryAfterRestart?.let { t ->
+                retryAfterRestart = null
+                currentText = t
+                awaitingPlayText = t
+                synthToFile(t)
+            }
+        } else {
+            retryAfterRestart?.let {
+                retryAfterRestart = null
+                Diag.log(appContext, "tts", "движок не поднялся после перезапуска (status=$status)")
+            }
+        }
+        engineReadyCallback?.invoke(ok)
+        engineReadyCallback = null
     }
 
     init {
@@ -413,6 +430,7 @@ class SpeechPlayer(context: Context) {
     }
 
     private fun start(pkg: String?) {
+        val gen = ++engineGen
         enginePackage = pkg
         runCatching { tts?.stop() }
         runCatching { tts?.shutdown() }
@@ -420,10 +438,31 @@ class SpeechPlayer(context: Context) {
         ready = false
         pending.clear()
         resetPipeline()
+        // Слушатель свой у каждого запуска: он отвечает за КОНКРЕТНЫЙ движок
+        // (см. [engineGen]). Общий слушатель путал ответы, и переключение
+        // синтезатора сваливалось на системный движок.
+        val listener = TextToSpeech.OnInitListener { status -> main.post { onEngineInit(gen, status) } }
         tts = runCatching {
-            if (pkg != null) TextToSpeech(appContext, initListener, pkg)
-            else TextToSpeech(appContext, initListener)
+            if (pkg != null) TextToSpeech(appContext, listener, pkg)
+            else TextToSpeech(appContext, listener)
         }.getOrNull()
+        if (tts == null) {
+            // Движок не создался вовсе (нет такого пакета, отключён, упал) —
+            // конструктор не бросает исключение наружу всегда, а ответа от
+            // слушателя в этом случае не будет: без этой ветки вызывающий ждал бы
+            // ответа вечно (в журнале у тестера это выглядело как «не
+            // переключается»).
+            Diag.log(
+                appContext, "tts",
+                "движок ${pkg ?: "системный"} не создался вовсе — отвечаю отказом"
+            )
+            main.post {
+                if (gen == engineGen) {
+                    engineReadyCallback?.invoke(false)
+                    engineReadyCallback = null
+                }
+            }
+        }
     }
 
     /** Начать озвучивать одно предложение. Вызывается с главного потока. */

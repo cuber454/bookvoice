@@ -244,6 +244,13 @@ class VoicePicker(
                     host.engineApplied(pkg)
                     p.setEngine(pkg) { ok ->
                         if (!ok) {
+                            // 0.4.76: отказ движка виден в журнале, а не только
+                            // тостом — по нему и разбирается «переключается на
+                            // системный».
+                            Diag.log(
+                                ctx, "tts",
+                                "движок ${pkg ?: "системный"} не запустился — возвращаю системный"
+                            )
                             p.setEngine(null) { _ -> afterEngineChange(p) }
                             host.toast("Движок не запустился, вернул системный")
                         } else {

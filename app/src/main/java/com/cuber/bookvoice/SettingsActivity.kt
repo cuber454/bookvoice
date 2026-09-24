@@ -2545,6 +2545,14 @@ class SettingsActivity(private val act: SectionActivity) {
             .show()
         tmp.setEngine(prefs.getString(MainActivity.KEY_ENGINE, null)) { ok ->
             if (!ok) {
+                // 0.4.76: стирание выбранного движка — событие, а не мелочь:
+                // после него приложение везде читает системным. Пишем в журнал
+                // (раньше это было видно только по отсутствию строк).
+                Diag.log(
+                    act, "tts",
+                    "выбранный движок ${prefs.getString(MainActivity.KEY_ENGINE, null) ?: "системный"} " +
+                        "не запустился — забываю его, беру системный"
+                )
                 prefs.edit().remove(MainActivity.KEY_ENGINE).apply()
                 runCatching { loading.dismiss() }
                 tmp.shutdown()
