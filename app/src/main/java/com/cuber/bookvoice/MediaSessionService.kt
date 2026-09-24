@@ -55,6 +55,14 @@ class MediaSessionService : Service() {
     interface Listener {
         fun onMediaPlay()
         fun onMediaPause()
+
+        /** «Переключи» — «волшебное касание» TalkBack (два пальца, два касания в
+         *  любом месте экрана) и центральная кнопка гарнитуры. Решение принимает
+         *  ДВИЖОК по своему фактическому состоянию, а не система по тому, что мы
+         *  ей опубликовали (0.4.77, см. [MediaSessionService] — иначе касание
+         *  перестаёт ставить паузу). */
+        fun onMediaToggle()
+
         fun onMediaSkip(delta: Int)
 
         /** «Выход» из карточки в шторке (msg4073): владелец гасит чтение, не
@@ -82,6 +90,40 @@ class MediaSessionService : Service() {
                 override fun onStop() {
                     Diag.log(this@MediaSessionService, "session", "onStop, listener=${listener != null}")
                     post { listener?.onMediaPause() }
+                }
+
+                /**
+                 * 0.4.77: «волшебное касание» TalkBack и центральная кнопка
+                 * гарнитуры приходят одной командой «переключи». Кем она станет —
+                 * play или pause — система решает по состоянию, которое мы ей
+                 * опубликовали. Если состояние отстало (чтение идёт, а
+                 * опубликована пауза), команда превращается в «играть», а
+                 * «играть» на уже играющем чтении у нас ничего не делает. На слух
+                 * это ровно жалоба тестеров: «волшебное касание перестало
+                 * ставить паузу».
+                 *
+                 * Поэтому разбираем кнопку сами и переключаем по ФАКТИЧЕСКОМУ
+                 * состоянию движка ([Listener.onMediaToggle]). Своими считаем оба
+                 * события нажатия (DOWN и UP): если одно из них отдать системе,
+                 * она переключит по своему (возможно, устаревшему) состоянию, и
+                 * получится двойное переключение — то есть ничего. Переключаем по
+                 * DOWN — так же, как это делает сама система.
+                 */
+                override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+                    val key = keyEventOf(mediaButtonIntent)
+                        ?: return super.onMediaButtonEvent(mediaButtonIntent)
+                    val toggle = key.keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
+                        key.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                    if (!toggle) return super.onMediaButtonEvent(mediaButtonIntent)
+                    if (key.action == KeyEvent.ACTION_DOWN) {
+                        Diag.log(
+                            this@MediaSessionService, "session",
+                            "переключение с кнопки/касания: решает движок, " +
+                                "listener=${listener != null}"
+                        )
+                        post { listener?.onMediaToggle() }
+                    }
+                    return true
                 }
 
                 override fun onSkipToNext() {
@@ -440,6 +482,15 @@ class MediaSessionService : Service() {
          *  с паузой, чтобы фраза не легла на первое слово. Повторные старты
          *  (пауза → играть) карточку не пересоздают и задержки не требуют. */
         fun isUp(): Boolean = instance?.foregroundStarted == true
+    }
+
+    /** Клавиша из интента медиа-кнопки. На Android 13+ нужен типизированный
+     *  вызов, иначе система отдаёт null. */
+    private fun keyEventOf(intent: Intent): KeyEvent? = if (Build.VERSION.SDK_INT >= 33) {
+        intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+    } else {
+        @Suppress("DEPRECATION")
+        intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
     }
 
     private fun applyBookTitle(title: String?) {

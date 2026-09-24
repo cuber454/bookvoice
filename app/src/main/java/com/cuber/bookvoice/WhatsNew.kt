@@ -134,6 +134,10 @@ object WhatsNew {
         136 to listOf(
             R.string.whats_new_136_1,
         ),
+        // 0.4.77: «волшебное касание» TalkBack снова ставит паузу.
+        137 to listOf(
+            R.string.whats_new_137_1,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =
