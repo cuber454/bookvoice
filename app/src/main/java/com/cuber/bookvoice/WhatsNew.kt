@@ -120,6 +120,11 @@ object WhatsNew {
             R.string.whats_new_132_2,
             R.string.whats_new_132_3,
         ),
+        // 0.4.73: переход по главам отменялся чужой целью прокрутки.
+        133 to listOf(
+            R.string.whats_new_133_1,
+            R.string.whats_new_133_2,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

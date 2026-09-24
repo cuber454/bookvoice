@@ -222,7 +222,28 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     override fun onShowCurrent() = showCurrent()
 
-    override fun onChapterLoaded() = loadChapter()
+    /** Явный переход: глава, оглавление, закладка, поиск, откат при старте.
+     *  В такое время лента обязана поехать к новому месту, а прежняя цель руки
+     *  ([pendingScrollTarget]) устаревает — она про место, от которого мы ушли.
+     *  Без этого выходило так (журнал Сергея 24.09.2026, «Человек и мир.
+     *  2 класс»): чтение стоит, читатель листал книгу рукой — цель руки осталась
+     *  висеть; следующий свайп по главам двигал место, но лента к нему не ехала
+     *  ([scrollToSentence] упирался в чужую цель), а на остановке прокрутки
+     *  лента записывала место ПО СЕБЕ и возвращала книгу в начало (в журнале:
+     *  «цель с ленты: глава 0, предл. 0», «место записано в книгу: глава 0,
+     *  предл. 0 (0%)»). На слух это «свайпаю по главам — не читает и не
+     *  двигается», а место в книге при этом терялось. */
+    private var jumping = false
+
+    override fun onChapterLoaded() {
+        jumping = true
+        try {
+            pendingScrollTarget = null
+            loadChapter()
+        } finally {
+            jumping = false
+        }
+    }
 
     override fun onPlayStateChanged() {
         updatePlayButton()
@@ -247,9 +268,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     }
 
     override fun onMovedInChapter(s: Int) {
-        adapter.setCurrent(chapterIdx, s)
-        scrollToSentence(chapterIdx, s)
-        updatePosition()
+        jumping = true
+        try {
+            // Тот же явный переход, только внутри главы (см. [jumping]).
+            pendingScrollTarget = null
+            adapter.setCurrent(chapterIdx, s)
+            scrollToSentence(chapterIdx, s)
+            updatePosition()
+        } finally {
+            jumping = false
+        }
     }
 
     override fun onToast(msg: String) = toast(msg)
@@ -1175,7 +1203,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Портянка (msg4372): читатель увёл ленту и ещё не отпустил — за голосом
         // не подтягиваем, иначе лента вырывается у него из-под руки и уезжает
         // назад. Цель помним, на остановке прокрутки к ней вернёмся.
-        if (pendingScrollTarget != null) return
+        // Кроме явного перехода ([jumping]): там лента едет к новому месту, а
+        // прежняя цель руки уже не про него.
+        if (pendingScrollTarget != null && !jumping) return
         if (!prefs.getBoolean(KEY_SCROLL, true)) return
         markSelfScroll(row)
         layoutManager.scrollToPosition(row)
