@@ -138,6 +138,10 @@ object WhatsNew {
         137 to listOf(
             R.string.whats_new_137_1,
         ),
+        // 0.4.79: лента списка, разошедшаяся с книгой, пересобирается сама.
+        139 to listOf(
+            R.string.whats_new_139_1,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

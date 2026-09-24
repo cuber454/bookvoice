@@ -135,6 +135,12 @@ class SentenceAdapter(
         notifyDataSetChanged()
     }
 
+    /** Сколько глав и строк знает лента — для журнала (0.4.79). Нужно, чтобы
+     *  отличить «строки нет, потому что книга такая» от «лента разошлась с
+     *  книгой»: жалоба «текст стоит, а чтение уходит». */
+    val chapterCount: Int get() = rowStart.size
+    val rowCount: Int get() = rows.size
+
     private fun resetState() {
         curChapter = -1
         curSentence = -1

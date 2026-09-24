@@ -1173,6 +1173,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (adapterBook !== bk) {
             adapter.submitBook(bk.chapters)
             adapterBook = bk
+            // 0.4.79: в журнал — какой лентой мы работаем. Вместе со строкой
+            // «строки для главы N нет» это сразу показывает, разошлась лента с
+            // книгой или просто коротка.
+            Diag.log(
+                this, "activity",
+                "лента собрана по книге: глав ${bk.chapters.size}, строк ${adapter.rowCount}"
+            )
         }
         val cur = bk.chapters.getOrNull(chapterIdx)?.sentences ?: emptyList()
         if (cur.isEmpty()) {
@@ -1197,9 +1204,35 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     /** Прокрутить список к читаемому предложению, если в настройках включено
      *  «Прокручивать к читаемому предложению». */
     private fun scrollToSentence(chapter: Int, sentence: Int) {
-        val row = adapter.flatOf(chapter, sentence)
-        if (row < 0) {
-            logScrollSkip("строки для главы $chapter, предл. $sentence нет")
+        val bk = book
+        var row = adapter.flatOf(chapter, sentence)
+        if (row < 0 && bk != null) {
+            // 0.4.79: лента разошлась с книгой — жалоба Сергея «текст остаётся на
+            // месте, а чтение уходит далеко» (по журналу: «строки для главы N
+            // нет» на каждом переходе). Пересобираем ленту по ТЕКУЩЕЙ книге и
+            // пробуем снова; сборку делаем один раз на книгу, чтобы не молотить
+            // её на каждом шаге. В журнал пишем размеры: по ним видно, в чём
+            // было расхождение.
+            logScrollSkip(
+                "строки для главы $chapter, предл. $sentence нет " +
+                    "(в ленте глав ${adapter.chapterCount}, строк ${adapter.rowCount}, " +
+                    "в книге глав ${bk.chapters.size}, у главы предложений " +
+                    "${bk.chapters.getOrNull(chapter)?.sentences?.size ?: -1})"
+            )
+            if (ribbonHealedFor !== bk) {
+                ribbonHealedFor = bk
+                adapter.submitBook(bk.chapters)
+                adapterBook = bk
+                row = adapter.flatOf(chapter, sentence)
+                Diag.log(
+                    this, "activity",
+                    "лента пересобрана по книге: строк ${adapter.rowCount}, " +
+                        "строка для главы $chapter — $row"
+                )
+            }
+            if (row < 0) return
+        } else if (row < 0) {
+            logScrollSkip("строки для главы $chapter, предл. $sentence нет (книги нет)")
             return
         }
         if (suppressScroll) {
@@ -1228,6 +1261,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // осталось бы под нижним краем.
         binding.sentenceList.post { alignSentence(row, sentence) }
     }
+
+    /** 0.4.79: для какой книги лента уже пересобиралась по ходу чтения — чтобы
+     *  чинить расхождение один раз, а не на каждом шаге. */
+    private var ribbonHealedFor: BookDocument? = null
 
     /** 0.4.78: почему лента НЕ поехала за чтением. Без этой строки по журналу
      *  не видно, кто виноват: галочка, чужая цель руки или строка не нашлась.
