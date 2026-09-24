@@ -150,6 +150,11 @@ object WhatsNew {
         141 to listOf(
             R.string.whats_new_141_1,
         ),
+        // 0.4.82: вторая причина «переключается на системный» — гасили движок
+        // во время его запуска.
+        142 to listOf(
+            R.string.whats_new_142_1,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

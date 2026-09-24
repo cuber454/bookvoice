@@ -223,12 +223,16 @@ class VoicePicker(
                 if (pkg == defaultEngine) "$label (системный)" else label
             }.toTypedArray()
             val idx = engines.indexOfFirst { it.first == cur }.coerceAtLeast(0)
+            // 0.4.82: переключились ли в этом диалоге. Нужно, чтобы НЕ гасить
+            // временный плеер, пока переключение идёт (см. ниже).
+            var switched = false
             val dlg = MaterialAlertDialogBuilder(ctx)
                 .setTitle(R.string.voice_engine_row)
                 .setSingleChoiceItems(labels, idx) { d, which ->
                     d.dismiss()
                     val pkg = engines[which].first
                     if (pkg == p.enginePackage) return@setSingleChoiceItems
+                    switched = true
                     host.toast(ctx.getString(R.string.voice_engine_switch))
                     // msg5726: уходящий движок забирает свой голос с собой.
                     // Без этой записи выбор, сделанный до смены движка, потерялся
@@ -251,7 +255,7 @@ class VoicePicker(
                                 ctx, "tts",
                                 "движок ${pkg ?: "системный"} не запустился — возвращаю системный"
                             )
-                            p.setEngine(null) { _ -> afterEngineChange(p) }
+                            p.setEngine(null) { _ -> afterEngineChange(p, temp) }
                             host.toast("Движок не запустился, вернул системный")
                         } else {
                             // msg5604: движок сменили на ходу — перечитываем
@@ -260,20 +264,33 @@ class VoicePicker(
                             // и перечитка ушла бы прежним голосом. Без книги
                             // restartAfterSwitch молчит.
                             ReaderEngine.restartAfterSwitch()
-                            afterEngineChange(p)
+                            afterEngineChange(p, temp)
                         }
                     }
                 }
                 .setNegativeButton(R.string.toc_close, null)
                 .show()
-            if (temp) dlg.setOnDismissListener { p.shutdown() }
+            // 0.4.82: временный плеер гасим только если переключения в этом
+            // диалоге НЕ было. Найдено по журналу Сергея 24.09.2026: выбор пункта
+            // списка закрывает диалог (`d.dismiss()`), а слушатель закрытия
+            // срабатывает НЕ сразу — уже после того, как мы запустили новый
+            // движок. `shutdown` гасил его прямо во время запуска: ответ движка
+            // приходил с успехом, но `tts` был уже null — и мы объявляли движок
+            // неисправным («org.nobody.multitts не запустился — возвращаю
+            // системный»). Отсюда и «не переключается или переключается на
+            // системный», и то, что у одного движка получалось, а у другого нет:
+            // это гонка. После успешного переключения плеер гасит
+            // [afterEngineChange], когда список голосов уже прочитан.
+            if (temp) dlg.setOnDismissListener { if (!switched) p.shutdown() }
         }
     }
 
     /** Движок сменили: язык, выбранный руками, смену переживает (msg5622).
      *  Решаем это, когда движок отдал список голосов — список приезжает позже
-     *  init (msg3550), а по пустому списку «у движка нет языка» было бы враньём. */
-    private fun afterEngineChange(p: SpeechPlayer) {
+     *  init (msg3550), а по пустому списку «у движка нет языка» было бы враньём.
+     *  [temp] — плеер временный (без открытой книги): гасим его сами, когда
+     *  работа сделана (см. [pickEngine]). */
+    private fun afterEngineChange(p: SpeechPlayer, temp: Boolean) {
         ReaderEngine.whenVoicesReady(on = p) {
             val want = pickLang ?: prefs.getString(MainActivity.KEY_VOICE_LANG, null)
             pickLang = VoicePick.pickLangFor(p.voices, want, host.currentVoice())
@@ -289,6 +306,7 @@ class VoicePicker(
             applyEngineVoice(p)
             refresh()
             host.redraw()
+            if (temp) p.shutdown()
         }
     }
 
