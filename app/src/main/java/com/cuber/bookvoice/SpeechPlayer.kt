@@ -324,6 +324,14 @@ class SpeechPlayer(context: Context) {
         main.post {
             val ok = status == TextToSpeech.SUCCESS && tts != null
             ready = ok
+            // 0.4.75: засечка «движок поднялся» — без неё в журнале не видно,
+            // чем кончилось переключение синтезатора (жалоба Сергея: «проблема с
+            // переключением синтезаторов»; в присланном журнале были только
+            // последствия — страховка прямой речью и поздние голоса).
+            Diag.log(
+                appContext, "tts",
+                "движок ${enginePackage ?: "системный"}: init status=$status, готов=$ok"
+            )
             if (ok) {
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     // msg1818: засечка фактического старта произнесения движком —
@@ -393,6 +401,13 @@ class SpeechPlayer(context: Context) {
             onResult?.invoke(true)
             return
         }
+        // 0.4.75: засечка смены движка (см. жалобу «проблема с переключением
+        // синтезаторов»). Дальше по журналу видно, поднялся ли новый движок,
+        // когда приехали голоса и каким голосом он заговорил.
+        Diag.log(
+            appContext, "tts",
+            "переключаю движок: ${enginePackage ?: "системный"} → ${pkg ?: "системный"}"
+        )
         engineReadyCallback = onResult
         start(pkg)
     }
@@ -569,10 +584,23 @@ class SpeechPlayer(context: Context) {
         t.setSpeechRate(speed)
         t.setPitch(pitch)
         val name = selectedVoiceName
+        var applied = "движковый"
         if (name != null) {
             val v = t.voices?.firstOrNull { it.name == name }
-            if (v != null) t.voice = v
+            if (v != null) {
+                t.voice = v
+                applied = name
+            } else {
+                applied = "$name (движок его не знает)"
+            }
         }
+        // 0.4.75: чем движок заговорит на самом деле — по журналу видно и голос,
+        // и скорость (после переключения синтезатора это главный вопрос).
+        Diag.log(
+            appContext, "tts",
+            "применил: движок ${enginePackage ?: "системный"}, скорость " +
+                "${RateSteps.label(speed)}, голос $applied"
+        )
     }
 
     /** Задержки повторных вопросов «а голоса уже приехали?» после init (msg3550).
