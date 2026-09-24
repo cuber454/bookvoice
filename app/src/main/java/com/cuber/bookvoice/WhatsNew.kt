@@ -125,6 +125,11 @@ object WhatsNew {
             R.string.whats_new_133_1,
             R.string.whats_new_133_2,
         ),
+        // 0.4.74: шаги по книге на паузе начинают читать (просьба Сергея).
+        134 to listOf(
+            R.string.whats_new_134_1,
+            R.string.whats_new_134_2,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

@@ -513,6 +513,11 @@ class SettingsActivity(private val act: SectionActivity) {
         addCheck(R.string.bm_play_title, MainActivity.KEY_BM_PLAY, true)
         // Найденное по поиску слово — читать ли с него сразу (как с главы/закладки).
         addCheck(R.string.search_play_title, MainActivity.KEY_SEARCH_PLAY, true)
+        // 0.4.74: то же правило для шагов по книге кнопками и свайпами — глава,
+        // абзац, предложение, «Прыжок». Просьба Сергея: «на паузе должно
+        // начинать читать» — до этого шаги молчали, а читали только тап,
+        // оглавление, закладка и поиск.
+        addCheck(R.string.nav_play_title, MainActivity.KEY_NAV_PLAY, true)
 
         // msg5711: «Звук и стыки» — как звучит чтение и что происходит на стыке
         // фраз. «Пауза между фразами» переехала сюда из «Начала книги»: она про

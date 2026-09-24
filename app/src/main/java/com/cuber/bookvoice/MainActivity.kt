@@ -1502,6 +1502,17 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             s = 0
         }
         goTo(ch, s)
+        startAfterStep()
+    }
+
+    /** Шаг по книге сделан — читаем с нового места, если чтение стояло и это
+     *  включено ([KEY_NAV_PLAY], 0.4.74). То же правило, что у двойного тапа по
+     *  предложению ([KEY_TAP_TO_PLAY]) и у выбора главы в оглавлении
+     *  ([KEY_TOC_PLAY]); здесь оно на все шаги: кнопки и свайпы «глава»,
+     *  «абзац», «предложение», «Прыжок». Просьба Сергея: раньше эти шаги на
+     *  паузе молчали, и было не понять, сработал ли переход. */
+    private fun startAfterStep() {
+        if (!playing && prefs.getBoolean(KEY_NAV_PLAY, true)) requestStart()
     }
 
     /** Прыжок (msg5234): шаг сразу на [count] предложений в сторону [delta] — по
@@ -1533,6 +1544,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
         if (left == count) return
         goTo(ch, s)
+        startAfterStep()
     }
 
     /** Шаг по «главам» ([mode] — по какому уровню ходим: [CH_NAV_MAJOR] — крупные
@@ -1552,6 +1564,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (target < 0) return
         pushPlace() // #101: запомнить место, откуда ушли по главе
         goTo(target, 0)
+        startAfterStep()
     }
 
     /** Шаг «Абзац» (msg2471) для кнопок «Пред.»/«След.» — тем же правилом, что
@@ -1566,25 +1579,38 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val cur = bk.chapters[chapterIdx].sentences
         if (delta > 0) {
             for (i in sentenceIdx + 1 until cur.size) {
-                if (cur[i].paragraphStart) { goTo(chapterIdx, i); return }
+                if (cur[i].paragraphStart) {
+                    goTo(chapterIdx, i)
+                    startAfterStep()
+                    return
+                }
             }
             if (chapterIdx + 1 >= bk.chapters.size) return
             val next = bk.chapters[chapterIdx + 1].sentences
             val i = next.indexOfFirst { it.paragraphStart }
             goTo(chapterIdx + 1, if (i >= 0) i else 0)
+            startAfterStep()
             return
         }
         for (i in sentenceIdx - 1 downTo 0) {
-            if (cur[i].paragraphStart) { goTo(chapterIdx, i); return }
+            if (cur[i].paragraphStart) {
+                goTo(chapterIdx, i)
+                startAfterStep()
+                return
+            }
         }
         if (chapterIdx == 0) {
-            if (sentenceIdx != 0) goTo(0, 0)
+            if (sentenceIdx != 0) {
+                goTo(0, 0)
+                startAfterStep()
+            }
             return
         }
         val prev = bk.chapters[chapterIdx - 1].sentences
         if (prev.isEmpty()) return
         val i = prev.indexOfLast { it.paragraphStart }
         goTo(chapterIdx - 1, if (i >= 0) i else 0)
+        startAfterStep()
     }
 
     /** По каким «главам» ходят «Предыдущая/Следующая глава» и свайп-глава
@@ -3812,6 +3838,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_TOC_PLAY = "toc_play"
         internal const val KEY_BM_PLAY = "bm_play"
         internal const val KEY_SEARCH_PLAY = "search_play"
+        // 0.4.74: читать ли сразу после шага по книге (кнопки и свайпы «глава»,
+        // «абзац», «предложение», «Прыжок»). Просьба Сергея: «на паузе должно
+        // начинать читать».
+        internal const val KEY_NAV_PLAY = "nav_play"
         internal const val KEY_START = "start"
 
         // Конструктор экрана чтения (#58): какие элементы читалки показывать.
