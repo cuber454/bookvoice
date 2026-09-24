@@ -942,6 +942,11 @@ internal object ReaderEngine {
         val cur = bk.chapters.getOrNull(ch)?.sentences ?: return null
         val text = cur.getOrNull(s)?.text ?: return null
         if (s != 0 || !prefs.getBoolean(MainActivity.KEY_SAY_CHAPTER_START, true)) return text
+        // 0.4.71: название, которое придумали мы сами («Стр. N» у PDF без
+        // закладок), вслух не читаем — иначе на каждой странице книги звучит
+        // «страница один», «страница два». В оглавлении оно остаётся: по нему
+        // переходят к нужной странице.
+        if (bk.chapters[ch].autoTitle) return text
         val title = bk.chapters[ch].title?.trim()?.takeIf { it.isNotEmpty() } ?: return text
         return if (title == text.trim()) text else "$title. $text"
     }

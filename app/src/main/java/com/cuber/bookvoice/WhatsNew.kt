@@ -107,6 +107,13 @@ object WhatsNew {
             R.string.whats_new_130_1,
             R.string.whats_new_130_2,
         ),
+        // 0.4.71: по строке на изменение (книга «Жизнь в поместье»: чистка
+        // колонтитулов, номеров и буквиц в текстовом слое скана).
+        131 to listOf(
+            R.string.whats_new_131_1,
+            R.string.whats_new_131_2,
+            R.string.whats_new_131_3,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

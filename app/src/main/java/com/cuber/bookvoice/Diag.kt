@@ -34,8 +34,25 @@ object Diag {
 
     @Synchronized
     fun log(c: Context, tag: String, msg: String) {
+        val d = dir
+        if (d == null) {
+            dir = c.filesDir
+        }
+        write(File(dir, "diag.log"), tag, msg)
+    }
+
+    /** Строка в журнал БЕЗ контекста: папку журнала помнит первый вызов [log].
+     *  Нужна разбору книги ([PdfParser]): он контекста не знает, а написать о
+     *  выброшенном мусоре обязан — иначе это гадание, а не проверка. Журнал ещё
+     *  не открывали (папка неизвестна) — молчим. */
+    @Synchronized
+    fun log(tag: String, msg: String) {
+        val d = dir ?: return
+        write(File(d, "diag.log"), tag, msg)
+    }
+
+    private fun write(f: File, tag: String, msg: String) {
         try {
-            val f = file(c)
             val line = "[${fmt.format(Date())}] $tag: $msg\n"
             FileOutputStream(f, true).use { it.write(line.toByteArray(Charsets.UTF_8)) }
             if (f.length() > MAX_BYTES) trim(f)

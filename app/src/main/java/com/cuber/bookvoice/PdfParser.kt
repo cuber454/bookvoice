@@ -94,10 +94,11 @@ object PdfParser {
     }
 
     private fun build(doc: PDDocument, n: Int): BookDocument {
-        // Один проход по документу: забираем текст каждой страницы отдельно.
+        // Один проход по документу: забираем текст каждой страницы отдельно,
+        // сразу вычищая то, что распознаватель сканов вписал в текст книги.
         val pageTexts = PageTextStripper().run {
             getText(doc)
-            pages.toList()
+            cleanPages(pages)
         }
 
         val readablePages = ArrayList<Int>(n)
@@ -145,6 +146,158 @@ object PdfParser {
         var replace = 0
         for (c in flat) if (c == '�') replace++
         return replace.toFloat() / flat.length <= REPLACE_MAX_RATIO
+    }
+
+    // ---------------- Чистка мусора распознавателя (0.4.71) ----------------
+
+    /** Строка страницы: текст и координаты. По координатам видно то, чего не
+     *  видно по тексту: колонтитул и номер стоят в ПОЛЕ, отделённые от текста
+     *  полосой пустого места, а буквица — слева от своей строки. */
+    private class PdfLine(val y: Float, val x: Float, var text: String) {
+        /** Строка стоит в поле (верхнем или нижнем краю набора). */
+        var margin = false
+
+        /** Уже выброшена или склеена с буквицей. */
+        var dropped = false
+
+        fun norm(): String = text.replace(Regex("\\s+"), " ").trim()
+    }
+
+    /** Во сколько раз промежуток до соседа должен быть больше обычного, чтобы
+     *  строку считать стоящей в поле. */
+    private const val MARGIN_GAP_RATIO = 2.5f
+
+    /** Отступ строки от левого края набора, с которого строка считается
+     *  «сдвинутой буквицей» (в точках PDF). */
+    private const val CAP_INDENT = 10f
+
+    /** Докуда вверх от буквицы искать начало абзаца: тот же запас в промежутках. */
+    private const val CAP_GAP_RATIO = 3f
+
+    /** Номер страницы — строка из одних цифр (не длиннее четырёх). */
+    private fun isPageNumber(t: String): Boolean = t.length in 1..4 && t.all { it.isDigit() }
+
+    /** Буквица — одиночная буква (реже две): распознаватель сканов выносит её
+     *  отдельной строкой, потому что в книге она набрана крупно и в стороне.
+     *  Только кириллица: латинская «I» в таких книгах — это римская цифра части. */
+    private fun isLoneLetter(t: String): Boolean =
+        t.length in 1..2 && t.all { it in 'А'..'я' || it == 'Ё' || it == 'ё' }
+
+    /** Медиана промежутков между строками страницы (сверху вниз). Меньше трёх
+     *  строк — считать нечего, отдаём −1. */
+    private fun medianGap(sorted: List<PdfLine>): Float {
+        if (sorted.size < 3) return -1f
+        val gaps = ArrayList<Float>(sorted.size - 1)
+        for (i in 1 until sorted.size) gaps.add(sorted[i].y - sorted[i - 1].y)
+        gaps.sort()
+        return gaps[gaps.size / 2]
+    }
+
+    /**
+     * Вычистить из страниц то, что распознаватель сканов вписал в текст книги
+     * (0.4.71, книга Сергея «Жизнь в поместье»: 176 страниц, из них 70 с
+     * колонтитулом, 123 с номером страницы, плюс 69 буквиц отдельной строкой).
+     *
+     * Правила — общие для сканов, а не под эту книгу:
+     *  1. Колонтитул: строка стоит в поле и тот же текст стоит в поле на многих
+     *     страницах. По тексту одного колонтитула не поймать — он бывает разным
+     *     от главы к главе, поэтому решает МЕСТО, а повтор лишь подтверждает.
+     *  2. Номер страницы: строка из одних цифр в поле — выбрасываем на каждой
+     *     такой странице (номера у страниц разные, повтором их не поймать).
+     *  3. Буквица: одиночную букву не выбрасываем — от неё зависит первая буква
+     *     абзаца («ЖИЛИ МЫ…» иначе станет «ИЛИ МЫ…»). Ищем её абзац: вверх по
+     *     непрерывному блоку строк, сдвинутых вправо от левого края набора, — и
+     *     приклеиваем букву к первой строке этого блока.
+     *
+     * Цифры ВНЕ поля не трогаем: это числа из текста и номера в печатном
+     * содержании. Не тронутое по ошибке лучше выброшенного.
+     */
+    private fun cleanPages(pages: List<List<PdfLine>>): List<String> {
+        val n = pages.size
+        val med = FloatArray(n)
+        val minX = FloatArray(n)
+        for (i in 0 until n) {
+            val sorted = pages[i].sortedBy { it.y }
+            med[i] = medianGap(sorted)
+            val m = med[i]
+            if (m > 1f && sorted.size >= 2) {
+                if (sorted[1].y - sorted[0].y >= MARGIN_GAP_RATIO * m) sorted[0].margin = true
+                val last = sorted.size - 1
+                if (sorted[last].y - sorted[last - 1].y >= MARGIN_GAP_RATIO * m) sorted[last].margin = true
+            }
+            // Обычный левый край набора: самый левый край среди строк НЕ в поле.
+            // По нему видно сдвиг строк, который оставляет буквица.
+            var left = Float.MAX_VALUE
+            for (l in pages[i]) if (!l.margin) left = minOf(left, l.x)
+            minX[i] = if (left == Float.MAX_VALUE) 0f else left
+        }
+
+        // Тексты, стоящие в поле на многих страницах, — колонтитулы.
+        val marginCount = HashMap<String, Int>()
+        for (page in pages) {
+            for (l in page) {
+                if (!l.margin) continue
+                val t = l.norm()
+                if (isPageNumber(t) || isLoneLetter(t)) continue
+                marginCount[t] = (marginCount[t] ?: 0) + 1
+            }
+        }
+        val limit = maxOf(3, n / 100)
+
+        var heads = 0
+        var numbers = 0
+        var caps = 0
+        for (i in 0 until n) {
+            val page = pages[i]
+            for (l in page) {
+                if (!l.margin) continue
+                val t = l.norm()
+                if (isPageNumber(t)) {
+                    l.dropped = true
+                    numbers++
+                } else if ((marginCount[t] ?: 0) >= limit) {
+                    l.dropped = true
+                    heads++
+                }
+            }
+            val sorted = page.sortedBy { it.y }
+            for ((idx, l) in sorted.withIndex()) {
+                val t = l.norm()
+                if (l.dropped || l.margin || !isLoneLetter(t)) continue
+                var host: PdfLine? = null
+                var k = idx - 1
+                while (k >= 0) {
+                    val up = sorted[k]
+                    if (up.dropped || up.margin) break
+                    if (sorted[k + 1].y - up.y > CAP_GAP_RATIO * med[i]) break
+                    if (up.x > minX[i] + CAP_INDENT && up.x > l.x) {
+                        host = up
+                        k--
+                        continue
+                    }
+                    break
+                }
+                if (host != null) {
+                    host.text = t + host.text
+                    l.dropped = true
+                    caps++
+                }
+            }
+        }
+        if (heads > 0 || numbers > 0 || caps > 0) {
+            Diag.log(
+                "pdf",
+                "чистка скана: колонтитулов $heads, номеров страниц $numbers, " +
+                    "буквиц склеено $caps (страниц $n)"
+            )
+        }
+        val top = marginCount.entries.sortedByDescending { it.value }.take(3)
+            .filter { it.value >= limit }
+        for (e in top) Diag.log("pdf", "колонтитул «${e.key.take(60)}» на ${e.value} страницах")
+
+        return pages.map { page ->
+            page.filter { !it.dropped }.joinToString(" ") { it.norm() }
+        }
     }
 
     // ---------------- Дерево закладок -> разделы ----------------
@@ -233,7 +386,10 @@ object PdfParser {
         return out
     }
 
-    /** Запасной вариант без структуры: по читаемой странице — глава «Стр. N». */
+    /** Запасной вариант без структуры: по читаемой странице — глава «Стр. N».
+     *  [Chapter.autoTitle] помечает такое название как НАШЕ, а не книжное: в
+     *  оглавлении оно нужно (переход к странице), а вслух его не читаем —
+     *  слушать «Стр. 1, Стр. 2…» на каждой странице нечего. */
     private fun chaptersFromPages(
         readable: List<Int>,
         pageTexts: List<String>,
@@ -244,7 +400,7 @@ object PdfParser {
             if (text.isEmpty()) continue
             val sentences = TextSplit.fromParagraphs(listOf(text))
             if (sentences.isEmpty()) continue
-            out.add(Chapter("Стр. ${i + 1}", sentences, major = true))
+            out.add(Chapter("Стр. ${i + 1}", sentences, major = true, autoTitle = true))
         }
         return out
     }
@@ -261,30 +417,57 @@ object PdfParser {
     /** Один проход по документу: [pages] — текст каждой страницы по порядку.
      *  Перехватываем стандартный вывод PDFTextStripper в буфер на страницу. */
     private class PageTextStripper : PDFTextStripper() {
-        private val buf = StringBuilder()
-        val pages = ArrayList<String>()
+        private val line = StringBuilder()
+        private var lineY = Float.NaN
+        private var lineX = Float.NaN
+        private val pageLines = ArrayList<PdfLine>()
+
+        /** Строки каждой страницы с координатами: по ним [cleanPages] ищет
+         *  колонтитулы, номера страниц и буквицы. */
+        val pages = ArrayList<List<PdfLine>>()
 
         override fun startPage(page: PDPage) {
-            buf.setLength(0)
+            pageLines.clear()
+            line.setLength(0)
+            lineY = Float.NaN
+            lineX = Float.NaN
         }
 
         // Перенос строки внутри PDFTextStripper идёт отдельным вызовом — без
         // него слова соседних строк склеивались бы в одно («wordword»).
         override fun writeLineSeparator() {
-            buf.append('\n')
+            flushLine()
         }
 
         override fun writeString(text: String, textPositions: List<TextPosition>) {
-            buf.append(text)
+            if (textPositions.isNotEmpty()) {
+                val p = textPositions[0]
+                if (lineY.isNaN()) {
+                    lineY = p.yDirAdj
+                    lineX = p.xDirAdj
+                }
+            }
+            line.append(text)
         }
 
         override fun writeString(text: String) {
-            buf.append(text)
+            line.append(text)
         }
 
         override fun endPage(page: PDPage) {
-            pages.add(buf.toString())
-            buf.setLength(0)
+            flushLine()
+            pages.add(ArrayList(pageLines))
+            pageLines.clear()
+        }
+
+        private fun flushLine() {
+            val t = line.toString()
+            if (t.isNotBlank()) {
+                pageLines.add(PdfLine(if (lineY.isNaN()) -1f else lineY, if (lineX.isNaN()) -1f else lineX, t))
+            }
+            line.setLength(0)
+            lineY = Float.NaN
+            lineX = Float.NaN
         }
     }
 }
