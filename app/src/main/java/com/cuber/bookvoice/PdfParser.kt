@@ -154,8 +154,15 @@ object PdfParser {
      *  видно по тексту: колонтитул и номер стоят в ПОЛЕ, отделённые от текста
      *  полосой пустого места, а буквица — слева от своей строки. */
     private class PdfLine(val y: Float, val x: Float, var text: String) {
-        /** Строка стоит в поле (верхнем или нижнем краю набора). */
+        /** Строка стоит в поле (верхнем или нижнем краю набора) с большим
+         *  промежутком до соседа — по ней ищется абзац буквицы. */
         var margin = false
+
+        /** Строка на самом краю набора — самая верхняя или самая нижняя на
+         *  странице. Колонтитул и номер страницы живут именно там, причём не
+         *  всегда отделены промежутком: в учебниках подпись правообладателя
+         *  стоит вплотную к тексту, и «промежуток» её не выдаёт. */
+        var edge = false
 
         /** Уже выброшена или склеена с буквицей. */
         var dropped = false
@@ -225,6 +232,11 @@ object PdfParser {
                 val last = sorted.size - 1
                 if (sorted[last].y - sorted[last - 1].y >= MARGIN_GAP_RATIO * m) sorted[last].margin = true
             }
+            // Край набора: самая верхняя и самая нижняя строка страницы.
+            if (sorted.isNotEmpty()) {
+                sorted[0].edge = true
+                sorted[sorted.size - 1].edge = true
+            }
             // Обычный левый край набора: самый левый край среди строк НЕ в поле.
             // По нему видно сдвиг строк, который оставляет буквица.
             var left = Float.MAX_VALUE
@@ -232,17 +244,37 @@ object PdfParser {
             minX[i] = if (left == Float.MAX_VALUE) 0f else left
         }
 
-        // Тексты, стоящие в поле на многих страницах, — колонтитулы.
-        val marginCount = HashMap<String, Int>()
+        // Тексты, стоящие на краю на многих страницах, — колонтитулы и подписи.
+        val edgeCount = HashMap<String, Int>()
         for (page in pages) {
             for (l in page) {
-                if (!l.margin) continue
+                if (!l.edge) continue
                 val t = l.norm()
                 if (isPageNumber(t) || isLoneLetter(t)) continue
-                marginCount[t] = (marginCount[t] ?: 0) + 1
+                edgeCount[t] = (edgeCount[t] ?: 0) + 1
             }
         }
         val limit = maxOf(3, n / 100)
+
+        // Номера страниц — арифметическая последовательность: печатный номер
+        // минус номер страницы в файле постоянен для всей книги. Берём самый
+        // частый сдвиг: по нему номер узнаётся и там, где он стоит вплотную к
+        // тексту, а не на самом краю (в учебнике «Человек и мир. 2 класс» так
+        // и было: глава начиналась со «114.» посреди страницы).
+        val offsets = HashMap<Int, Int>()
+        for ((i, page) in pages.withIndex()) {
+            for (l in page) {
+                val t = l.norm()
+                if (!l.edge || !isPageNumber(t)) continue
+                val off = t.toInt() - (i + 1)
+                offsets[off] = (offsets[off] ?: 0) + 1
+            }
+        }
+        val best = offsets.maxByOrNull { it.value }
+        val numOffset = best?.key ?: 0
+        // Сдвигу верим, только если он подтверждён хотя бы третью страниц:
+        // иначе это случайные числа, и выбрасывать по ним нельзя.
+        val numOffsetTrusted = best != null && best.value * 3 >= n
 
         var heads = 0
         var numbers = 0
@@ -250,12 +282,16 @@ object PdfParser {
         for (i in 0 until n) {
             val page = pages[i]
             for (l in page) {
-                if (!l.margin) continue
                 val t = l.norm()
                 if (isPageNumber(t)) {
-                    l.dropped = true
-                    numbers++
-                } else if ((marginCount[t] ?: 0) >= limit) {
+                    val byOffset = numOffsetTrusted && t.toInt() == i + 1 + numOffset
+                    if (l.edge || byOffset) {
+                        l.dropped = true
+                        numbers++
+                    }
+                    continue
+                }
+                if (l.edge && (edgeCount[t] ?: 0) >= limit) {
                     l.dropped = true
                     heads++
                 }
@@ -287,11 +323,12 @@ object PdfParser {
         if (heads > 0 || numbers > 0 || caps > 0) {
             Diag.log(
                 "pdf",
-                "чистка скана: колонтитулов $heads, номеров страниц $numbers, " +
+                "чистка скана: колонтитулов $heads, номеров страниц $numbers " +
+                    "(сдвиг номеров $numOffset, подтверждён ${best?.value ?: 0} стр.), " +
                     "буквиц склеено $caps (страниц $n)"
             )
         }
-        val top = marginCount.entries.sortedByDescending { it.value }.take(3)
+        val top = edgeCount.entries.sortedByDescending { it.value }.take(3)
             .filter { it.value >= limit }
         for (e in top) Diag.log("pdf", "колонтитул «${e.key.take(60)}» на ${e.value} страницах")
 

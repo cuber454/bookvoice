@@ -114,6 +114,12 @@ object WhatsNew {
             R.string.whats_new_131_2,
             R.string.whats_new_131_3,
         ),
+        // 0.4.72: доводка чистки скана по учебнику «Человек и мир. 2 класс».
+        132 to listOf(
+            R.string.whats_new_132_1,
+            R.string.whats_new_132_2,
+            R.string.whats_new_132_3,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =
