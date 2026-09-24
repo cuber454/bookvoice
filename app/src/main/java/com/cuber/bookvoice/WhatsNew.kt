@@ -146,6 +146,10 @@ object WhatsNew {
         140 to listOf(
             R.string.whats_new_140_1,
         ),
+        // 0.4.81: настоящая причина рассинхрона — ошибка поиска строки ленты.
+        141 to listOf(
+            R.string.whats_new_141_1,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =
