@@ -46,7 +46,11 @@ object BookCache {
     /** Разбор дольше этого порога считаем «дорогим» и сохраняем в кэш. */
     private const val SLOW_MS = 2000L
 
-    private const val MAGIC = "BV1"
+    /** Метка формата. 0.4.80: BV1 → BV2 — в строку флагов главы добавлен третий
+     *  признак (autoTitle). Старый файл кэша с этой меткой не совпадёт, запись
+     *  снимется, книга разберётся заново — это лучше, чем прочитать старую
+     *  запись и снова услышать «Стр. 1, Стр. 2…». */
+    private const val MAGIC = "BV2"
 
     /** Кэш-запись: uri книги → файл с разбором + сигнатура оригинала. */
     private data class Entry(
@@ -259,6 +263,11 @@ object BookCache {
                 w.write("\n")
                 w.write(if (ch.major) "1" else "0")
                 w.write(if (ch.nested) "1" else "0")
+                // 0.4.80: третий флаг — autoTitle (0.4.71): название главы
+                // придумали мы («Стр. N» у PDF без закладок), вслух его не
+                // читаем. До этой правки флаг терялся при чтении из кэша, и
+                // «Стр. 1, Стр. 2…» снова звучали на каждой странице.
+                w.write(if (ch.autoTitle) "1" else "0")
                 w.write("\n")
                 w.write(ch.sentences.size.toString())
                 w.write("\n")
@@ -287,13 +296,14 @@ object BookCache {
                 if (nS < 0) return null
                 val major = flags.isNotEmpty() && flags[0] == '1'
                 val nested = flags.length > 1 && flags[1] == '1'
+                val autoTitle = flags.length > 2 && flags[2] == '1'
                 val sents = ArrayList<Sentence>(nS)
                 repeat(nS) {
                     val line = r.readLine() ?: return null
                     val ps = line.isNotEmpty() && line[0] == '1'
                     sents.add(Sentence(if (line.length > 1) line.substring(1) else "", ps))
                 }
-                chapters.add(Chapter(chTitle, sents, major, nested))
+                chapters.add(Chapter(chTitle, sents, major, nested, autoTitle))
             }
             BookDocument(title, author, chapters)
         }

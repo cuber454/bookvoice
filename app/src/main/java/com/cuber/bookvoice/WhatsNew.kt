@@ -142,6 +142,10 @@ object WhatsNew {
         139 to listOf(
             R.string.whats_new_139_1,
         ),
+        // 0.4.80: кэш текста не теряет признак «название придумали мы».
+        140 to listOf(
+            R.string.whats_new_140_1,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =
