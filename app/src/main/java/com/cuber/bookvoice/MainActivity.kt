@@ -1198,21 +1198,65 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  «Прокручивать к читаемому предложению». */
     private fun scrollToSentence(chapter: Int, sentence: Int) {
         val row = adapter.flatOf(chapter, sentence)
-        if (row < 0) return
-        if (suppressScroll) return
+        if (row < 0) {
+            logScrollSkip("строки для главы $chapter, предл. $sentence нет")
+            return
+        }
+        if (suppressScroll) {
+            logScrollSkip("идёт своя прокрутка (suppressScroll)")
+            return
+        }
         // Портянка (msg4372): читатель увёл ленту и ещё не отпустил — за голосом
         // не подтягиваем, иначе лента вырывается у него из-под руки и уезжает
         // назад. Цель помним, на остановке прокрутки к ней вернёмся.
         // Кроме явного перехода ([jumping]): там лента едет к новому месту, а
         // прежняя цель руки уже не про него.
-        if (pendingScrollTarget != null && !jumping) return
-        if (!prefs.getBoolean(KEY_SCROLL, true)) return
+        if (pendingScrollTarget != null && !jumping) {
+            logScrollSkip("висит цель руки (глава ${pendingScrollTarget?.first}, " +
+                "предл. ${pendingScrollTarget?.second})")
+            return
+        }
+        if (!prefs.getBoolean(KEY_SCROLL, true)) {
+            logScrollSkip("галочка «Прокручивать к читаемому предложению» снята")
+            return
+        }
         markSelfScroll(row)
         layoutManager.scrollToPosition(row)
+        logScrollDone(row, chapter, sentence)
         // msg6322: строка ленты — абзац, а абзац бывает выше экрана. Одной
         // прокрутки к нему мало: доводим до самого предложения, иначе читаемое
         // осталось бы под нижним краем.
         binding.sentenceList.post { alignSentence(row, sentence) }
+    }
+
+    /** 0.4.78: почему лента НЕ поехала за чтением. Без этой строки по журналу
+     *  не видно, кто виноват: галочка, чужая цель руки или строка не нашлась.
+     *  Жалоба Сергея 24.09.2026: «текст остаётся на месте, а чтение листается
+     *  вперёд и уходит далеко». Повторы одного повода не спамим. */
+    private var lastScrollSkipAt = 0L
+    private var lastScrollSkipReason: String? = null
+
+    private fun logScrollSkip(reason: String) {
+        val now = SystemClock.uptimeMillis()
+        if (reason == lastScrollSkipReason && now - lastScrollSkipAt < 3000) return
+        lastScrollSkipReason = reason
+        lastScrollSkipAt = now
+        Diag.log(this, "activity", "лента не едет за чтением: $reason")
+    }
+
+    /** Лента поехала за чтением — тоже в журнал (реже раза в 3 с): по паре этих
+     *  строк видно, доводит ли прокрутка до нужного места. */
+    private var lastScrollDoneAt = 0L
+
+    private fun logScrollDone(row: Int, chapter: Int, sentence: Int) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastScrollDoneAt < 3000) return
+        lastScrollDoneAt = now
+        Diag.log(
+            this, "activity",
+            "лента едет за чтением: строка $row (глава $chapter, предл. $sentence), " +
+                "видимая верхняя ${layoutManager.findFirstVisibleItemPosition()}"
+        )
     }
 
     /** msg6416: заказали прокрутку к строке [row]. Прежнюю цель руки снимаем —
@@ -1357,6 +1401,24 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             return
         }
         pendingScrollTarget = p
+        logHandTarget(p)
+    }
+
+    /** 0.4.78: записали цель руки — в журнал. По этой строке видно, не наша ли
+     *  собственная докрутка записалась как рука читателя: тогда лента перестаёт
+     *  ехать за чтением, и текст отстаёт (жалоба Сергея 24.09.2026). */
+    private var lastHandTargetAt = 0L
+
+    private fun logHandTarget(p: Pair<Int, Int>) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastHandTargetAt < 3000) return
+        lastHandTargetAt = now
+        Diag.log(
+            this, "activity",
+            "цель руки записана: глава ${p.first}, предл. ${p.second}; " +
+                "чтение ${if (playing) "идёт" else "стоит"}, " +
+                "верхняя строка ${layoutManager.findFirstVisibleItemPosition()}"
+        )
     }
 
     /** Настраиваемые свайпы влево/вправо по тексту (#77). Без TalkBack жест —
