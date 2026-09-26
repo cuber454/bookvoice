@@ -2,6 +2,8 @@ package com.cuber.bookvoice
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
@@ -137,12 +139,58 @@ object SyncStore {
     }
 
     /** Фоновой прогон: не ждём результата, уходим сразу — синхронизация не должна
-     *  держать ни открытие полки, ни выход из книги. */
+     *  держать ни открытие полки, ни выход из книги.
+     *
+     *  0.4.87 (msg7031): решение Сергея и разбор журнала 25.09.2026.
+     *
+     *  Фон возит только ЛЁГКОЕ: места чтения, закладки, цитаты, метки удаления —
+     *  это килобайты. Книги (десятки мегабайт) фоном не заливаются вовсе: они
+     *  уезжают по кнопке «Синхронизировать сейчас», когда владелец сам решил,
+     *  что пора. Так делают и другие читалки: FBReader синхронизирует места и
+     *  закладки, а книги лежат в облаке и качаются по требованию.
+     *
+     *  Ограничение «не чаще пяти минут» — от дребезга, а не ради экономии:
+     *  фон запускается на каждом показе полки, а полка «показывается» и при
+     *  каждом возврате из окна настроек. Лёгкий прогон стоит копейки, но дёргать
+     *  сеть на каждом шаге незачем.
+     *
+     *  Нет сети — молча пропускаем: ни попытки соединения, ни строки в журнале.
+     *  Накопленное не теряется: файл синхронизации собирается из текущего
+     *  состояния телефона при следующем прогоне. */
     fun auto(c: Context) {
         if (!enabled(c)) return
         val app = c.applicationContext
-        Thread { runCatching { sync(app) } }.start()
+        val now = System.currentTimeMillis()
+        val last = prefs(app).getLong(KEY_LAST_AUTO, 0L)
+        if (now - last < AUTO_MIN_GAP_MS) {
+            Diag.log(
+                app, "sync",
+                "фоновая синхронизация пропущена: прошлая была ${(now - last) / 1000} с назад"
+            )
+            return
+        }
+        if (!online(app)) {
+            Diag.log(app, "sync", "фоновая синхронизация пропущена: сети нет")
+            return
+        }
+        prefs(app).edit().putLong(KEY_LAST_AUTO, now).apply()
+        Thread { runCatching { sync(app, withBooks = false) } }.start()
     }
+
+    /** Есть ли сейчас сеть (0.4.87, msg7031). Разрешение ACCESS_NETWORK_STATE —
+     *  обычное, спрашивать у владельца нечего. Ошибку чтения состояния считаем
+     *  «сеть есть»: пусть прогон попробует и честно скажет, что не вышло. */
+    private fun online(c: Context): Boolean = runCatching {
+        val cm = c.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return@runCatching true
+        val net = cm.activeNetwork ?: return@runCatching false
+        val caps = cm.getNetworkCapabilities(net) ?: return@runCatching false
+        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }.getOrDefault(true)
+
+    /** Промежуток между фоновыми прогонами (5 минут) и засечка последнего. */
+    private const val AUTO_MIN_GAP_MS = 5 * 60 * 1000L
+    private const val KEY_LAST_AUTO = "sync_last_auto_at"
 
     data class Result(
         /** Сколько книг обновилось у нас («забрал»). */
@@ -163,14 +211,18 @@ object SyncStore {
 
     // ---------------- Прогон ----------------
 
-    fun sync(c: Context): Result {
+    /** Прогон. [withBooks] — заливать ли книги на Диск (0.4.87, msg7031):
+     *  true у кнопки «Синхронизировать сейчас» и у прочих ручных путей, false у
+     *  фонового прогона — книги это десятки мегабайт, и решать про них должен
+     *  владелец, а не фон. */
+    fun sync(c: Context, withBooks: Boolean = true): Result {
         if (!running.compareAndSet(false, true)) return Result(0, 0, 0, null)
         try {
             // Вход в Яндекс важнее выбранной папки (msg6114): папка приложения на
             // Диске не требует ни облачного приложения на телефоне, ни выбора —
             // владелец вошёл, и файл уже лежит где надо. Папка остаётся для тех,
             // у кого аккаунта нет.
-            if (YandexDisk.connected(c)) return syncYandex(c)
+            if (YandexDisk.connected(c)) return syncYandex(c, withBooks)
             val tree = folderFor(c)
                 ?: return finish(c, Result(0, 0, 0, c.getString(R.string.sync_err_no_dir)))
             val remote = readRemote(c, tree)?.let { parse(it) }
@@ -188,7 +240,7 @@ object SyncStore {
             // Цитаты — второй блок файла (первый — книги).
             return finish(c, Result(
                 got, sent, remote?.quotes?.let { rq -> countNewQuotes(c, rq) } ?: 0, null,
-                gone = gone,
+                gone = gone.size,
             ))
         } catch (e: Exception) {
             return finish(c, Result(0, 0, 0, e.message ?: c.getString(R.string.sync_err_write)))
@@ -198,8 +250,10 @@ object SyncStore {
     }
 
     /** Прогон через папку приложения на Яндекс.Диске (msg6114). Разбор, слияние и
-     *  запись — те же самые; отличается только место, где лежит файл. */
-    private fun syncYandex(c: Context): Result {
+     *  запись — те же самые; отличается только место, где лежит файл.
+     *  [withBooks] — заливать ли книги (0.4.87, msg7031): у фонового прогона
+     *  false, книги уезжают только по кнопке. */
+    private fun syncYandex(c: Context, withBooks: Boolean): Result {
         val t = YandexDisk.read(c)
         if (t.error != null) return finish(c, Result(0, 0, 0, t.error))
         val remote = t.body?.let { parse(it) }
@@ -221,7 +275,7 @@ object SyncStore {
         // владельца, а не фоновая подробность: книги забираются кнопкой.
         var booksUp = 0
         var moved = 0
-        if (booksOn(c)) {
+        if (withBooks && booksOn(c)) {
             val plan = planBooks(c)
             val err = plan.error
             if (err != null) {
@@ -232,14 +286,16 @@ object SyncStore {
                 if (upErr != null) Diag.log(c, "sync", "книга не залилась: $upErr")
             }
             if (err == null) {
-                val (m, mvErr) = moveDeleted(c)
+                // 0.4.87 (msg7030): с Диска уносим только те книги, которые метка
+                // действительно убрала с полки (см. moveDeleted).
+                val (m, mvErr) = moveDeleted(c, gone)
                 moved = m
                 if (mvErr != null) Diag.log(c, "sync", "удалённая книга на Диске: $mvErr")
             }
         }
         return finish(c, Result(
             got, sent, remote?.quotes?.let { rq -> countNewQuotes(c, rq) } ?: 0, null,
-            booksUp, gone, moved,
+            booksUp, gone.size, moved,
         ))
     }
 
@@ -278,12 +334,41 @@ object SyncStore {
         val localKeys = local.map { key(it.name) }.toHashSet()
         val up = ArrayList<BookRecord>()
         var upBytes = 0L
+        // 0.4.84 (msg7013): имена, уже попавшие в план этого прогона, и жалоба
+        // «этот размер уже пробовали». Две книги с одинаковым именем файла на
+        // Диске неразличимы (одно имя — одна книга), поэтому раньше каждая из
+        // них считалась «на Диске её нет или она другого размера», и заливка шла
+        // по кругу: в журнале Сергея одна и та же книга уезжала на Диск каждые
+        // несколько секунд. Теперь в план идёт первая, а про двойников и про
+        // несходящийся размер пишем в журнал.
+        val inPlan = HashSet<String>()
         for (rec in local) {
+            val k = key(rec.name)
             val size = sizeOf(c, rec.uri)
-            val there = remote[key(rec.name)]
-            // Размер сравниваем и на заливке: книга, не доехавшая в прошлый раз,
-            // лежит на Диске огрызком, и её надо перезалить, а не считать готовой.
+            val there = remote[k]
+            if (!inPlan.add(k)) {
+                Diag.log(
+                    c, "sync",
+                    "двойник по имени «${rec.name}»: на Диске одно имя — остаётся первая книга"
+                )
+                continue
+            }
             if (there == null || (size > 0 && there.size > 0 && size != there.size)) {
+                val mark = "$size/${there?.size ?: -1}"
+                if (there != null && alreadyStuck(k, mark)) {
+                    Diag.log(
+                        c, "sync",
+                        "«${rec.name}»: на Диске размер ${there.size}Б, у нас ${size}Б — " +
+                            "в этом запуске повторять не буду"
+                    )
+                    continue
+                }
+                Diag.log(
+                    c, "sync",
+                    "кладу в план «${rec.name}»: у нас ${size}Б, на Диске " +
+                        (there?.let { "${it.size}Б" } ?: "нет")
+                )
+                if (there != null) rememberStuck(k, mark)
                 up.add(rec)
                 if (size > 0) upBytes += size
             }
@@ -296,6 +381,17 @@ object SyncStore {
         down.forEach { downBytes += it.size }
         setDiskNew(c, down.size)
         return BookPlan(up, upBytes, down.map { it.name }, downBytes)
+    }
+
+    /** Попытки залить книгу, у которой размер на Диске не сходится: имя →
+     *  подпись «своё/чужое». Живёт в памяти процесса: за один запуск одну и ту
+     *  же пару размеров второй раз не пробуем, иначе заливка идёт по кругу. */
+    private val stuckUp = HashMap<String, String>()
+
+    private fun alreadyStuck(k: String, mark: String): Boolean = stuckUp[k] == mark
+
+    private fun rememberStuck(k: String, mark: String) {
+        stuckUp[k] = mark
     }
 
     /** Заливаем книги на Диск. Возвращает (сколько залито, причина отказа). */
@@ -322,9 +418,16 @@ object SyncStore {
 
     /** Убираем с Диска файлы удалённых книг: не стираем, а переносим в папку
      *  «BookVoice — удалённое» — владелец всегда может достать книгу обратно.
-     *  Работает по меткам: файла, о котором мы ничего не знаем, не трогаем. */
-    private fun moveDeleted(c: Context): Pair<Int, String?> {
-        val list = marks(c)
+     *  Работает по меткам: файла, о котором мы ничего не знаем, не трогаем.
+     *
+     *  0.4.87 (msg7030): [removed] — ключи книг, которые метка ДЕЙСТВИТЕЛЬНО
+     *  убрала с полки в этом прогоне. Раньше перебирались все метки, и книга,
+     *  вернувшаяся на полку (скан нашёл файл заново), уезжала с Диска в
+     *  «удалённое», а следующий прогон заливал её туда снова — по кругу, по
+     *  двенадцать мегабайт каждые тринадцать секунд (журнал Сергея 25.09.2026). */
+    private fun moveDeleted(c: Context, removed: Set<String>): Pair<Int, String?> {
+        if (removed.isEmpty()) return 0 to null
+        val list = marks(c).filter { it.key in removed }
         if (list.isEmpty()) return 0 to null
         val items = YandexDisk.listBooks(c)
         items.error?.let { return 0 to it }
@@ -482,11 +585,19 @@ object SyncStore {
     }
 
     /** Применяем метки к полке: убираем те книги, которых мы не касались позже
-     *  метки. Возвращает, сколько убрано. */
-    private fun applyMarks(c: Context, marks: List<Mark>): Int {
-        if (marks.isEmpty()) return 0
+     *  метки. Возвращает ключи убранных книг (0.4.87, msg7030: по ним решается,
+     *  что уносить с Диска, — иначе живая книга уезжала в «удалённое» и тут же
+     *  заливалась обратно).
+     *
+     *  Почему не «все метки». Метка говорит «эту книгу удалили», но книга могла
+     *  вернуться: скан папки нашёл её файл заново, или её скачали опять. Такую
+     *  полка оставляет (сравнение по времени), а Диск по старой метке уносил её
+     *  файл — и следующий прогон заливал его снова. В журнале Сергея это
+     *  выглядело как заливка двенадцати мегабайт каждые тринадцать секунд. */
+    private fun applyMarks(c: Context, marks: List<Mark>): Set<String> {
+        if (marks.isEmpty()) return emptySet()
         val byKey = marks.associateBy { it.key }
-        var n = 0
+        val removed = HashSet<String>()
         for (rec in BookStore.all(c)) {
             val m = byKey[key(rec.name)] ?: continue
             if (maxOf(rec.lastOpenedAt, rec.addedAt) >= m.at) continue
@@ -503,10 +614,10 @@ object SyncStore {
             }
             BookCache.remove(c, Uri.parse(rec.uri))
             hideFromScan(c, rec.uri)
-            n++
+            removed.add(key(rec.name))
             Diag.log(c, "sync", "книга убрана с полки по метке удаления: ${rec.name}")
         }
-        return n
+        return removed
     }
 
     /** Книга, убитая меткой, в файл не пишется: память о ней — сама метка, а
@@ -564,7 +675,7 @@ object SyncStore {
             val gone = applyMarks(c, del)
             setCarry(c, merged, unionQuotes(QuoteStore.all(c), remote.quotes), del)
             return finish(c, Result(
-                got, sent, countNewQuotes(c, remote.quotes), null, gone = gone,
+                got, sent, countNewQuotes(c, remote.quotes), null, gone = gone.size,
             ))
         } catch (e: Exception) {
             return finish(c, Result(0, 0, 0, e.message ?: c.getString(R.string.sync_bad_file)))

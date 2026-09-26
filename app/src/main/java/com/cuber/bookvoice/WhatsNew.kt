@@ -155,6 +155,49 @@ object WhatsNew {
         142 to listOf(
             R.string.whats_new_142_1,
         ),
+        // 0.4.83: разбор списка требований к приложению для незрячих (просьба
+        // Сергея, 24.09.2026). По строке на изменение — тестеры должны
+        // понимать, что поменялось.
+        143 to listOf(
+            R.string.whats_new_143_1,
+            R.string.whats_new_143_2,
+            R.string.whats_new_143_3,
+            R.string.whats_new_143_4,
+            R.string.whats_new_143_5,
+            R.string.whats_new_143_6,
+            R.string.whats_new_143_7,
+        ),
+        // 0.4.84: «после YouTube двойное касание не начинает чтение» (Сергей,
+        // 25.09.2026) + петля заливки книг на Яндекс.Диск.
+        144 to listOf(
+            R.string.whats_new_144_1,
+            R.string.whats_new_144_2,
+            R.string.whats_new_144_3,
+            R.string.whats_new_144_4,
+        ),
+        // 0.4.86: «в меню два похожих пункта» и «в настройках куча строк про
+        // синхронизацию» (Сергей, 25.09.2026). Выпуска 145 не было: правка
+        // переименования не понадобилась — Сергей попросил убрать пункт совсем.
+        146 to listOf(
+            R.string.whats_new_146_1,
+            R.string.whats_new_146_2,
+            R.string.whats_new_146_3,
+            R.string.whats_new_146_4,
+            R.string.whats_new_146_5,
+            R.string.whats_new_146_6,
+            R.string.whats_new_146_7,
+            R.string.whats_new_146_8,
+            R.string.whats_new_146_9,
+            R.string.whats_new_146_10,
+        ),
+        // 0.4.87: журнал 25.09.2026 — заливка двенадцати мегабайт каждые
+        // тринадцать секунд.
+        147 to listOf(
+            R.string.whats_new_147_1,
+            R.string.whats_new_147_2,
+            R.string.whats_new_147_3,
+            R.string.whats_new_147_4,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

@@ -30,6 +30,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.annotation.StringRes
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
 import com.cuber.bookvoice.databinding.ActivitySettingsBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.File
@@ -93,13 +94,20 @@ class SettingsActivity(private val act: SectionActivity) {
     private val buttonActionRows = ArrayList<ButtonActionRow>()
 
     /** Строка-резюме одного действия кнопки читалки (msg5266): ключ настройки,
-     *  значение по умолчанию и постоянная подпись строки. */
+     *  значение по умолчанию и постоянная подпись строки. [uiKey] — ключ
+     *  «показывать кнопку»: по нему строка говорит, что кнопка спрятана
+     *  (0.4.86, msg7026), — иначе, убрав галочку из этого подраздела, человек
+     *  потерял бы связь между кнопкой и её действиями. */
     private class ButtonActionRow(
         val key: String,
         val def: String,
         val title: String,
         val button: Button,
+        val uiKey: String,
     )
+    // 0.4.86 (msg7026): строка «Что показывать в книге» в «Экране книги» —
+    // открывает подраздел со всеми галочками видимости.
+    private var showGroupRow: Button? = null
     // Строки-резюме кнопок гарнитуры „назад/вперёд“ (msg2136).
     private var headsetPrevRow: Button? = null
     private var headsetNextRow: Button? = null
@@ -124,10 +132,16 @@ class SettingsActivity(private val act: SectionActivity) {
     private var resetTabsRow: Button? = null
     // Резервная копия (#100): папка и частота (строка-резюме).
     private var backupDirRow: Button? = null
+    // 0.4.86 (msg7020): строка «Резервные копии» в «Библиотеке» — открывает
+    // подраздел; туда же возвращает фокус «назад» из подраздела.
+    private var backupGroupRow: Button? = null
     // msg6046…6078: синхронизация чтения между устройствами — папка и строка
     // «последняя синхронизация». Сам выключатель — обычная галочка.
     private var syncDirRow: Button? = null
     private var syncLastRow: TextView? = null
+    // 0.4.86 (msg7020): строка «Синхронизация» в «Библиотеке» — открывает
+    // подраздел (весь блок переехал туда).
+    private var syncGroupRow: Button? = null
     // msg6114: строка входа в Яндекс.Диск — рекомендованный путь синхронизации.
     private var yandexRow: Button? = null
     private var booksBox: CheckBox? = null
@@ -167,6 +181,14 @@ class SettingsActivity(private val act: SectionActivity) {
     // msg5685/5699: подраздел теперь один — «Кнопки и жесты»; прежний «Настройки
     // кнопок гарнитуры» убран, его две строки переехали внутрь нового.
     private var controlsSubOpen = false
+
+    // 0.4.86 (msg7020): подразделы «Резервные копии» и «Синхронизация» внутри
+    // раздела «Библиотека». «Назад» из них возвращает в «Библиотеку» и ставит
+    // фокус на ту строку, из которой вошли.
+    private var backupSubOpen = false
+    private var syncSubOpen = false
+    // 0.4.86 (msg7026): подраздел «Что показывать в книге» внутри «Экрана книги».
+    private var showSubOpen = false
 
     // Фокус на контент уже поставлен после первого показа (вход по нижней полосе
     // или из читалки). Дальше возвраты из пикеров фокус не трогают (msg1652).
@@ -279,8 +301,13 @@ class SettingsActivity(private val act: SectionActivity) {
         // back-события (две строки подряд с интервалом <0.5с).
         // msg2527: третий уровень — подраздел «Кнопки и жесты» внутри «Управления»:
         // «назад» из него возвращает в список «Управления» (group снова START), а не в корень.
+        // 0.4.86 (msg7020): такие же подразделы «Резервные копии» и «Синхронизация»
+        // внутри «Библиотеки» — «назад» из них возвращает в «Библиотеку».
         Diag.log(act, "nav", "Настройки: «назад», " + when {
             controlsSubOpen -> "в подразделе «Кнопки и жесты» (Управление)"
+            backupSubOpen -> "в подразделе «Резервные копии» (Библиотека)"
+            syncSubOpen -> "в подразделе «Синхронизация» (Библиотека)"
+            showSubOpen -> "в подразделе «Что показывать в книге» (Экран книги)"
             group == null -> "В КОРНЕ (список разделов)"
             else -> "в разделе ${group!!.name}"
         })
@@ -296,6 +323,32 @@ class SettingsActivity(private val act: SectionActivity) {
             refreshRows()
             scrollTop()
             controlsGroupRow?.let { TabNav.refocusAfterRebuild(binding.content, it) }
+        } else if (backupSubOpen || syncSubOpen) {
+            // 0.4.86 (msg7020): из подраздела — назад в «Библиотеку», фокусом на
+            // ту строку, из которой вошли. openGroup здесь не зовём: он объявил бы
+            // заголовок «Библиотека» ещё раз.
+            val wasBackup = backupSubOpen
+            backupSubOpen = false
+            syncSubOpen = false
+            forgetSubRows()
+            binding.tvTitle.text = getString(Group.LIBRARY.titleRes)
+            content().removeAllViews()
+            buildLibraryGroup()
+            refreshRows()
+            scrollTop()
+            val row = if (wasBackup) backupGroupRow else syncGroupRow
+            row?.let { TabNav.refocusAfterRebuild(binding.content, it) }
+        } else if (showSubOpen) {
+            // 0.4.86 (msg7026): назад из «Что показывать» — в «Экран книги»,
+            // фокусом на строку подраздела.
+            showSubOpen = false
+            forgetSubRows()
+            binding.tvTitle.text = getString(Group.READER.titleRes)
+            content().removeAllViews()
+            buildReaderGroup()
+            refreshRows()
+            scrollTop()
+            showGroupRow?.let { TabNav.refocusAfterRebuild(binding.content, it) }
         } else if (group != null) {
             val from = group
             group = null
@@ -387,8 +440,13 @@ class SettingsActivity(private val act: SectionActivity) {
     private fun openGroup(g: Group) {
         // Свежий вход в раздел всегда показывает его список, а не подраздел
         // (msg2527): состояние подраздела живёт только между openControlsSub()
-        // и возвратом «назад» внутри «Управления».
+        // и возвратом «назад» внутри «Управления». 0.4.86 (msg7020): то же для
+        // подразделов «Резервные копии» и «Синхронизация».
         controlsSubOpen = false
+        backupSubOpen = false
+        syncSubOpen = false
+        showSubOpen = false
+        forgetSubRows()
         group = g
         binding.tvTitle.text = getString(g.titleRes)
         content().removeAllViews()
@@ -601,7 +659,9 @@ class SettingsActivity(private val act: SectionActivity) {
         // Третьей галочки («прыгать на ходу») больше нет: голос дёргался на
         // каждом движении пальца и не успевал договорить слово (msg4450/4452 —
         // Сергей попросил убрать, вариант «по отпусканию» остаётся).
-        addHint(getString(R.string.scroll_group_hint))
+        // 0.4.86 (msg7023): длинной подсказки над тройкой больше нет — она
+        // читалась отдельной остановкой и пересказывала то, что теперь сказано
+        // в самих названиях галочек.
         // msg5707: «Прокручивать к читаемому предложению» переехала сюда из
         // «Экрана книги» — прокрутка это поведение чтения, а не «что видно».
         // Строка стоит первой в тройке: она главная (идёт ли прокрутка вообще),
@@ -718,15 +778,13 @@ class SettingsActivity(private val act: SectionActivity) {
         }
 
         // Подсказка: эти флажки убирают/возвращают элементы экрана чтения.
+        // 0.4.86 (msg7026): сами галочки переехали в подраздел «Что показывать
+        // в книге» — здесь остаётся строка-переход с числом спрятанного.
         addHint(getString(R.string.reader_group_hint))
 
         // Конструктор экрана чтения (#58): какие элементы читалки показывать.
         // Применяется в MainActivity.onStart (applyReaderUi) при возврате в книгу.
-        // msg5707: раздел остался ровно про «что видно». Ушли отсюда четыре
-        // галочки кнопок-стрелок (к самим кнопкам, в «Кнопки и жесты») и
-        // автопрокрутка (к прокрутке, в «Чтение»).
-        readerUiBoxes.clear()
-        readerUi.forEach { (res, key) -> readerUiBoxes.add(addCheck(res, key, true)) }
+        showGroupRow = addValueButton { openShowSub() }
 
         // msg5730: «простой экран» — те же галочки, но разом. Ставим их после
         // списка: строки действуют на него, и так это слышно по порядку.
@@ -864,37 +922,50 @@ class SettingsActivity(private val act: SectionActivity) {
         buttonActionRows.clear()
         for (b in MainActivity.READER_BUTTONS) {
             val pos = getString(b.posRes)
-            // msg5707: галочка «видна» встала к своей же кнопке — тремя строками
-            // подряд: показывает ли кнопку экран, что она делает по касанию, что
-            // по удержанию. Раньше «видна» жила в «Экране книги», а действие здесь,
-            // и связать их на слух было нечем. Место в названии галочки, а не
-            // действие: действие и так в двух строках ниже.
-            addCheckText(getString(R.string.btn_visible_title, pos), b.uiKey, true)
+            // 0.4.86 (msg7026): галочки «видна» здесь больше нет — все «что видно»
+            // собраны в одном подразделе «Что показывать в книге» («Экран книги»).
+            // Связь с кнопкой не потерялась: строка действия сама говорит, что
+            // кнопка спрятана (см. [actionRowText]), и только у спрятанных.
             buttonActionRows.add(
                 addActionRow(
                     b.key, b.def,
                     getString(R.string.btn_action_short_title, pos),
+                    b.uiKey,
                 )
             )
             buttonActionRows.add(
                 addActionRow(
                     b.longKey, b.longDef,
                     getString(R.string.btn_action_long_title, pos),
+                    b.uiKey,
                 )
             )
         }
     }
 
     /** Строка-значение одного действия кнопки читалки: тап открывает общую
-     *  палитру действий (pickAction), текст обновляется в [refreshRows]. */
-    private fun addActionRow(key: String, def: String, title: String): ButtonActionRow {
+     *  палитру действий (pickAction), текст обновляется в [refreshRows].
+     *  [uiKey] — ключ «показывать кнопку»: по нему строка сообщает, что кнопка
+     *  спрятана. */
+    private fun addActionRow(
+        key: String,
+        def: String,
+        title: String,
+        uiKey: String,
+    ): ButtonActionRow {
         val btn = addValueButton { pickAction(key, def, title) }
-        return ButtonActionRow(key, def, title, btn)
+        return ButtonActionRow(key, def, title, btn, uiKey)
     }
 
-    /** Текст строки действия: «нижняя левая: долгое нажатие: Ничего не делать». */
-    private fun actionRowText(r: ButtonActionRow): String =
-        r.title + ": " + gestureLabel(prefs.getString(r.key, r.def) ?: r.def)
+    /** Текст строки действия: «нижняя левая: долгое нажатие: Ничего не делать».
+     *  Кнопка спрятана — говорим и это (0.4.86, msg7026): галочка «видна» теперь
+     *  в другом подразделе, и без пометки связь потерялась бы. Пометка есть
+     *  только у спрятанных строк. */
+    private fun actionRowText(r: ButtonActionRow): String {
+        val hidden = !prefs.getBoolean(r.uiKey, true)
+        val who = if (hidden) getString(R.string.btn_action_hidden, r.title) else r.title
+        return who + ": " + gestureLabel(prefs.getString(r.key, r.def) ?: r.def)
+    }
 
     /** Строки кнопок гарнитуры „назад/вперёд“ (msg2136). msg2527: жили в отдельном
      *  подразделе (openHeadsetSub); msg5685/5699 подраздел убран — строки стоят
@@ -1154,7 +1225,8 @@ class SettingsActivity(private val act: SectionActivity) {
                 openFolderPicker()
             } else {
                 MaterialAlertDialogBuilder(act)
-                    .setTitle(R.string.scan_folder)
+                    .setTitle(R.string.folder_title)
+                    .setMessage(R.string.folder_title_hint)
                     .setItems(arrayOf(getString(R.string.folder_change))) { _, _ ->
                         openFolderPicker()
                     }
@@ -1169,6 +1241,7 @@ class SettingsActivity(private val act: SectionActivity) {
             } else {
                 MaterialAlertDialogBuilder(act)
                     .setTitle(R.string.dl_folder_title)
+                    .setMessage(R.string.dl_folder_title_hint)
                     .setItems(arrayOf(getString(R.string.dl_folder_change))) { _, _ ->
                         openDlFolderPicker()
                     }
@@ -1200,45 +1273,129 @@ class SettingsActivity(private val act: SectionActivity) {
         // он лежит в filesDir, то есть в данных приложения, а не в кэше.
         cacheRow = addValueButton { showCacheDialog() }
 
-        // Резервная копия и восстановление (#100): создание → системный Share
-        // (в Telegram «Избранное»), восстановление — выбор файла копии. Ниже —
-        // папка автокопий и их частота.
+        // Резервная копия и синхронизация — каждый своим подразделом (0.4.86,
+        // msg7020). Раньше обе жили прямо здесь: четыре строки копий и девять
+        // строк синхронизации подряд, семнадцать остановок, и слушать их каждый
+        // раз, когда зашёл поправить одну галочку, было тяжело. Снаружи теперь
+        // по одной строке со статичной подсказкой; состояние — внутри, там же,
+        // где сами настройки.
+        backupGroupRow = addMenuRow(
+            getString(R.string.backup_group_title),
+            getString(R.string.backup_group_hint),
+        ) { openBackupSub() }
+        syncGroupRow = addMenuRow(
+            getString(R.string.sync_title),
+            getString(R.string.sync_group_hint),
+        ) { openSyncSub() }
+    }
+
+    /** Подраздел «Что показывать в книге» (0.4.86, msg7026) — все галочки
+     *  видимости в одном месте: десять панелей и кнопок из списка плюс четыре
+     *  кнопки-стрелки. Раньше четыре из них жили в «Кнопках и жестах» у своих
+     *  кнопок: связь с действиями там была, а одного места для «что видно» не
+     *  было вовсе. Теперь наоборот: видно — здесь, что делает — там, а связь
+     *  держит пометка «скрыта» в строках действий (см. [actionRowText]). */
+    private fun openShowSub() {
+        showSubOpen = true
+        binding.tvTitle.text = getString(R.string.show_group_title)
+        content().removeAllViews()
+        addHint(getString(R.string.reader_group_hint))
+        addHeading(getString(R.string.show_panels_heading))
+        readerUiBoxes.clear()
+        readerUi.forEach { (res, key) -> readerUiBoxes.add(addCheck(res, key, true)) }
+        // Четыре кнопки читалки: своё имя у каждой — «нижняя левая кнопка: видна».
+        addHeading(getString(R.string.show_buttons_heading))
+        for (b in MainActivity.READER_BUTTONS) {
+            addCheckText(
+                getString(R.string.btn_visible_title, getString(b.posRes)),
+                b.uiKey,
+                true,
+            )
+        }
+        scrollTop()
+        binding.tvTitle.announceForAccessibility(getString(R.string.show_group_title))
+    }
+
+    /** Сколько элементов экрана книги спрятано (0.4.86, msg7026). Число говорит
+     *  строка подраздела: по ней слышно, что что-то убрано, не заходя внутрь. */
+    private fun hiddenReaderUiCount(): Int {
+        var n = 0
+        for ((_, key) in readerUi) if (!prefs.getBoolean(key, true)) n++
+        for (b in MainActivity.READER_BUTTONS) if (!prefs.getBoolean(b.uiKey, true)) n++
+        return n
+    }
+
+    /** Подраздел «Резервные копии» (0.4.86, msg7020). Внутри — ровно то, что
+     *  было в «Библиотеке», плюс [forgetSubRows] следит, чтобы ссылки на строки
+     *  не пережили этот подраздел. Порядок по делу: сначала два действия (ради
+     *  них сюда и заходят), потом расписание и папка. */
+    private fun openBackupSub() {
+        backupSubOpen = true
+        binding.tvTitle.text = getString(R.string.backup_group_title)
+        content().removeAllViews()
+        // Чем копия отличается от синхронизации — говорим прямо: обе умеют
+        // «отправить файл», и без этого человек путает два разных файла.
+        addHint(getString(R.string.backup_diff_hint))
         addButton(getString(R.string.backup_create)) { createBackupDialog() }
         addButton(getString(R.string.backup_restore)) {
             openBackupFilePicker()
         }
-        backupDirRow = addValueButton { pickBackupDirAction() }
         backupAutoRow = addValueButton { pickBackupAuto() }
+        // Папка нужна только расписанию: копию можно создать кнопкой и отправить
+        // в Telegram. Показываем её строкой ниже расписания и только когда оно
+        // включено (см. refreshRows).
+        backupDirRow = addValueButton { pickBackupDirAction() }
+        refreshRows()
+        scrollTop()
+        binding.tvTitle.announceForAccessibility(getString(R.string.backup_group_title))
+    }
 
-        // Синхронизация между устройствами (msg6046…6078). Место — «Библиотека»,
-        // рядом с папкой книг и копиями: это про книги, а не про экран. Галочка
-        // одна: второй «автоматически» не заводим — включено значит и в фоне.
-        // Пункт виден всегда, даже выключенный: спрятанный пункт человек ищет
-        // молча, а тут он должен находиться.
-        addHeading(getString(R.string.sync_title))
-        addCheck(R.string.sync_title, SyncStore.KEY_ON, false) { refreshRows() }
-        // Вход в Яндекс (msg6114) — первый и главный путь: своя папка на Диске
-        // заводится сама, выбирать папку не нужно, облачное приложение на телефоне
-        // не нужно тоже. Строка ниже (папка) остаётся для тех, у кого аккаунта нет.
+    /** Подраздел «Синхронизация» (0.4.86, msg7020). Порядок — по частоте: сперва
+     *  включение и вход, потом прогон вручную, потом книги и папка, в конце —
+     *  ручной обмен файлом и след последнего прогона. */
+    private fun openSyncSub() {
+        syncSubOpen = true
+        binding.tvTitle.text = getString(R.string.sync_title)
+        content().removeAllViews()
+        addHint(getString(R.string.sync_hint))
+        // 0.4.86: галочка называлась так же, как заголовок окна, — диктор читал
+        // «Синхронизация» дважды подряд. Теперь она про действие.
+        addCheck(R.string.sync_enable_title, SyncStore.KEY_ON, false) { refreshRows() }
         yandexRow = addValueButton { yandexAction() }
-        // Книги (msg6130): своя галочка, отдельная от мест чтения — это мегабайты
-        // и время. Включается только с уже выполненным входом и только после
-        // того, как владелец увидит объём. Строка ниже — забор книг на этом
-        // устройстве: его делаем рукой, автоматически не тянем.
+        addButton(getString(R.string.sync_now)) { runSyncNow() }
         booksBox = addCheck(R.string.sync_books_title, SyncStore.KEY_BOOKS, false) { on ->
             onBooksToggle(on)
         }
         booksRow = addValueButton { pullBooksAction() }
         addHint(getString(R.string.sync_books_hint))
+        // Папка нужна только тем, у кого нет входа в Яндекс: при подключённом
+        // Диске синхронизация идёт через него, и строка только сбивала бы с толку
+        // (см. refreshRows — там она и прячется).
         syncDirRow = addValueButton { pickSyncDir() }
-        addButton(getString(R.string.sync_now)) { runSyncNow() }
-        // Ручной путь (msg6086): облака на телефоне может не быть вовсе, и без
-        // этих двух кнопок синхронизация тогда недоступна совсем.
         addButton(getString(R.string.sync_send)) { sendSyncFile() }
         addButton(getString(R.string.sync_get)) { openSyncFilePicker() }
         addHint(getString(R.string.sync_manual_hint))
         syncLastRow = addValueText()
-        addHint(getString(R.string.sync_hint))
+        refreshRows()
+        scrollTop()
+        binding.tvTitle.announceForAccessibility(getString(R.string.sync_title))
+    }
+
+    /** Забыть строки подразделов (0.4.86, msg7020): пока «Копии» или
+     *  «Синхронизация» закрыты, ссылки на их строки мертвы, а [refreshRows]
+     *  зовётся и из других мест — писать в мёртвые вьюхи нельзя. */
+    private fun forgetSubRows() {
+        backupDirRow = null
+        backupAutoRow = null
+        yandexRow = null
+        booksRow = null
+        booksBox = null
+        syncDirRow = null
+        syncLastRow = null
+        // 0.4.86 (msg7026): галочки «что показывать» живут в подразделе — вне его
+        // ссылки на них мертвы. Заодно чистим список для «простого экрана»: он
+        // обновляет галочки на месте, а обновлять, пока подраздел закрыт, нечего.
+        readerUiBoxes.clear()
     }
 
     /** Строка состояния без действия (msg6046…6078): «Последняя синхронизация: …».
@@ -1354,15 +1511,25 @@ class SettingsActivity(private val act: SectionActivity) {
      *  отличается на слух и на вид: подсказка серая и мелкая, заголовок — крупнее,
      *  светлее и жирный. Роль кнопки не даём (это не действие), поэтому TalkBack
      *  читает его как текст и он служит картой: слышно, где кончилась одна группа
-     *  строк и началась другая. */
+     *  строк и началась другая.
+     *
+     *  0.4.83 (msg7007): помечаем настоящим заголовком для диктора. Тогда
+     *  TalkBack умеет перескакивать по заголовкам, и раздел «Чтение» с шестью
+     *  группами читается прыжками, а не свайпами через все строки. Фокусируемым
+     *  его делаем нарочно (как заголовки в разметке): без этого остановки на нём
+     *  при обычном обходе не было. */
     private fun addHeading(text: String) {
-        content().addView(TextView(act).apply {
+        val tv = TextView(act).apply {
             this.text = text
             textSize = 17f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Palette.INK)
             setPadding(0, dp(12), 0, dp(4))
-        })
+            isFocusable = true
+            ViewCompat.setScreenReaderFocusable(this, true)
+        }
+        ViewCompat.setAccessibilityHeading(tv, true)
+        content().addView(tv)
     }
 
     /** Галочка с готовым текстом — нужна конструктору читалки (msg5220): строка
@@ -1561,10 +1728,21 @@ class SettingsActivity(private val act: SectionActivity) {
                 getString(if (mode in hiddenTabs) R.string.lib_tabs_hidden else R.string.lib_tabs_visible)
         }
 
+        // 0.4.86 (msg7026): строка «Что показывать в книге» — состояние числом:
+        // по ней слышно, что часть элементов убрана, не заходя внутрь.
+        val hiddenUi = hiddenReaderUiCount()
+        showGroupRow?.text = getString(R.string.show_group_title) + ": " +
+            if (hiddenUi == 0) getString(R.string.show_group_all)
+            else getString(R.string.show_group_hidden, hiddenUi)
+
         val dir = BackupStore.dirUri(act)
         backupDirRow?.text = getString(R.string.backup_dir_title) + ": " +
             if (dir == null) getString(R.string.backup_dir_none) else folderLabel(dir)
-        backupAutoRow?.text = getString(R.string.backup_auto_title) + ": " + backupAutoLabel()
+        backupAutoRow?.text = backupAutoText()
+        // 0.4.86 (msg7020): папка нужна только расписанию — копию можно создать
+        // кнопкой и отправить в Telegram. Выключено расписание — строку прячем.
+        backupDirRow?.visibility =
+            if (backupAutoOff()) android.view.View.GONE else android.view.View.VISIBLE
         // msg6046…6078: папка синхронизации и след последнего прогона.
         // msg6114: при выполненном входе в Яндекс папка не нужна вовсе — говорим
         // об этом прямо, иначе человек пойдёт выбирать папку, которая не работает.
@@ -1572,6 +1750,11 @@ class SettingsActivity(private val act: SectionActivity) {
         booksRow?.text = booksLabel()
         syncDirRow?.text = getString(R.string.sync_dir_title) + ": " +
             if (YandexDisk.connected(act)) getString(R.string.sync_dir_yandex) else syncDirLabel()
+        // 0.4.86 (msg7020): при подключённом Яндексе папка не нужна вовсе —
+        // синхронизация идёт через него. Прячем, а не показываем с оговоркой:
+        // строка, которой не пользуются, — лишняя остановка в обходе.
+        syncDirRow?.visibility =
+            if (YandexDisk.connected(act)) android.view.View.GONE else android.view.View.VISIBLE
         syncLastRow?.text = getString(R.string.sync_last_title) + ": " +
             (SyncStore.lastResult(act) ?: getString(R.string.sync_last_never))
 
@@ -2417,6 +2600,22 @@ class SettingsActivity(private val act: SectionActivity) {
             else -> R.string.backup_auto_week
         }
     )
+
+    /** Расписание копий выключено (или не выбиралось). */
+    private fun backupAutoOff(): Boolean =
+        (prefs.getString(BackupStore.KEY_AUTO, BackupStore.AUTO_DEFAULT)
+            ?: BackupStore.AUTO_DEFAULT) == BackupStore.AUTO_OFF
+
+    /** Строка расписания с датой последней копии (0.4.86, msg7020): раньше даты
+     *  в списке не было вовсе, и по строке нельзя было понять, работает ли
+     *  расписание. Информация добавляется, остановка — нет. */
+    private fun backupAutoText(): String {
+        val base = getString(R.string.backup_auto_title) + ": " + backupAutoLabel()
+        if (backupAutoOff()) return base
+        val last = BackupStore.lastBackupAt(act)
+        if (last <= 0L) return base
+        return base + ", " + getString(R.string.backup_auto_last, backupDateStr(last))
+    }
 
     // ---------------- Диагностика обновлений ----------------
     // Выбор «Автоматически / Вручную» убран: автопроверка теперь флажок в

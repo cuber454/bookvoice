@@ -25,7 +25,75 @@ import java.util.concurrent.TimeUnit
  * Какие источники хранятся — [OpdsPrefs]; скачивание/парсинг — [OpdsNet] и
  * [OpdsParser]; экран — [CatalogActivity].
  */
-open class OpdsException(message: String) : Exception(message)
+open class OpdsException(
+    message: String,
+    /** Вид неудачи — по нему выбирается фраза для владельца. [message] при этом
+     *  остаётся техническим («сервер ответил: HTTP 503») и уходит в журнал. */
+    val fail: NetFail? = null,
+) : Exception(message)
+
+/** Скачивание отменил владелец (0.4.83, msg7004). Не поломка: служба
+ *  скачивания по этому исключению просто убирает уведомление и молчит. */
+class DownloadCancelled : Exception("скачивание отменено")
+
+/** Виды сетевой неудачи, которые владелец различает на слух (0.4.83, msg7001).
+ *
+ *  Зачем разделять. Раньше в озвучку уходил текст исключения: «сервер ответил:
+ *  HTTP 403» или английское «Unable to resolve host». Незрячему это шум: из
+ *  него не следует, что делать. Подсказка же у разных случаев разная — при
+ *  отказе доступа проверять интернет бессмысленно, надо входить. */
+enum class NetFail {
+    /** Нет связи: имя не разрешилось, соединение не установилось, SSL не прошёл. */
+    NO_NET,
+
+    /** Сервер не ответил вовремя или ответил своей поломкой (5xx, 408, 429). */
+    NO_ANSWER,
+
+    /** Сервер ответил и отказал в доступе (4xx, кроме 401 — у того свой путь). */
+    REFUSED,
+}
+
+/** Вид неудачи по исключению сети. Таймаут — «не отвечает» (сервер есть, но
+ *  молчит), всё остальное считаем отсутствием связи: так безопаснее — обещать
+ *  «попробуй позже» там, где сети нет вовсе, значит гонять человека зря. */
+private fun netFailOf(e: Exception): NetFail =
+    if (e is java.net.SocketTimeoutException) NetFail.NO_ANSWER else NetFail.NO_NET
+
+/** Вид неудачи по коду ответа. 5xx — поломка сервера, 408 и 429 — «занят»:
+ *  и то и другое лечится ожиданием. Остальные отказы (403, 404, 400) —
+ *  «не пустил»: ждать бессмысленно, надо входить или менять адрес. */
+private fun httpFail(code: Int): NetFail =
+    if (code >= 500 || code == 408 || code == 429) NetFail.NO_ANSWER else NetFail.REFUSED
+
+/** Технический текст отказа — только для журнала: в озвучку он не попадает. */
+private fun httpFailText(code: Int): String = "сервер ответил: HTTP $code"
+
+/** Короткая причина для строки-состояния: «Не догрузилось: нет связи с интернетом». */
+fun netReason(c: Context, e: Throwable?): String = c.getString(
+    when ((e as? OpdsException)?.fail) {
+        NetFail.NO_NET -> R.string.net_no_internet_short
+        NetFail.NO_ANSWER -> R.string.net_no_answer_short
+        NetFail.REFUSED -> R.string.net_refused_short
+        else -> R.string.net_unknown_short
+    }
+)
+
+/** Готовый ответ владельцу: что случилось и что делать. [book] — речь о
+ *  скачивании книги, иначе о ленте каталога: советы у них разные. */
+fun netText(c: Context, e: Throwable?, book: Boolean): String {
+    val fail = (e as? OpdsException)?.fail
+    val id = when {
+        book && fail == NetFail.NO_NET -> R.string.net_book_no_internet
+        book && fail == NetFail.NO_ANSWER -> R.string.net_book_no_answer
+        book && fail == NetFail.REFUSED -> R.string.net_book_refused
+        book -> R.string.net_book_unknown
+        fail == NetFail.NO_NET -> R.string.net_feed_no_internet
+        fail == NetFail.NO_ANSWER -> R.string.net_feed_no_answer
+        fail == NetFail.REFUSED -> R.string.net_feed_refused
+        else -> R.string.net_feed_unknown
+    }
+    return c.getString(id)
+}
 
 /** Библиотека просит вход (#20): сервер ответил 401 с Basic-заголовком
  *  (`www-authenticate: Basic`). Отдельный тип нужен, чтобы каталог не показывал
@@ -253,7 +321,7 @@ object OpdsNet {
         try {
             client.newCall(req).execute().use { resp ->
                 if (resp.code == 401) throw OpdsNeedLogin(url)
-                if (!resp.isSuccessful) throw OpdsException("сервер ответил: HTTP ${resp.code}")
+                if (!resp.isSuccessful) throw OpdsException(httpFailText(resp.code), httpFail(resp.code))
                 val bytes = resp.body?.bytes() ?: ByteArray(0)
                 // url последнего запроса — после редиректов; по нему резолвим ссылки фида.
                 return Fetch(bytes, resp.request.url.toString())
@@ -261,24 +329,28 @@ object OpdsNet {
         } catch (e: OpdsException) {
             throw e
         } catch (e: Exception) {
-            throw OpdsException(e.message ?: "нет связи с сервером")
+            throw OpdsException(e.message ?: "нет связи с сервером", netFailOf(e))
         }
     }
 
     /** Загрузка файла с прогрессом (msg1264). Тело читаем кусками, после каждого
      *  зовём [onProgress](прочитано, всего). «Всего» — из заголовка Content-Length;
-     *  если сервер размер не прислал (total = -1), точный процент невозможен. */
+     *  если сервер размер не прислал (total = -1), точный процент невозможен.
+     *
+     *  [isCancelled] — владелец нажал «Отменить» в уведомлении (0.4.83, msg7004):
+     *  проверяем на каждом куске и выходим через [DownloadCancelled]. */
     fun fetchProgress(
         c: Context,
         url: String,
         accept: String,
         onProgress: (read: Long, total: Long) -> Unit,
+        isCancelled: () -> Boolean = { false },
     ): Fetch {
         val req = request(c, url, accept)
         try {
             client.newCall(req).execute().use { resp ->
                 if (resp.code == 401) throw OpdsNeedLogin(url)
-                if (!resp.isSuccessful) throw OpdsException("сервер ответил: HTTP ${resp.code}")
+                if (!resp.isSuccessful) throw OpdsException(httpFailText(resp.code), httpFail(resp.code))
                 val body = resp.body ?: throw OpdsException("сервер не прислал тело")
                 val total = body.contentLength()
                 val out = ByteArrayOutputStream()
@@ -286,6 +358,7 @@ object OpdsNet {
                     val chunk = ByteArray(16 * 1024)
                     var read = 0L
                     while (true) {
+                        if (isCancelled()) throw DownloadCancelled()
                         val n = input.read(chunk)
                         if (n < 0) break
                         out.write(chunk, 0, n)
@@ -295,10 +368,12 @@ object OpdsNet {
                 }
                 return Fetch(out.toByteArray(), resp.request.url.toString())
             }
+        } catch (e: DownloadCancelled) {
+            throw e
         } catch (e: OpdsException) {
             throw e
         } catch (e: Exception) {
-            throw OpdsException(e.message ?: "нет связи с сервером")
+            throw OpdsException(e.message ?: "нет связи с сервером", netFailOf(e))
         }
     }
 
@@ -316,11 +391,11 @@ object OpdsNet {
                         OpdsAuth.noteAsked(c, url)
                         c.getString(R.string.catalog_need_login)
                     }
-                    else -> "сервер ответил: HTTP ${resp.code}"
+                    else -> netReason(c, OpdsException("HTTP ${resp.code}", httpFail(resp.code)))
                 }
             }
         } catch (e: Exception) {
-            e.message ?: "нет связи с сервером"
+            netReason(c, OpdsException(e.message ?: "", netFailOf(e)))
         }
     }
 

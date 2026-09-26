@@ -8,6 +8,11 @@
     <!-- Онлайн-каталоги книг (OPDS): скачиваем ленты и сами книги. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Синхронизация (0.4.87, msg7031): перед фоновым прогоном спрашиваем, есть
+         ли сеть, и без неё молча пропускаем — чтобы не дёргать соединение зря.
+         Разрешение обычное, у владельца ничего не спрашиваем. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Чтение не должно замирать, когда телефон лежит (msg4211, #19): экран
          гаснет как обычно, а процессор под PARTIAL_WAKE_LOCK работает —
          иначе система уводит устройство в глубокий сон между фразами и
@@ -25,6 +30,10 @@
          сервис на старте (SecurityException на startForeground). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Скачивание книги (0.4.83, msg7004): загрузка идёт в службе переднего
+         плана со своим уведомлением — полоса и кнопка «Отменить». Без этого
+         разрешения Android 14+ не даст поднять службу такого типа. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- «После звонка» (#98): конец настоящего звонка → продолжить чтение.
@@ -250,12 +259,26 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
-        <!-- Медиа-кнопки гарнитуры и «волшебное касание» TalkBack приходят
-             сюда, receiver передаёт их в активную MediaSessionCompat. -->
+        <!-- Скачивание книги из сетевого каталога (0.4.83, msg7004). Служба
+             переднего плана: загрузка продолжается, когда окно каталога закрыли,
+             о ходе говорит тихое уведомление с полосой и кнопкой «Отменить».
+             Тип dataSync — «качаю данные по просьбе владельца». -->
+        <service
+            android:name=".DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Медиа-кнопки гарнитуры и «волшебное касание» диктора приходят
+             сюда, receiver передаёт их в активную MediaSessionCompat.
+             Приоритет 1000 (0.4.84, msg7012): система отдаёт медиа-клавишу тому,
+             кто играл последним, и после чужого плеера (YouTube) она уходила ему,
+             а не нам. Высокий приоритет приёмника — попытка получить клавишу
+             раньше; сама по себе она не гарантия, поэтому у текста книги есть
+             ещё своё действие «Читать» (msg7011). -->
         <receiver
             android:name=".MediaButtonReceiver"
             android:exported="true">
-            <intent-filter>
+            <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>

@@ -272,12 +272,16 @@
             <!-- msg5632: кнопки «Прослушать» в шапке панели больше нет —
                  «Читать/Пауза» стала первой строкой набора VoicePicker. -->
 
+            <!-- 0.4.83 (msg7002): высота 48dp — по норме касания. Было 44dp:
+                 единственное место в разметке ниже нормы. Значение выбрано
+                 руками: у кнопок на этом стиле минимум 48dp держит сама
+                 библиотека, а явная высота её перебивает. -->
             <Button
                 android:id="@+id/btnVoiceClose"
                 android:layout_width="wrap_content"
-                android:layout_height="44dp"
+                android:layout_height="48dp"
                 android:layout_marginStart="4dp"
-                android:minWidth="44dp"
+                android:minWidth="48dp"
                 android:text="@string/dialog_close"
                 android:textSize="14sp" />
         </LinearLayout>

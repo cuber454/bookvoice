@@ -134,6 +134,26 @@ class LibraryActivity(private val act: SectionActivity) {
             covers = covers,
             // Цифра прочитанного в углу обложки (только для глаз).
             progress = { rec -> coverPercent(rec) },
+            // msg7003: те же поступки, что в меню долгого нажатия, — в меню
+            // «Действия» диктора. Кто не может удержать палец, добирается сюда.
+            rowActions = { rec -> bookRowActions(rec) },
+        )
+    }
+
+    /** Действия строки книги для меню «Действия» диктора (0.4.83, msg7003):
+     *  ровно то же, что в меню долгого нажатия ([showBookMenu]), теми же
+     *  функциями — расходиться им нельзя. */
+    private fun bookRowActions(rec: BookRecord): List<Pair<String, () -> Unit>> {
+        val finished = rec.status == BookRecord.STATUS_FINISHED
+        return listOf(
+            getString(R.string.library_menu_share) to { shareBook(rec) },
+            getString(if (rec.favorite) R.string.library_menu_unfav else R.string.library_menu_fav)
+                to { toggleFavorite(rec) },
+            getString(R.string.library_menu_rename) to { renameBook(rec) },
+            getString(if (finished) R.string.library_menu_unfinish else R.string.library_menu_finish)
+                to { toggleFinished(rec, finished) },
+            getString(R.string.library_menu_info) to { showBookInfo(rec) },
+            getString(R.string.library_menu_delete) to { confirmDelete(rec) },
         )
     }
 

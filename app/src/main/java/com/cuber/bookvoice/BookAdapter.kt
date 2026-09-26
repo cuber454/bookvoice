@@ -30,6 +30,10 @@ class BookAdapter(
      *  (книгу ещё не открывали). Число приходит от библиотеки: она одна знает,
      *  как у нас считается процент. */
     private val progress: ((BookRecord) -> Int?)? = null,
+    /** Свои действия строки для меню «Действия» диктора (0.4.83, msg7003): пары
+     *  «подпись — что сделать». Те же поступки, что и в меню долгого нажатия,
+     *  — чтобы человеку, который не может удержать палец, они тоже достались. */
+    private val rowActions: (BookRecord) -> List<Pair<String, () -> Unit>> = { emptyList() },
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
@@ -123,6 +127,8 @@ class BookAdapter(
         }
         v.setOnClickListener { onBookClick(rec) }
         v.setOnLongClickListener { onBookLongClick(rec); true }
+        // msg7003: те же действия — в меню «Действия» диктора, без удержания.
+        v.setA11yActions(*rowActions(rec).toTypedArray())
     }
 
     /** Показывается ли на карточке обложка. От этого зависит и подпись: нет

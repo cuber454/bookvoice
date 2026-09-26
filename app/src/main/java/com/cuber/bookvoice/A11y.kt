@@ -2,9 +2,11 @@ package com.cuber.bookvoice
 
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
+import android.os.Bundle
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -65,6 +67,53 @@ object A11y {
         }
     }
 
+}
+
+/** Номер первого своего действия узла — как в платформе
+ *  (`AccessibilityNodeInfo.ACTION_ID_FIRST_CUSTOM_ACTION`); эта константа в SDK
+ *  скрыта, поэтому берём её значение. */
+private const val A11Y_ACTION_FIRST = 0x01000000
+
+/**
+ * Свои действия строки для меню «Действия» диктора (0.4.83, msg7003).
+ *
+ * Зачем. Действия строки — скачать, поделиться, удалить, в цитаты — жили только
+ * на долгом нажатии: кто не может удержать палец (дрожат руки, протез, телефон в
+ * держателе), до них не добирался вовсе. Именованные действия диктор показывает
+ * списком в своём меню «Действия», и они делают ровно то же одним выбором.
+ *
+ * Почему не подпись долгого нажатия (ACTION_LONG_CLICK). Подпись диктор читает
+ * прямо в объявлении строки: на каждой строке списка прибавилась бы фраза
+ * «долгое нажатие — …», и полка превратилась бы в многословие. Именованные
+ * действия в обычном обходе молчат — их слышно, только когда меню открыто
+ * осознанно.
+ *
+ * Действия задаются парами «подпись — что сделать», порядок сохраняется. Звать
+ * после того, как на вью повешены слушатели: подпись и поступок должны совпадать
+ * — жест и действие делают одно и то же.
+ */
+fun View.setA11yActions(vararg actions: Pair<String, () -> Unit>) {
+    if (actions.isEmpty()) return
+    val list = actions.toList()
+    accessibilityDelegate = object : View.AccessibilityDelegate() {
+        override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
+            super.onInitializeAccessibilityNodeInfo(host, info)
+            list.forEachIndexed { i, (label, _) ->
+                info.addAction(
+                    AccessibilityNodeInfo.AccessibilityAction(A11Y_ACTION_FIRST + i, label)
+                )
+            }
+        }
+
+        override fun performAccessibilityAction(host: View, action: Int, args: Bundle?): Boolean {
+            val i = action - A11Y_ACTION_FIRST
+            if (i in list.indices) {
+                list[i].second()
+                return true
+            }
+            return super.performAccessibilityAction(host, action, args)
+        }
+    }
 }
 
 /**

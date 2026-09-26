@@ -159,7 +159,16 @@ class VoicePicker(
         // Список голосов не приехал — «ещё не знаю», а не «голоса нет» (msg3550):
         // судить не о чем, показываем записанное как есть.
         if (voices.isEmpty()) {
-            return chosen ?: ctx.getString(R.string.voice_engine_reads)
+            // Движка не знаем вовсе (в настройках он ещё не выбран) — показываем
+            // выбор как есть: приписать его чужому движку нечем.
+            if (pkg == null) return chosen ?: ctx.getString(R.string.voice_engine_reads)
+            // 0.4.86 (msg7027): движок знаем, а список его голосов ещё не приехал.
+            // Раньше сюда попадал общий выбор — голос ПРЕЖНЕГО движка, и Сергей
+            // видел ровно это: сменил движок, а строка «Голос» осталась прежней.
+            // Показываем голос, запомненный за ЭТИМ движком (он и зазвучит), а нет
+            // его — честное «читает сам движок».
+            return MainActivity.voiceForEngine(prefs, pkg)
+                ?: ctx.getString(R.string.voice_engine_reads)
         }
         val v = voices.firstOrNull { it.name == chosen }
             ?: voices.firstOrNull { it.name == MainActivity.voiceForEngine(prefs, pkg) }
@@ -306,6 +315,19 @@ class VoicePicker(
             applyEngineVoice(p)
             refresh()
             host.redraw()
+            // 0.4.86 (msg7027): чужой движок отдаёт список голосов позже, чем мы
+            // его ждали (whenVoicesReady сдаётся через три секунды). Тогда строка
+            // «Голос» показывает честное «читает сам движок» — и осталась бы с ним
+            // до пересборки раздела. Досматриваем живого плеера ещё раз: и выбор
+            // доведём, и подпись. Временный (Настройки без книги) не трогаем —
+            // его мы гасим сразу, и опрашивать нечего.
+            if (!temp && p.voices.isEmpty()) {
+                main.postDelayed({
+                    applyEngineVoice(p)
+                    refresh()
+                    host.redraw()
+                }, 2000)
+            }
             if (temp) p.shutdown()
         }
     }

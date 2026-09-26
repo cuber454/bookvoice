@@ -244,6 +244,20 @@ class QuotesActivity : AppCompatActivity() {
                 truncate(q.text, 120)
             )
         }
+        // 0.4.83 (msg7003): те же поступки, что на долгом нажатии, — в меню
+        // «Действия» диктора: кто не может удержать палец, добирается сюда.
+        if (selectMode) {
+            tv.setA11yActions(
+                getString(R.string.quotes_row_toggle_action) to { tv.performClick() }
+            )
+        } else {
+            tv.setA11yActions(
+                getString(R.string.quotes_open_book) to { openInBook(q) },
+                getString(R.string.quotes_share) to { shareQuote(q) },
+                getString(R.string.quotes_export_this) to { exportOne(q) },
+                getString(R.string.quotes_remove) to { removeQuote(q) },
+            )
+        }
         return tv
     }
 

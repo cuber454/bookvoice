@@ -91,20 +91,20 @@ class CatalogActivity(private val act: SectionActivity) {
      *  которого вернуть accessibility-фокус (msg1468). Снимается при отрисовке. */
     private var rootFocusUrl: String? = null
 
-    private var downloading = false
-
-    /** 0.3.47: выбранная SAF-папка не дала записать файл (MixPlorer и т.п.) —
-     *  книгу пришлось сохранить во внутреннюю память. Для тоста-предупреждения. */
-    private var dlFallback = false
+    /** 0.4.83 (msg7004): загрузка живёт в службе [DownloadService] — окно только
+     *  спрашивает у неё, идёт ли загрузка: по этому гасим кнопки и подписываем
+     *  ту, что качает. Своего состояния загрузки у окна больше нет: оно умирало
+     *  вместе с окном, а служба — нет. */
+    private val downloading: Boolean get() = DownloadService.running
 
     /** msg1264: прогресс скачивания на кнопке «Скачать». [dlButton] — эта кнопка
-     *  текущей страницы книги (ставится в renderBookPage, сбрасывается там же);
-     *  [dlBookUrl] — url качаемой книги; [dlPct]: -1 = сервер размер не прислал
-     *  (подпись без процента), иначе 0..100; [dlAnnounced] — озвученная веха ×25. */
+     *  текущей страницы книги (ставится в renderBookPage, сбрасывается там же). */
     private var dlButton: Button? = null
-    private var dlBookUrl: String? = null
-    private var dlPct = -1
-    private var dlAnnounced = 0
+
+    /** Последняя попытка скачивания — по ней повторяем загрузку после входа в
+     *  библиотеку (#20): служба сообщает, что книга просит логин. */
+    private var lastDlBook: OpdsItem.Book? = null
+    private var lastDlFmt: OpdsFormat? = null
 
     /** Служебная нижняя строка ленты («Догружаю…» / кнопка повтора) — её убираем. */
     private var pendingRow: View? = null
@@ -305,6 +305,9 @@ class CatalogActivity(private val act: SectionActivity) {
         binding.btnCatLibrary.setOnClickListener { leaveToLibrary() }
 
         setupAutoLoad()
+        // 0.4.83 (msg7004): подписываемся на ход загрузки из службы — окно
+        // показывает проценты на кнопке «Скачать», пока оно открыто.
+        DownloadService.watcher = downloadWatcher
         // msg2445: вернулись в Каталог — показываем запомненное место (не корень),
         // если уходили на полку из глубины каталога/со страницы книги.
         restorePosition()
@@ -334,6 +337,9 @@ class CatalogActivity(private val act: SectionActivity) {
         endRecognition()
         dlDialog?.dismiss()
         dlDialog = null
+        // 0.4.83 (msg7004): отписываемся от службы загрузки. Сама загрузка при
+        // этом не прекращается — она живёт в службе, уведомление остаётся.
+        if (DownloadService.watcher === downloadWatcher) DownloadService.watcher = null
     }
 
     // ---------------- Память места в каталоге (msg2445) ----------------
@@ -586,51 +592,80 @@ class CatalogActivity(private val act: SectionActivity) {
     // ---------------- msg1264: прогресс скачивания ----------------
 
     /** Подпись кнопки во время загрузки (без размера от сервера — просто
-     *  «Скачивание…»). Зовётся из [publishProgress] и [renderBookPage], где [dlPct]
-     *  уже выставлен. */
-    private fun dlProgressText(): String =
-        if (dlPct >= 0) getString(R.string.catalog_dl_progress_pct, dlPct)
+     *  «Скачивание…»). Число берём у службы: она одна знает, сколько прочитано. */
+    private fun dlProgressText(): String {
+        val pct = DownloadService.progress
+        return if (pct >= 0) getString(R.string.catalog_dl_progress_pct, pct)
         else getString(R.string.catalog_dl_progress)
+    }
 
-    /** Апдейт подписи кнопки из фонового потока: каждый новый процент (pct=-1 —
-     *  размер неизвестен, только подпись). Дедуп по [dlPct]. Голосом объявляем
-     *  редкие вехи 25/50/75 — не каждый процент, чтобы не шуметь. */
-    private fun publishProgress(pct: Int) {
-        runOnUiThread {
-            if (act.isFinishing || act.isDestroyed) return@runOnUiThread
-            if (dlPct == pct) return@runOnUiThread
-            dlPct = pct
-            // Страница всё ещё показывает качаемую книгу — меняем подпись кнопки.
-            val cur = nav.lastOrNull()
-            if (cur is Nv.Book && cur.item.url == dlBookUrl) {
-                val btn = dlButton
-                val label = dlProgressText()
-                if (btn != null) {
-                    btn.text = label
-                    btn.contentDescription = label
-                }
-                if (pct in 1..99) {
-                    val q = pct / 25
-                    if (q > dlAnnounced) {
-                        dlAnnounced = q
-                        announceDl(getString(R.string.catalog_dl_announce, q * 25))
-                    }
-                }
-            }
+    /** Вернуть большой кнопке обычную подпись «Скачать %формат%» — после отмены
+     *  или сбоя загрузки (при удаче страница просто перерисовывается). */
+    private fun restoreDlButton() {
+        val cur = nav.lastOrNull()
+        if (cur !is Nv.Book) return
+        val key = dlFmtKey()
+        val label = opdsFormatLabel(key)
+        dlButton?.let { btn ->
+            btn.text = getString(R.string.catalog_dl_with_fmt, label)
+            btn.contentDescription = getString(R.string.catalog_dl_primary_cd)
         }
     }
 
-    /** Громкая веха прогресса. Шлём со скролла, чтобы пробиться поверх очереди
-     *  TalkBack даже если фокус не на кнопке. */
-    private fun announceDl(text: String) {
-        binding.scroll.announceForAccessibility(text)
+    /** Ход загрузки из службы (0.4.83, msg7004). Служба зовёт это в главном
+     *  потоке; окно может быть уже закрыто — тогда зовы просто не приходят. */
+    private val downloadWatcher = object : DownloadService.Watcher {
+
+        /** Проценты — только в подписи кнопки. Вслух о ходе не говорим: вехи
+         *  «Скачано 25 процентов» перебивали чтение книги (msg1264 их читал,
+         *  0.4.83 убрал). */
+        override fun onProgress(pct: Int) {
+            if (act.isFinishing || act.isDestroyed) return
+            val cur = nav.lastOrNull()
+            if (cur !is Nv.Book || cur.item.url != DownloadService.bookUrl) return
+            dlButton?.let { btn ->
+                val label = dlProgressText()
+                btn.text = label
+                btn.contentDescription = label
+            }
+        }
+
+        /** Файл на месте: перерисовываем страницу молча — кнопка становится
+         *  «Открыть в читалке». Озвучку дал тост службы, повтор не нужен. */
+        override fun onFinished(title: String, uri: String, fallback: Boolean) {
+            if (act.isFinishing || act.isDestroyed) return
+            applyEnabled()
+            val cur = nav.lastOrNull()
+            if (cur is Nv.Book && cur.item.url == DownloadService.bookUrl) {
+                renderBookPage(cur, announce = false)
+            }
+        }
+
+        /** Библиотека просит вход (#20): спрашиваем логин и повторяем ту же
+         *  загрузку — человек уже нажал «Скачать». */
+        override fun onNeedLogin(url: String) {
+            if (act.isFinishing || act.isDestroyed) return
+            askLogin(url, wrong = OpdsAuth.hasFor(act, url)) { retryLastDownload() }
+        }
+
+        override fun onFailed(e: Throwable?) {
+            if (act.isFinishing || act.isDestroyed) return
+            applyEnabled()
+            restoreDlButton()
+        }
+
+        override fun onCancelled() {
+            if (act.isFinishing || act.isDestroyed) return
+            applyEnabled()
+            restoreDlButton()
+        }
     }
 
-    /** Сброс состояния прогресса после завершения загрузки (успех или провал). */
-    private fun resetDlState() {
-        dlBookUrl = null
-        dlPct = -1
-        dlAnnounced = 0
+    /** Повторить последнюю попытку скачивания (после входа в библиотеку). */
+    private fun retryLastDownload() {
+        val b = lastDlBook ?: return
+        val fmt = lastDlFmt ?: return
+        downloadFormat(b, fmt)
     }
 
     // ---------------- Отрисовка верхнего уровня ----------------
@@ -1084,9 +1119,9 @@ class CatalogActivity(private val act: SectionActivity) {
             if (e is OpdsNeedLogin) {
                 toast(getString(R.string.catalog_login_cancel))
             } else {
-                val msg = (e as? OpdsException)?.message
-                    ?: (e?.message ?: getString(R.string.catalog_err_unknown))
-                toast(getString(R.string.catalog_load_fail, msg))
+                // 0.4.83 (msg7001): владельцу — своя фраза по причине, а не текст
+                // исключения. «Сервер ответил: HTTP 403» вслух не читаем.
+                toast(netText(act, e, book = false))
             }
         }
     }
@@ -1212,6 +1247,12 @@ class CatalogActivity(private val act: SectionActivity) {
             downloadDefault(b)
             true
         }
+        // msg7003: долгий тап скачивает книгу — тот же поступок доступен из меню
+        // «Действия» диктора, без удержания пальца.
+        tv.setA11yActions(getString(R.string.catalog_dl_action) to {
+            vibrate(70)
+            downloadDefault(b)
+        })
     }
 
     /** Строка-элемент без роли «кнопки»: клик — основное действие. Возвращает
@@ -1335,9 +1376,10 @@ class CatalogActivity(private val act: SectionActivity) {
                         askLogin(e.url, wrong = OpdsAuth.hasFor(act, e.url)) { loadNext(s) }
                         return@onFailure
                     }
-                    s.failMsg = (e as? OpdsException)?.message
-                        ?: (e.message ?: getString(R.string.catalog_err_unknown))
-                    Diag.log(act, "opds", "страница не догрузилась: $url — ${s.failMsg}")
+                    // 0.4.83 (msg7001): в строку «повторить» идёт короткая причина
+                    // по-русски; технический текст остаётся в журнале.
+                    s.failMsg = netReason(act, e)
+                    Diag.log(act, "opds", "страница не догрузилась: $url — ${e.message}")
                     addRetryRow(s)
                 }
             }
@@ -1436,15 +1478,12 @@ class CatalogActivity(private val act: SectionActivity) {
             } else {
                 val primary = Button(act).apply {
                     text = getString(R.string.catalog_dl_with_fmt, fmtLabel)
-                    // msg5161: форматов несколько — в озвучке называем и формат,
-                    // и долгое нажатие. Молчать про него нельзя: выбор есть, а
-                    // узнать о нём незрячему неоткуда (в списке книг подсказка
-                    // про долгий тап была, на странице книги — нет).
-                    contentDescription = if (b.downloads.size > 1) {
-                        getString(R.string.catalog_dl_primary_cd_many, fmtLabel)
-                    } else {
-                        getString(R.string.catalog_dl_primary_cd)
-                    }
+                    // msg5161: форматов несколько — в озвучке называем формат.
+                    // 0.4.83 (msg7003): про долгое нажатие больше не говорим —
+                    // выбор форматов доступен и без удержания, именованным
+                    // действием узла (ниже). Подсказка о жесте только удлиняла
+                    // объявление кнопки.
+                    contentDescription = getString(R.string.catalog_dl_primary_cd)
                     textSize = 17f
                     gravity = Gravity.START or Gravity.CENTER_VERTICAL
                     setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -1468,6 +1507,14 @@ class CatalogActivity(private val act: SectionActivity) {
                         showFormatDialog(b, getString(R.string.catalog_pick_fmt_dialog))
                         true
                     }
+                    if (b.downloads.size > 1) {
+                        // msg7003: тот же выбор форматов — в меню «Действия» диктора.
+                        setA11yActions(
+                            getString(R.string.catalog_pick_format_action) to {
+                                showFormatDialog(b, getString(R.string.catalog_pick_fmt_dialog))
+                            }
+                        )
+                    }
                 }
                 content().addView(primary, lp().apply { topMargin = dp(2); bottomMargin = dp(2) })
                 currentButtons.add(primary)
@@ -1475,7 +1522,7 @@ class CatalogActivity(private val act: SectionActivity) {
                 // Если книга уже качается (вошёл на страницу посреди загрузки) —
                 // сразу показываем текущую подпись вместо «Скачать».
                 dlButton = primary
-                if (downloading && b.url == dlBookUrl) {
+                if (downloading && b.url == DownloadService.bookUrl) {
                     primary.text = dlProgressText()
                     primary.contentDescription = primary.text
                 }
@@ -1717,6 +1764,9 @@ class CatalogActivity(private val act: SectionActivity) {
                 A11y.hush(act)
                 // Своего сигнала здесь нет намеренно (msg6404): распознаватель
                 // подаёт свой, и два подряд звучали как сбой.
+                // 0.4.83 (msg7005): зато есть толчок — на беззвучном телефоне
+                // системного сигнала не слышно, и начало фразы угадывалось.
+                Vibra.confirm(act)
                 Diag.log(act, "voice", "микрофон слушает")
             }
 
@@ -2098,8 +2148,14 @@ class CatalogActivity(private val act: SectionActivity) {
             .show()
     }
 
+    /** Начать скачивание книги (0.4.83, msg7004).
+     *
+     *  Работу делает служба [DownloadService]: загрузка не умирает вместе с
+     *  окном, о ходе говорит тихое уведомление с полосой и кнопкой «Отменить»,
+     *  а вслух звучат только начало и конец. Окно лишь подписывает кнопку
+     *  процентами, пока оно открыто. */
     private fun downloadFormat(b: OpdsItem.Book, fmt: OpdsFormat) {
-        if (downloading) {
+        if (DownloadService.running) {
             toast(getString(R.string.catalog_dl_busy))
             return
         }
@@ -2109,10 +2165,9 @@ class CatalogActivity(private val act: SectionActivity) {
             openInReader(rec)
             return
         }
-        downloading = true
-        dlBookUrl = b.url
-        dlPct = -1
-        dlAnnounced = 0
+        // Запомнили попытку: если библиотека попросит вход, повторим её же.
+        lastDlBook = b
+        lastDlFmt = fmt
         applyEnabled()
         // msg1264: подпись «Скачивание…» сразу, не дожидаясь первого байта.
         val curNow = nav.lastOrNull()
@@ -2122,227 +2177,7 @@ class CatalogActivity(private val act: SectionActivity) {
                 btn.contentDescription = btn.text
             }
         }
-        toast(getString(R.string.catalog_dl_start, b.title))
-        Diag.log(act, "opds", "скачиваю \"${b.title}\" формат ${fmt.label}: ${fmt.url}")
-        Thread {
-            dlFallback = false
-            var lastPct = -2
-            val res = runCatching {
-                // msg1264: тело читаем кусками и шлём прогресс. Дедуп по проценту
-                // на фоне: publishProgress уходит в UI только когда процент сменился.
-                val fetch = OpdsNet.fetchProgress(act, fmt.url, "*/*") { read, total ->
-                    val pct = if (total > 0) {
-                        (read * 100 / total).toInt().coerceIn(0, 100)
-                    } else {
-                        -1 // сервер размер не прислал — остаётся «Скачивание…»
-                    }
-                    if (pct != lastPct) {
-                        lastPct = pct
-                        publishProgress(pct)
-                    }
-                }
-                writeDownloaded(b, fmt, fetch.bytes)
-            }
-            val uriStr = res.getOrNull()?.first
-            val name = res.getOrNull()?.second
-            val err = res.exceptionOrNull()
-            runOnUiThread {
-                downloading = false
-                applyEnabled()
-                if (uriStr != null && name != null) {
-                    BookStore.upsert(act, BookRecord(
-                        uri = uriStr,
-                        name = name,
-                        title = b.title,
-                        author = b.author,
-                        // Прямая ссылка скачивания: по ней при восстановлении из
-                        // резервной копии можно доскачать потерянный файл (#100).
-                        sourceUrl = fmt.url,
-                        addedAt = System.currentTimeMillis(),
-                    ))
-                    Diag.log(act, "opds", "книга скачана: \"${b.title}\" → $uriStr")
-                    // 0.3.47: папка оказалась нерабочей — предупреждаем, что файл
-                    // ушёл во внутреннюю память, а не в выбранную папку.
-                    if (dlFallback) toast(getString(R.string.dl_folder_fallback))
-                    else toast(getString(R.string.catalog_dl_done, b.title))
-                    Vibra.confirm(act)
-                    // Кнопка «Скачать» сразу меняется на «Открыть в читалке», если
-                    // мы всё ещё на странице этой книги (#41). Перерисовка молчит —
-                    // озвучка страницы уже была, тост «Готово» прозвучал.
-                    val cur = nav.lastOrNull()
-                    if (cur is Nv.Book && cur.item.url == b.url) {
-                        renderBookPage(cur, announce = false)
-                    }
-                } else if (err is OpdsNeedLogin) {
-                    // Книга отдаётся только после входа (#20): спрашиваем логин и
-                    // повторяем это же скачивание — человек уже нажал «Скачать».
-                    Diag.log(act, "opds", "книга просит вход: \"${b.title}\"")
-                    askLogin(err.url, wrong = OpdsAuth.hasFor(act, err.url)) {
-                        downloadFormat(b, fmt)
-                    }
-                } else {
-                    val msg = (err as? OpdsException)?.message
-                        ?: err?.message
-                        ?: getString(R.string.catalog_err_unknown)
-                    Diag.log(act, "opds", "книга не скачалась: \"${b.title}\" — $msg")
-                    toast(getString(R.string.catalog_dl_fail, msg))
-                    Vibra.error(act)
-                    // msg1264: страница не перерисовывается (сохраняем прокрутку и
-                    // фокус) — возвращаем кнопке обычную подпись «Скачать %формат%».
-                    val cur = nav.lastOrNull()
-                    if (cur is Nv.Book && cur.item.url == b.url) {
-                        dlButton?.let { btn ->
-                            val key = dlFmtKey()
-                            val label = opdsFormatLabel(key)
-                            btn.text = getString(R.string.catalog_dl_with_fmt, label)
-                            btn.contentDescription = getString(
-                                R.string.catalog_dl_primary_cd
-                            )
-                        }
-                    }
-                }
-                resetDlState()
-            }
-        }.start()
-    }
-
-    /** Записать файл книги: во внутреннюю папку или в выбранную SAF-папку (#44).
-     *  Возвращает (uri записи, имя файла). */
-    private fun writeDownloaded(
-        b: OpdsItem.Book,
-        fmt: OpdsFormat,
-        bytes: ByteArray,
-    ): Pair<String, String> {
-        val tree = dlTree()
-        val base = safeName(b.title)
-        // 0.4.69: каталог отдаёт часть книг АРХИВОМ под книжным расширением
-        // (flibusta: fb2+zip, txt+zip, html+zip, rtf+zip — проверено на живом
-        // OPDS: тип application/zip, имя у сервера «Название.fb2.zip»). Пишем
-        // то, что внутри: файл должен быть тем, чем называется.
-        val (data, ext) = honestFile(fmt, bytes)
-        return if (tree == null) {
-            writeInternal(base, ext, data)
-        } else {
-            try {
-                writeToTree(Uri.parse(tree), base, ext, data)
-            } catch (e: Exception) {
-                // 0.3.47 (msg1165/1167): выбранная SAF-папка не умеет
-                // createDocument (сторонние проводники вроде MixPlorer). Раньше
-                // каждая загрузка сюда падала с непонятным «книга не скачалась».
-                // 0.3.48 (msg1170/1172): сначала пробуем записать реальным путём
-                // через «Доступ ко всем файлам» — папка MixPlorer лежит на диске,
-                // и сам проводник пишет туда именно File-операцией.
-                Diag.log(act, "opds", "SAF-папка не пишет (createDocument): ${e.message}")
-                val real = runCatching {
-                    val t = Uri.parse(tree)
-                    if (!AllFiles.granted(act)) return@runCatching null
-                    val dir = AllFiles.resolveDir(t) ?: return@runCatching null
-                    if (!dir.isDirectory) dir.mkdirs()
-                    val f = uniqueFile(dir, base, ext)
-                    f.writeBytes(data)
-                    f
-                }.getOrNull()
-                if (real != null) {
-                    Diag.log(act, "opds", "записал реальным путём: ${real.absolutePath}")
-                    return Uri.fromFile(real).toString() to real.name
-                }
-                // Реальный путь не вышел — внутренняя память (как 0.3.47).
-                // Сбрасываем нерабочую папку и предупреждаем пользователя.
-                Diag.log(act, "opds", "папка не пишет файлы, качаю во внутреннюю: ${e.message}")
-                prefs.edit().remove(OpdsPrefs.KEY_DL_DIR).apply()
-                dlFallback = true
-                writeInternal(base, ext, data)
-            }
-        }
-    }
-
-    /** Форматы, у которых zip — это и есть сам формат: их не разворачиваем
-     *  никогда. EPUB — контейнер из zip по стандарту, DOCX и ODT тоже архивы
-     *  (из чужого каталога они тоже могут прийти). */
-    private val zippedFormats = setOf(".epub", ".docx", ".odt")
-
-    /** Что сохранить и под каким расширением (0.4.69).
-     *
-     *  Каталог помечает упакованные ссылки «+zip», и файл приходит архивом с
-     *  книжным расширением. Разворачиваем один файл книги и сохраняем под его
-     *  собственным расширением. Не вышло (внутри не книга, архив битый, запись
-     *  больше потолка) — сохраняем как есть, но с честным `.zip`: читалка
-     *  открывает архив по содержимому, а имя больше не врёт.
-     *
-     *  Решаем по СОДЕРЖИМОМУ, а не по типу ссылки: архив — это первые байты PK,
-     *  как и везде у нас. Тип ссылки врёт и сам (flibusta отдаёт pdf как
-     *  application/pdf файлом, а fb2 и txt — архивом под тем же «application/
-     *  fb2+zip»/«txt+zip»), а содержимое не врёт никогда. */
-    private fun honestFile(fmt: OpdsFormat, bytes: ByteArray): Pair<ByteArray, String> {
-        if (fmt.ext in zippedFormats) return bytes to fmt.ext
-        if (!BookParser.isZip(bytes)) return bytes to fmt.ext
-        val inner = BookParser.unpackBookFile(bytes)
-        if (inner == null) {
-            Diag.log(
-                act, "opds",
-                "книга пришла архивом, а книги внутри нет (${bytes.size} байт) — сохраняю как .zip"
-            )
-            return bytes to ".zip"
-        }
-        Diag.log(
-            act, "opds",
-            "книга пришла архивом ${fmt.ext} — разворачиваю: ${bytes.size} → ${inner.first.size} байт, ${inner.second}"
-        )
-        return inner
-    }
-
-    /** Внутренняя папка приложения (всегда работает). */
-    private fun writeInternal(base: String, ext: String, bytes: ByteArray): Pair<String, String> {
-        val dir = File(filesDir, "books").apply { mkdirs() }
-        val file = uniqueFile(dir, base, ext)
-        file.writeBytes(bytes)
-        return Uri.fromFile(file).toString() to file.name
-    }
-
-    private fun writeToTree(
-        tree: Uri,
-        base: String,
-        ext: String,
-        bytes: ByteArray,
-    ): Pair<String, String> {
-        val doc = DocumentsContract.createDocument(
-            contentResolver, tree, mimeForExt(ext), base + ext,
-        ) ?: throw OpdsException("не удалось создать файл в выбранной папке")
-        val out = contentResolver.openOutputStream(doc)
-            ?: throw OpdsException("не удалось записать файл в выбранную папку")
-        out.use { it.write(bytes) }
-        return doc.toString() to (queryDisplayName(doc) ?: base + ext)
-    }
-
-    private fun queryDisplayName(uri: Uri): String? = runCatching {
-        contentResolver.query(
-            uri,
-            arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
-            null, null, null,
-        )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
-    }.getOrNull()
-
-    private fun mimeForExt(ext: String): String = when (ext.lowercase()) {
-        ".epub" -> "application/epub+zip"
-        ".fb2" -> "application/x-fictionbook+xml"
-        ".txt" -> "text/plain"
-        ".pdf" -> "application/pdf"
-        else -> "application/octet-stream"
-    }
-
-    private fun uniqueFile(dir: File, base: String, ext: String): File {
-        var f = File(dir, base + ext)
-        var n = 1
-        while (f.exists()) {
-            f = File(dir, "$base ($n)$ext")
-            n++
-        }
-        return f
-    }
-
-    private fun safeName(s: String): String {
-        val clean = s.replace(Regex("[^\\p{L}\\p{N}._ -]"), "_").trim().trim('.').take(90)
-        return clean.ifBlank { "book" }
+        DownloadService.start(act, b, fmt)
     }
 
     /** Открыть уже скачанную книгу в читалке (как из библиотеки). */

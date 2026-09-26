@@ -731,6 +731,24 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (explicit) goTo(eCh, eS)
         // Сервис мог прилечь, пока окна не было, — добиваем до живого состояния.
         if (playing) ensureMediaService(true)
+        // 0.4.84 (msg7012): окно показали — заново публикуем состояние сеанса.
+        // Опыт по жалобе «после YouTube двойное касание не начинает чтение»:
+        // систему надо лишний раз ткнуть в то, что сеанс жив, иначе медиа-клавишу
+        // она отдаёт YouTube. Помогает не всегда (кто играл последним, тот и
+        // получает клавишу), поэтому у текста есть своё действие «Читать».
+        if (!MediaSessionService.isUp()) ensureMediaService(false)
+        MediaSessionService.setPlaying(playing)
+        // 0.4.84 (msg7010): «Читать автоматически» действует и на возврат к живой
+        // книге: раньше холодное открытие читало само, а возврат к книге на паузе
+        // молчал — и человек оставался перед молчащей книгой, а жест не помогал
+        // (медиа-клавиша уходила последнему игравшему приложению).
+        if (!playing && prefs.getBoolean(KEY_AUTO_START, true) &&
+            !ReaderEngine.sleepWaiting && !ReaderEngine.pausedByFaceDown &&
+            !ReaderEngine.pausedByFocusLoss
+        ) {
+            Diag.log(this, "activity", "возврат к книге: «читать автоматически» — начинаю чтение")
+            maybeAutoStart()
+        }
         // 24.09.2026: окно вернулось к книге и чтение стоит — готовим звук
         // первой фразы заранее, чтобы «читать» начиналось со звука (при живом
         // чтении вызов ничего не делает).
@@ -1950,7 +1968,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // отдельными событиями) + повторов. Один источник озвучки = ТЕКСТ, без
         // значка ▶/⏸ в строке (msg1144: значок скринридер читал отдельным словом)
         // и без contentDescription: одно изменение = одно объявление.
-        binding.btnPlayPause.text = if (playing) "Пауза" else "Читать"
+        binding.btnPlayPause.text =
+            getString(if (playing) R.string.play_pause_pause else R.string.play_pause_play)
         // msg5561: вместе с подписью меняем и значок (треугольник ↔ две палочки).
         // Вторым источником озвучки он не становится: значок TalkBack не
         // объявляет, объявление по-прежнему одно — от текста (msg1644 был про
@@ -2477,7 +2496,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 // чтобы его голос не попал в открытый микрофон.
                 // Своего сигнала здесь нет намеренно (msg6404): распознаватель
                 // подаёт свой, и два подряд звучали как сбой.
+                // 0.4.83 (msg7005): зато есть толчок — на беззвучном телефоне
+                // системного сигнала не слышно, и начало фразы угадывалось.
                 A11y.hush(this@MainActivity)
+                Vibra.confirm(this@MainActivity)
                 Diag.log(this@MainActivity, "voice", "микрофон слушает")
             }
 
@@ -2695,6 +2717,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Объявлено хелдером до rebuild, сама функция — ниже (чтобы не было
         // перекрёстных ссылок на необъявленные локальные функции).
         var rowActions: (Bm) -> Unit = {}
+        // 0.4.83 (msg7003): те же два действия — в меню «Действия» диктора, чтобы
+        // они достались и тому, кто не может удержать палец. Объявлены так же,
+        // хелдерами: функции share/rename стоят ниже rebuild.
+        var shareAction: (Bm) -> Unit = {}
+        var renameAction: (Bm) -> Unit = {}
 
         fun rebuild() {
             content.removeAllViews()
@@ -2706,9 +2733,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     setPadding(0, dp2px(10f), dp2px(8f), dp2px(10f))
                     isClickable = true
                     isFocusable = true
-                    // Скринридеру добавляем подсказку о долгом нажатии — иначе
-                    // жест «долгое нажатие» не очевиден (#103).
-                    contentDescription = "${bm.label}. ${getString(R.string.bm_long_hint)}"
+                    // msg7003: подсказку про долгое нажатие больше не вписываем в
+                    // описание — на каждой строке она удлиняла объявление, а сами
+                    // действия теперь лежат в меню «Действия» (setA11yActions ниже).
                     setOnClickListener {
                         jump(bm)
                         dialog?.dismiss()
@@ -2717,6 +2744,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                         rowActions(bm)
                         true
                     }
+                    setA11yActions(
+                        getString(R.string.bm_share) to { shareAction(bm) },
+                        getString(R.string.bm_edit) to { renameAction(bm) },
+                    )
                 }
                 row.addView(go, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 val del = TextView(this).apply {
@@ -2790,6 +2821,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 .show()
         }
         rowActions = { actions(it) }
+        shareAction = { share(it) }
+        renameAction = { rename(it) }
 
         dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.bm_list_title)
