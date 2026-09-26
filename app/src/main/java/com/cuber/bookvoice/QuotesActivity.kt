@@ -245,7 +245,7 @@ class QuotesActivity : AppCompatActivity() {
             )
         }
         // 0.4.83 (msg7003): те же поступки, что на долгом нажатии, — в меню
-        // «Действия» диктора: кто не может удержать палец, добирается сюда.
+        // TalkBack, пункт «Действия»: кто не может удержать палец, добирается сюда.
         if (selectMode) {
             tv.setA11yActions(
                 getString(R.string.quotes_row_toggle_action) to { tv.performClick() }

@@ -1248,7 +1248,7 @@ class CatalogActivity(private val act: SectionActivity) {
             true
         }
         // msg7003: долгий тап скачивает книгу — тот же поступок доступен из меню
-        // «Действия» диктора, без удержания пальца.
+        // TalkBack, пункт «Действия», без удержания пальца.
         tv.setA11yActions(getString(R.string.catalog_dl_action) to {
             vibrate(70)
             downloadDefault(b)
@@ -1508,7 +1508,7 @@ class CatalogActivity(private val act: SectionActivity) {
                         true
                     }
                     if (b.downloads.size > 1) {
-                        // msg7003: тот же выбор форматов — в меню «Действия» диктора.
+                        // msg7003: тот же выбор форматов — в меню TalkBack, пункт «Действия».
                         setA11yActions(
                             getString(R.string.catalog_pick_format_action) to {
                                 showFormatDialog(b, getString(R.string.catalog_pick_fmt_dialog))
