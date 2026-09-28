@@ -30,7 +30,21 @@ class VoicePicker(
     private val ctx: Context,
     private val prefs: SharedPreferences,
     private val host: Host,
+    /** Чей голос настраивает набор: основной или репликовый (26.09.2026).
+     *  Строки, списки и подписи одни и те же — разница только в том, куда
+     *  пишется выбор. Так и получается «один интерфейс», как просил Серж. */
+    private val target: Target = Target.MAIN,
 ) {
+
+    enum class Target { MAIN, REPLY }
+
+    /** Ключи настроек: у реплик свои голос, движок и язык. */
+    private val keyEngine: String
+        get() = if (target == Target.REPLY) MainActivity.KEY_REPLY_ENGINE else MainActivity.KEY_ENGINE
+    private val keyVoice: String
+        get() = if (target == Target.REPLY) MainActivity.KEY_REPLY_VOICE else MainActivity.KEY_VOICE
+    private val keyLang: String
+        get() = if (target == Target.REPLY) MainActivity.KEY_REPLY_LANG else MainActivity.KEY_VOICE_LANG
     /** Что хост даёт набору и что получает от него. */
     interface Host {
         /** Плеер для списков. У читалки он всегда готов; в Настройках без книги
@@ -63,6 +77,17 @@ class VoicePicker(
         /** Перерисовать строки хоста (Настройки пересобирают раздел). */
         fun redraw()
         fun toast(msg: String)
+
+        /** Открыть окно «Чтение по ролям» — одно на оба входа (26.09.2026).
+         *  Строка «По ролям» в наборе только ведёт туда; сама настройка живёт
+         *  в этом окне, чтобы не дублироваться. */
+        fun openReplyWindow()
+
+        /** Галочка «Чтение по ролям» переключена (29.09.2026, просьба Сержа:
+         *  «свайпом зашёл на роли, следующим свайпом галочка — включено или
+         *  выключено»). Хост отдаёт режим живому плееру и перечитывает текущее
+         *  предложение, чтобы разница была слышна сразу. */
+        fun replyToggled(on: Boolean)
     }
 
     val playRow: Button = actionRow()
@@ -70,22 +95,124 @@ class VoicePicker(
     val langRow: Button = valueRow()
     val voiceRow: Button = valueRow()
 
+    /** Реплики другим голосом (26.09.2026): одна строка-ПЕРЕХОД в своё окно
+     *  «Чтение по ролям». Так решено Сержем 26.09.2026: настройка живёт в одном
+     *  месте, а в общем списке голоса остаётся короткая строка со значением —
+     *  иначе до книжных ползунков приходилось бы слушать шесть строк реплик. */
+    val replyRow: Button = valueRow()
+
+    /** Галочка «Чтение по ролям» (29.09.2026, просьба Сержа).
+     *
+     *  Зачем при живой строке выше. Строка «По ролям» — это ЗНАЧЕНИЕ и вход в
+     *  окно настройки; чтобы переключить режим, приходилось заходить в окно и
+     *  выбирать там «Режим». Теперь сразу под строкой стоит галочка: свайп со
+     *  строки попадает на неё, и одно касание включает или выключает роли.
+     *  Состояние диктор называет сам («отмечено» / «не отмечено») — своего
+     *  «включено» мы не добавляем, иначе состояние звучало бы дважды.
+     *
+     *  Места в панели хватает: она прокручивается, а галочка встаёт сразу под
+     *  строкой «По ролям», третьей строкой набора. */
+    val replyCheck: CheckBox = CheckBox(ctx).apply {
+        text = ctx.getString(R.string.voice_reply_check)
+        textSize = 17f
+        isChecked = prefs.getBoolean(MainActivity.KEY_REPLY_ON, false)
+        setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+    }
+
     /** Язык, открытый в списке голосов. Это ФИЛЬТР списка, а не настройка:
      *  по умолчанию — язык, выбранный Сергеем руками (msg5622), иначе язык
      *  текущего голоса. */
     private var pickLang: String? = null
 
-    /** Собрать набор в контейнер: кнопка чтения/образца, три строки-значения. */
+    /** Собрать набор в контейнер: кнопка чтения/образца, строка «По ролям» и
+     *  три строки-значения. У репликовой цели строки свои, «По ролям» не нужна. */
     fun build(parent: LinearLayout) {
-        parent.addView(playRow)
-        engineRow.setOnClickListener { pickEngine() }
-        langRow.setOnClickListener { pickLangList() }
-        voiceRow.setOnClickListener { pickVoice() }
+        attach()
+        if (target == Target.MAIN) {
+            // «Читать» и «По ролям» — одной строкой, двумя кнопками рядом
+            // (26.09.2026, просьба Сержа: «каждая кнопка на своей строчке —
+            // очень»). Для диктора это по-прежнему две кнопки, просто список
+            // короче на строку.
+            parent.addView(playRow)
+        } else {
+            parent.addView(playRow)
+        }
+        // Движок, язык и голос — тремя строками, как было (26.09.2026: пробовали
+        // одной строкой тремя кнопками, Серж вернул строки — они переносятся
+        // сами и не режутся на крупном шрифте).
         parent.addView(engineRow)
         parent.addView(langRow)
         parent.addView(voiceRow)
         resetLang()
         refresh()
+    }
+
+    /** Две кнопки в одну строку, каждая на половину ширины. */
+    fun pairRow(a: View, b: View): LinearLayout = LinearLayout(ctx).apply {
+        orientation = LinearLayout.HORIZONTAL
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        addView(a, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+    }
+
+    /** Строка ролей для НИЗА набора (29.09.2026, просьба Сержа: «строчка
+     *  переключения по ролям и рядом в этой же строчке галочка», и поставить её
+     *  вниз, а не под «Читать»).
+     *
+     *  Слева кнопка-значение «По ролям» (она же вход в окно настройки голоса и
+     *  движка реплик), справа галочка включения. Диктор обходит их двумя
+     *  остановками подряд: сначала значение, следом флажок с состоянием.
+     *
+     *  Ставит её ХОЗЯИН набора, а не [build]: место в наборе у читалки и у
+     *  Настроек одно и то же — сразу под ползунками, перед строкой словаря. */
+    fun replyBlock(): View = LinearLayout(ctx).apply {
+        orientation = LinearLayout.HORIZONTAL
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        addView(replyRow, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(
+            replyCheck,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+    }
+
+    /** Развесить слушателей. Отдельно от [build]: окно реплик ставит те же
+     *  строки в своём порядке (между ними встаёт переключатель режима). */
+    fun attach() {
+        engineRow.setOnClickListener { pickEngine() }
+        langRow.setOnClickListener { pickLangList() }
+        voiceRow.setOnClickListener { pickVoice() }
+        replyRow.setOnClickListener { host.openReplyWindow() }
+        if (target == Target.MAIN) {
+            replyCheck.setOnCheckedChangeListener { _, checked ->
+                // Тихо, без своего объявления: состояние назовёт сам флажок
+                // («отмечено» / «не отмечено»), как у правил словаря.
+                if (replyCheckSync) return@setOnCheckedChangeListener
+                prefs.edit().putBoolean(MainActivity.KEY_REPLY_ON, checked).apply()
+                refresh()
+                host.replyToggled(checked)
+            }
+        }
+    }
+
+    /** Обновляем флажок из настроек: режим могли переключить и в окне «Реплики».
+     *  [replyCheckSync] гасит слушателя на время нашей же записи — иначе
+     *  переключение из окна выглядело бы новым выбором и дёргало чтение. */
+    private var replyCheckSync = false
+
+    fun syncReplyCheck() {
+        if (target != Target.MAIN) return
+        replyCheckSync = true
+        replyCheck.isChecked = prefs.getBoolean(MainActivity.KEY_REPLY_ON, false)
+        replyCheckSync = false
     }
 
     /** Галочка «Запомнить для текущей книги» с подсказкой под ней. Книги нет —
@@ -118,10 +245,18 @@ class VoicePicker(
 
     /** Перерисовать подписи строк и кнопки чтения из текущего состояния. */
     fun refresh() {
+        // Строка словаря стоит внизу, и её состояние живёт в своём окне: без
+        // этого она говорила бы «выключен» и после включения.
+        dictRowView?.text = withHintText(ctx.getString(R.string.dict_row), dictValue())
         val p = host.playerOrNull()
         val voices = p?.voices ?: emptyList()
-        val pkg = p?.enginePackage ?: p?.defaultEngine
-            ?: prefs.getString(MainActivity.KEY_ENGINE, null)
+        // Движок: у реплик он свой и берётся из настроек реплик — живого плеера
+        // у чужого движка может и не быть.
+        val pkg = if (target == Target.REPLY) {
+            prefs.getString(keyEngine, null)
+        } else {
+            p?.enginePackage ?: p?.defaultEngine ?: prefs.getString(keyEngine, null)
+        }
         val engineName = p?.engines?.firstOrNull { it.first == pkg }?.second
             ?: pkg?.let { appLabel(it) }
             ?: ctx.getString(R.string.voice_engine_system)
@@ -146,7 +281,35 @@ class VoicePicker(
         engineRow.text = ctx.getString(R.string.voice_row_value, ctx.getString(R.string.voice_engine_row), engineName)
         langRow.text = ctx.getString(R.string.voice_row_value, ctx.getString(R.string.voice_lang_row), langText)
         voiceRow.text = ctx.getString(R.string.voice_row_value, ctx.getString(R.string.voice_voice_row), voiceText)
+        if (target == Target.MAIN) {
+            // На экране подпись короткая — строка делится с «Читать»; всё
+            // состояние уходит в описание для диктора, и он читает его целиком.
+            replyRow.text = ctx.getString(R.string.voice_reply_row)
+            replyRow.contentDescription = ctx.getString(
+                R.string.voice_row_value,
+                ctx.getString(R.string.voice_reply_row),
+                replyValueText(),
+            )
+            // Галочка переключается и из окна «Реплики» — состояние берём из
+            // настроек, а не из нажатия.
+            syncReplyCheck()
+        }
         refreshPlayLabel()
+    }
+
+    /** Значение строки-перехода: режим и, если он включён, каким голосом читают
+     *  реплики. Строка — это запись, а не догадка: показываем ровно то, что
+     *  выбрано, даже если движка сейчас рядом нет. */
+    private fun replyValueText(): String {
+        if (!prefs.getBoolean(MainActivity.KEY_REPLY_ON, false)) {
+            return ctx.getString(R.string.voice_reply_off)
+        }
+        val voice = prefs.getString(MainActivity.KEY_REPLY_VOICE, null)
+        return if (voice == null) {
+            ctx.getString(R.string.voice_reply_other)
+        } else {
+            ctx.getString(R.string.voice_reply_other) + ", " + voice
+        }
     }
 
     /** Что писать в строке «Голос» (msg5726). Показываем только то, что этот
@@ -156,6 +319,13 @@ class VoicePicker(
      *  врала бы — Сергей видел ровно это (msg5722: движок VIKTORIUS, а в строке
      *  голос прошлого движка, microsoft_ru-RU-DariyaNeural). */
     private fun voiceText(voices: List<Voice>, pkg: String?, chosen: String?): String {
+        // Реплики: голос показываем из СВОИХ настроек. За движком его не
+        // запоминаем — у реплик одна запись, и она видна как есть.
+        if (target == Target.REPLY) {
+            if (voices.isEmpty()) return chosen ?: ctx.getString(R.string.voice_engine_reads)
+            val v = voices.firstOrNull { it.name == chosen }
+            return v?.let { VoicePick.voiceLabel(it) } ?: ctx.getString(R.string.voice_engine_reads)
+        }
         // Список голосов не приехал — «ещё не знаю», а не «голоса нет» (msg3550):
         // судить не о чем, показываем записанное как есть.
         if (voices.isEmpty()) {
@@ -195,6 +365,7 @@ class VoicePicker(
      *  угадывается. */
     fun refreshPlayLabel() {
         playRow.text = when {
+            target == Target.REPLY -> ctx.getString(R.string.reply_read)
             host.hasBook() ->
                 if (host.isPlaying()) ctx.getString(R.string.pause)
                 else ctx.getString(R.string.voice_read_start)
@@ -208,7 +379,7 @@ class VoicePicker(
      *  и записанный язык подменялся бы запасным на ровном месте. */
     fun resetLang() {
         val p = host.playerOrNull()
-        val want = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
+        val want = prefs.getString(keyLang, null)
         pickLang = if (p == null || p.voices.isEmpty()) {
             want
         } else {
@@ -227,7 +398,11 @@ class VoicePicker(
                 return@withPlayer
             }
             val defaultEngine = p.defaultEngine
-            val cur = p.enginePackage ?: defaultEngine
+            val cur = if (target == Target.REPLY) {
+                prefs.getString(keyEngine, null) ?: p.enginePackage ?: defaultEngine
+            } else {
+                p.enginePackage ?: defaultEngine
+            }
             val labels = engines.map { (pkg, label) ->
                 if (pkg == defaultEngine) "$label (системный)" else label
             }.toTypedArray()
@@ -248,7 +423,7 @@ class VoicePicker(
                     // бы: у нового движка свой голос, и он переписал бы общий
                     // KEY_VOICE — вернувшись, человек искал бы голос заново.
                     val keep = host.currentVoice()
-                    if (keep != null && p.voices.any { it.name == keep }) {
+                    if (target == Target.MAIN && keep != null && p.voices.any { it.name == keep }) {
                         MainActivity.rememberVoiceForEngine(prefs, p.enginePackage, keep)
                     }
                     // Куда писать движок, решает хост: в читалке — при закрытии
@@ -271,8 +446,9 @@ class VoicePicker(
                             // текущее предложение новым движком. Именно ЗДЕСЬ, а
                             // не в engineApplied: там движок ещё старый и готов,
                             // и перечитка ушла бы прежним голосом. Без книги
-                            // restartAfterSwitch молчит.
-                            ReaderEngine.restartAfterSwitch()
+                            // restartAfterSwitch молчит. Реплик это не касается:
+                            // смена движка РЕПЛИК книгу не перечитывает.
+                            if (target == Target.MAIN) ReaderEngine.restartAfterSwitch()
                             afterEngineChange(p, temp)
                         }
                     }
@@ -301,7 +477,7 @@ class VoicePicker(
      *  работа сделана (см. [pickEngine]). */
     private fun afterEngineChange(p: SpeechPlayer, temp: Boolean) {
         ReaderEngine.whenVoicesReady(on = p) {
-            val want = pickLang ?: prefs.getString(MainActivity.KEY_VOICE_LANG, null)
+            val want = pickLang ?: prefs.getString(keyLang, null)
             pickLang = VoicePick.pickLangFor(p.voices, want, host.currentVoice())
             if (want != null && !VoicePick.hasLang(p.voices, want)) {
                 host.toast(
@@ -340,7 +516,9 @@ class VoicePicker(
      *  вот её причина незрячему не видна. */
     private fun applyEngineVoice(p: SpeechPlayer) {
         val cur = host.currentVoice()
-        val saved = MainActivity.voiceForEngine(prefs, p.enginePackage)
+        // Для реплик «голос, запомненный за движком» не годится: там одна
+        // запись на всё, и подставлять чужой выбор книги нельзя.
+        val saved = if (target == Target.REPLY) null else MainActivity.voiceForEngine(prefs, p.enginePackage)
         val v = p.voices.firstOrNull { it.name == cur }
             ?: p.voices.firstOrNull { it.name == saved }
         if (v != null) {
@@ -409,8 +587,11 @@ class VoicePicker(
                     val v = list[which]
                     p.selectVoice(v.name)
                     // msg5726: голос помним за движком, которому он выбран, —
-                    // вернёшься на этот движок, и голос вернётся сам.
-                    MainActivity.rememberVoiceForEngine(prefs, p.enginePackage, v.name)
+                    // вернёшься на этот движок, и голос вернётся сам. Репликам
+                    // эта память не нужна: у них своя запись голоса.
+                    if (target == Target.MAIN) {
+                        MainActivity.rememberVoiceForEngine(prefs, p.enginePackage, v.name)
+                    }
                     host.voiceApplied(v, pickLang)
                     refresh()
                     host.redraw()
@@ -450,6 +631,49 @@ class VoicePicker(
         }
     }
 
+    /** Строка словаря — держим её у себя: состояние меняется в отдельном окне, и
+     *  после возврата строку надо переписать ([refresh]), иначе она продолжает
+     *  говорить «выключен», когда словарь уже включён (жалоба Сержа 27.09.2026). */
+    private var dictRowView: Button? = null
+
+    /** Строка «Словарь произношения» — ОДНА И ТА ЖЕ и в Настройках, и в панели
+     *  голоса из книги (просьба Сержа 27.09.2026: «мы же договорились, что
+     *  параметры голоса одинаковые и из настроек, и из кнопки голоса»). Стоит
+     *  внизу, после ползунков: и там, и тут её ставит хост, потому что ползунки
+     *  рисует он. */
+    fun dictRow(): Button = valueRow().apply {
+        text = withHintText(ctx.getString(R.string.dict_row), dictValue())
+        setOnClickListener {
+            val i = android.content.Intent(ctx, DictActivity::class.java)
+            if (ctx !is android.app.Activity) i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            ctx.startActivity(i)
+        }
+        dictRowView = this
+    }
+
+    /** Состояние словаря словами: выключен или сколько в нём правил. */
+    private fun dictValue(): String =
+        if (!Dict.enabled(ctx)) ctx.getString(R.string.dict_row_off)
+        else ctx.getString(R.string.dict_row_on, Dict.load(ctx).size)
+
+    /** Название строки и приглушённое пояснение второй строкой — как у строк
+     *  подразделов Настроек. */
+    private fun withHintText(title: String, hint: String): CharSequence =
+        android.text.SpannableStringBuilder().apply {
+            append(title)
+            append("\n")
+            val start = length
+            append(hint)
+            setSpan(
+                android.text.style.RelativeSizeSpan(0.76f),
+                start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+            setSpan(
+                android.text.style.ForegroundColorSpan(Palette.DIM),
+                start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+        }
+
     /** Первая строка набора — действие, поэтому настоящая кнопка: слово
      *  «кнопка» здесь уместно и отличает её от строк-значений.
      *
@@ -469,7 +693,15 @@ class VoicePicker(
             bottomMargin = dp(6f)
         }
         setOnClickListener {
-            if (host.hasBook()) host.togglePlay() else playSample()
+            if (target == Target.REPLY) {
+                // В окне реплик эта строка — проба репликовым голосом, и читает
+                // её хост своим экземпляром, чтобы не перебить чтение книги.
+                host.togglePlay()
+            } else if (host.hasBook()) {
+                host.togglePlay()
+            } else {
+                playSample()
+            }
         }
     }
 

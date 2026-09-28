@@ -51,7 +51,15 @@ class DownloadService : Service() {
     companion object {
         private const val CHANNEL_ID = "downloads"
         private const val NOTIF_ID = 41
+
+        /** Карточка «скачано» — ОТДЕЛЬНЫМ номером (26.09.2026). Карточка службы
+         *  переднего плана на части прошивок не смахивается и висит даже после
+         *  её конца (жалоба Сергея): снять её было нечем. У обычной карточки есть
+         *  и кнопка «Убрать», и смахивание. */
+        private const val NOTIF_DONE_ID = 42
+
         private const val ACTION_CANCEL = "com.cuber.bookvoice.action.DOWNLOAD_CANCEL"
+        private const val ACTION_DISMISS = "com.cuber.bookvoice.action.DOWNLOAD_DISMISS"
 
         private const val EXTRA_TITLE = "book_title"
         private const val EXTRA_AUTHOR = "book_author"
@@ -113,6 +121,12 @@ class DownloadService : Service() {
             cancelled = true
             return START_NOT_STICKY
         }
+        // «Убрать» на карточке итога: снимаем её и больше ничего не делаем.
+        if (intent?.action == ACTION_DISMISS) {
+            nm.cancel(NOTIF_DONE_ID)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         val title = intent?.getStringExtra(EXTRA_TITLE)
         val fmtUrl = intent?.getStringExtra(EXTRA_FMT_URL)
         if (title.isNullOrBlank() || fmtUrl.isNullOrBlank()) {
@@ -131,6 +145,9 @@ class DownloadService : Service() {
         currentTitle = title
         // Уведомление поднимаем сразу: у службы переднего плана на это есть
         // несколько секунд, а первое объявление о старте читает владельцу тост.
+        // Заодно убираем карточку итога прошлой загрузки: она своё уже сказала,
+        // а копиться им незачем.
+        nm.cancel(NOTIF_DONE_ID)
         startForegroundCompat(buildRunning(title, -1))
         toast(getString(R.string.catalog_dl_start, title))
         Diag.log(this, "opds", "скачиваю \"$title\" формат $label: $fmtUrl")
@@ -193,10 +210,12 @@ class DownloadService : Service() {
                     )
                     Vibra.confirm(this)
                     watcher?.onFinished(title, placed.uri, placed.fallback)
-                    // Итог оставляем в шторке карточкой (не висячей): владелец
-                    // увидит, что загрузка кончилась, даже если ушёл из каталога.
-                    nm.notify(NOTIF_ID, buildDone(title))
-                    stopForegroundCompat(keepNotification = true)
+                    // Карточку итога показываем ОТДЕЛЬНЫМ номером, а карточку
+                    // службы убираем совсем: снять карточку переднего плана
+                    // бывает нечем, а у обычной есть кнопка «Убрать», смахивание
+                    // и касание на полку.
+                    stopForegroundCompat(keepNotification = false)
+                    nm.notify(NOTIF_DONE_ID, buildDone(title))
                 }
                 err is DownloadCancelled -> {
                     Diag.log(this, "opds", "скачивание отменено: \"$title\"")
@@ -259,8 +278,22 @@ class DownloadService : Service() {
             .build()
     }
 
-    private fun buildDone(title: String): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    /** Карточка итога: обычная, смахиваемая, с кнопкой «Убрать» и переходом на
+     *  полку по касанию. Живёт до тех пор, пока её не уберут: незрячему важно
+     *  иметь след «скачано», если он ушёл из каталога и тост пропустил. */
+    private fun buildDone(title: String): Notification {
+        val dismiss = PendingIntent.getService(
+            this, 2,
+            Intent(this, DownloadService::class.java).setAction(ACTION_DISMISS),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        val openShelf = PendingIntent.getActivity(
+            this, 3,
+            Intent(this, LibraryWindowActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(title)
             .setContentText(getString(R.string.dl_notif_done))
@@ -268,7 +301,10 @@ class DownloadService : Service() {
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setAutoCancel(true)
+            .setContentIntent(openShelf)
+            .addAction(0, getString(R.string.dl_dismiss), dismiss)
             .build()
+    }
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {

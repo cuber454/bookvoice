@@ -63,12 +63,15 @@ object Diag {
     /** Строка-заголовок нового запуска приложения — по ней в логе видно границу сеанса. */
     fun header(c: Context) {
         val day = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-        val ver = runCatching {
-            c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: "?"
-        }.getOrDefault("?")
+        val info = runCatching {
+            val pi = c.packageManager.getPackageInfo(c.packageName, 0)
+            val code = if (android.os.Build.VERSION.SDK_INT >= 28) pi.longVersionCode else pi.versionCode.toLong()
+            (pi.versionName ?: "?") to code
+        }.getOrDefault("?" to 0L)
         log(
             c, "app",
-            "=== BookVoice v$ver $day, устройство ${android.os.Build.MODEL}, " +
+            "=== BookVoice v${info.first} сборка ${info.second} $day, " +
+                "устройство ${android.os.Build.MODEL}, " +
                 "Android ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT}) ===",
         )
     }

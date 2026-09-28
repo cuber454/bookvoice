@@ -94,6 +94,25 @@ class LibraryActivity(private val act: SectionActivity) {
      *  после холодного старта с авто-открытием книги полка могла ещё не собраться
      *  (msg1585: «библиотека пустая») — refresh() пропускать нельзя. */
     private var shelfReady = false
+
+    /** Фокус после выхода из книги уже перенесён (28.09.2026). Перенос зовётся и
+     *  из колбэка Activity Result, и из resume() — засечка не даёт перенести
+     *  дважды: TalkBack объявляет каждое наше событие переноса. */
+    private var readerFocusDone = false
+
+    /**
+     * Читалку запускаем через Activity Result (28.09.2026), а не простым
+     * startActivity: так известен точный момент возврата, и фокус ставим сразу,
+     * не гадая по onResume и не надеясь на снимки через полсекунды.
+     */
+    private val readerLauncher = act.registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        Diag.log(act, "focus", "читалка закрылась (результат ${res.resultCode})")
+        // Полка собрана — переносим фокус здесь же. Не собрана — это сделает
+        // обычный путь resume(): он сначала построит полку.
+        if (shelfReady) focusReadBook()
+    }
     // msg1739: холодный старт — авто-открытие отложено до показа полки; защита от
     // повторного планирования, если resume() придёт в это окно ещё раз.
     private var coldAutoOpenPending = false
@@ -297,6 +316,7 @@ class LibraryActivity(private val act: SectionActivity) {
         // (shelfReady). Свежий экран после авто-открытия книги при холодном
         // старте ещё пуст — там пропуск refresh() = «библиотека пустая» (msg1585).
         if (returnFromReader && shelfReady) {
+            val readUri = pendingBookFocusUri
             pendingBookFocusUri = null
             Diag.log(act, "focus", "L1b: возврат из ридера — полку не трогаю")
             // msg4356: полку не пересобираем, но значения в строках обновляем —
@@ -313,11 +333,10 @@ class LibraryActivity(private val act: SectionActivity) {
                 Diag.log(act, "focus", "L1b ИТОГ(+1.5с): фокус на ${f ?: "нигде/неизвестно"}")
             }, 1500)
             // msg1690: сам по себе возврат оставляет фокус на окне, и TalkBack
-            // озвучивает имя приложения, а не экран. Полку (список) не трогаем —
-            // L1b живёт, но имя окна даём: фокус на стабильный заголовок
-            // «Библиотека» (как вход в Каталог/Настройки, msg1666) — он вне
-            // списка, озвучка держится.
-            TabNav.focusHeader(binding.tvTitle)
+            // озвучивает имя приложения, а не экран. Раньше здесь ставили фокус на
+            // заголовок «Библиотека»; с 28.09.2026 сначала пробуем саму книгу, из
+            // которой вышли, а заголовок остаётся запасным путём (см. focusReadBook).
+            focusReadBook(readUri)
             return
         }
         if (returnFromReader) {
@@ -471,6 +490,43 @@ class LibraryActivity(private val act: SectionActivity) {
             val btn = if (continueHasTarget) binding.btnLast else binding.btnMore
             TabNav.a11yFocus(btn)
         }, 350)
+    }
+
+    /**
+     * Фокус после выхода из книги (28.09.2026): на строку ТОЙ книги, из которой
+     * вышли. Раньше здесь стоял заголовок «Библиотека» (msg1690) — так делали,
+     * чтобы диктор объявлял экран, а не имя приложения. Заголовок остаётся
+     * запасным путём: если книги в списке нет (её спрятал фильтр), если строка так
+     * и не появилась или если она не приняла перенос.
+     *
+     * Сам перенос — [TabNav.a11yFocusBook]: публичный вызов переноса, пометка
+     * «начальный фокус» на Android 14+ и обрыв речи. Один заход — один перенос:
+     * функция зовётся и из колбэка Activity Result, и из resume(), поэтому засечка
+     * [readerFocusDone]. Снимки через 0.6 и 1.5 секунды (в resume) показывают в
+     * журнале, куда диктор сел в итоге.
+     */
+    private fun focusReadBook(uri: String? = pendingBookFocusUri) {
+        if (readerFocusDone) return
+        readerFocusDone = true
+        val target = uri ?: prefs.getString(MainActivity.KEY_URI, null)
+        val idx = target?.let { u -> shownRecords.indexOfFirst { it.uri == u } } ?: -1
+        if (idx < 0) {
+            Diag.log(act, "focus", "возврат из книги: строки нет в списке — фокус на заголовок")
+            TabNav.focusHeader(binding.tvTitle)
+            return
+        }
+        binding.bookList.postDelayed({
+            // Ряд за пределами экрана — подводим к нему список. Если он виден,
+            // ничего не двигаем: человек возвращается туда, где был.
+            val seen = binding.bookList.layoutManager?.findViewByPosition(idx)
+            if (seen == null || !seen.isShown) binding.bookList.scrollToPosition(idx)
+            binding.bookList.postDelayed({
+                val v = binding.bookList.layoutManager?.findViewByPosition(idx)
+                if (v != null && v.isShown && TabNav.a11yFocusBook(v)) return@postDelayed
+                Diag.log(act, "focus", "возврат из книги: строку перенести не вышло — заголовок")
+                TabNav.focusHeader(binding.tvTitle)
+            }, 250)
+        }, 250)
     }
 
     /** msg1468/1553 (эксперимент L1): вернуть фокус на строку книги, из которой
@@ -1273,10 +1329,59 @@ class LibraryActivity(private val act: SectionActivity) {
             } catch (_: Throwable) {
                 0
             }
+            // Записи, за которыми нет файла, убираем с полки сразу и без вопросов
+            // (28.09.2026, просьба Сержа) — до пересборки списка, чтобы книга не
+            // мелькнула на полке ещё раз.
+            val dead = try {
+                dropDeadRecords()
+            } catch (_: Throwable) {
+                emptyList()
+            }
             runOnUiThread {
-                if (!act.isFinishing && !act.isDestroyed) done(added)
+                if (!act.isFinishing && !act.isDestroyed) {
+                    done(added)
+                    if (dead.isNotEmpty()) announceDeadRecords(dead)
+                }
             }
         }.start()
+    }
+
+    /**
+     * Убрать с полки записи, за которыми нет файла. Работает в фоне вместе со
+     * сканом папки: ни вопроса, ни кнопки — как просил Серж 28.09.2026 («если
+     * файла нет, то и запись пускай уходит без всяких подтверждений»).
+     *
+     * Защита от системной беды: если мёртвой оказалась половина полки и больше
+     * (при полке от шести книг), не трогаем ничего — похоже, недоступен проводник
+     * или хранилище, а не книги пропали.
+     *
+     * Возвращает убранные записи: о них надо сказать словами — книга с полки
+     * исчезла не сама, и молчание тут выглядит поломкой.
+     */
+    private fun dropDeadRecords(): List<BookRecord> {
+        val all = BookStore.all(act)
+        if (all.isEmpty()) return emptyList()
+        val gone = all.filter { BookStore.fileGone(act, it.uri) }
+        if (gone.isEmpty()) return emptyList()
+        if (all.size >= 6 && gone.size * 2 >= all.size) {
+            Diag.log(
+                act, "shelf",
+                "записей без файлов ${gone.size} из ${all.size} — не трогаю: похоже на недоступное хранилище"
+            )
+            return emptyList()
+        }
+        for (r in gone) {
+            BookStore.remove(act, r.uri)
+            Diag.log(act, "shelf", "запись без файла убрана с полки: ${r.name}")
+        }
+        return gone
+    }
+
+    /** Сказать словами об убранных записях: не больше трёх имён, дальше числом. */
+    private fun announceDeadRecords(gone: List<BookRecord>) {
+        val names = gone.take(3).joinToString(", ") { it.name }
+        val tail = if (gone.size > 3) " и ещё ${gone.size - 3}" else ""
+        toast(plurals(R.plurals.shelf_dead_removed, gone.size, names + tail))
     }
 
     /** Рекурсивно пройти дерево; новые книги добавить, у «безымянных»
@@ -1577,11 +1682,15 @@ class LibraryActivity(private val act: SectionActivity) {
         }
         // msg1468: вернулись из читалки — фокус на строку этой книги.
         pendingBookFocusUri = rec.uri
+        // 28.09.2026: гасим засечку «фокус уже перенесли» — она про этот заход.
+        readerFocusDone = false
         val i = Intent(act, MainActivity::class.java)
         i.putExtra(MainActivity.EXTRA_URI, rec.uri)
         i.putExtra(MainActivity.EXTRA_CHAPTER, rec.chapter)
         i.putExtra(MainActivity.EXTRA_SENTENCE, rec.sentence)
-        startActivity(i)
+        // Читалку запускаем через Activity Result (не startActivity): так мы точно
+        // знаем момент, когда она закрылась, и не гадаем по onResume.
+        readerLauncher.launch(i)
     }
 
     private fun openLastBook() {

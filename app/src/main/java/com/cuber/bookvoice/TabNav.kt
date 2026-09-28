@@ -1,10 +1,14 @@
 package com.cuber.bookvoice
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Typeface
+import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.TextView
 import androidx.core.view.ViewCompat
 
@@ -49,53 +53,52 @@ object TabNav {
         return null
     }
 
-    /** Переместить фокус ридера на элемент [v] — тем способом, за которым
-     *  скринридеры реально следуют (JieshuO, TalkBack). msg1506/1509:
-     *  requestFocus двигает только системный (клавиатурный) фокус, ридеры его
-     *  игнорируют и после перерисовки сами роняют фокус. Ридер переводим
-     *  событием TYPE_VIEW_ACCESSIBILITY_FOCUSED — его ридеры слушают как сигнал
-     *  «фокус перенесён»; requestFocus — запасной для режимов, где ридер всё же
-     *  следует за системным фокусом.
+    /**
+     * Переместить фокус диктора на элемент [v] — способом, который нынешний
+     * Android считает правильным (переписано 28.09.2026).
      *
-     *  НЕ трогаем node.performAction(ACTION_ACCESSIBILITY_FOCUS): нода из
-     *  createAccessibilityNodeInfo приходит не sealed, и performAction роняет
-     *  IllegalStateException (краш 0.3.57 — лог в пасте Сергея). */
+     * Раньше слали событие TYPE_VIEW_ACCESSIBILITY_FOCUSED руками: публичного
+     * вызова переноса мы не знали, а нода из createAccessibilityNodeInfo падала
+     * (краш 0.3.57) — отсюда и запрет в прежнем комментарии. Правильный вызов —
+     * у самого View: `performAccessibilityAction(ACTION_ACCESSIBILITY_FOCUS)`, он
+     * есть с Android 4.1 и не падает. Им же диктор пользуется, когда сам
+     * переносит фокус.
+     *
+     * Почему это важно: в журнале 28.09.2026 наши переносы по событию
+     * записывались («перенос на Голос»), а диктор молчал — на событие он не
+     * реагировал, а на вызов переноса реагирует (для строки книги он ответил
+     * «true», и фокус встал).
+     *
+     * Событие осталось запасным путём: если вызов не обработан (диктор или вид
+     * его не поддерживают), шлём то же событие, что и раньше. Перенос ровно один:
+     * TalkBack объявляет каждое событие переноса, поэтому «проверил и повторил»
+     * давало тройную озвучку (msg1629/1647).
+     */
     fun a11yFocus(v: View) {
         if (!v.isShown) {
             Diag.log(v.context, "focus", "пропуск переноса: цель не видна (${describe(v)})")
             return
         }
         if (v.isAccessibilityFocused()) {
-            Diag.log(v.context, "focus", "цель уже сфокусирована — событие не шлю (${describe(v)})")
+            Diag.log(v.context, "focus", "цель уже сфокусирована — перенос не шлю (${describe(v)})")
             scheduleSettleLog(v)
             return
         }
-        // msg1629/1647: шлём РОВНО ОДНО событие, без повторов. Раньше после
-        // отправки сверяли isAccessibilityFocused() и при false слали повторно
-        // (до 3 раз): TalkBack объявляет КАЖДОЕ app-событие переноса, но флаг
-        // реального фокуса при этом не выставляет синхронно — проверка всегда
-        // считала перенос неудавшимся, и элемент озвучивался по разу на событие
-        // («повторил четыре раза» → после 0.3.66 «три раза»). Однократная
-        // отправка = одно объявление.
-        sendFocus(v)
-        // Ничего не переносим повторно; через паузу только пишем в лог, куда
-        // ридер в итоге поставил фокус (наблюдение без вмешательства).
-        scheduleSettleLog(v)
-    }
-
-    /** Одна попытка переноса: событие accessibility-фокуса + запасной requestFocus.
-     *  НЕ трогаем node.performAction(ACTION_ACCESSIBILITY_FOCUS): нода из
-     *  createAccessibilityNodeInfo приходит не sealed, и performAction роняет
-     *  IllegalStateException (краш 0.3.57). True — ридер уже смотрит на [v]. */
-    private fun sendFocus(v: View): Boolean {
+        interruptSpeech(v)
         Diag.log(
             v.context, "focus",
             "перенос на ${describe(v)} (shown=${v.isShown}, focusable=${v.isFocusable}, " +
                 "a11yFocused=${v.isAccessibilityFocused()})",
         )
-        v.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
-        if (v.isFocusable) v.requestFocus()
-        return v.isAccessibilityFocused()
+        val handled = v.performAccessibilityAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null)
+        Diag.log(v.context, "focus", "перенос: вызов переноса ответил $handled")
+        if (!handled) {
+            // Запасной путь для дикторов, которые на вызов не отвечают: то же
+            // событие, каким пользовались до 28.09.2026.
+            v.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+            Diag.log(v.context, "focus", "перенос: вызов не обработан — послал событие")
+        }
+        scheduleSettleLog(v)
     }
 
     /** Через паузу после попыток записать, где в ИТОГЕ сидит фокус ридера — на
@@ -104,19 +107,124 @@ object TabNav {
     private fun scheduleSettleLog(v: View) {
         v.postDelayed({
             if (v.isShown) {
-                val f = a11yFocusedDesc(v.rootView)
+                val all = a11yFocusedAll(v.rootView)
+                // Кроме доступностного фокуса пишем и системный: приложение не может
+                // спросить у службы доступности, куда она встала, а флаг на узле
+                // диктор выставляет не всегда (отсюда «нигде/неизвестно»). Системный
+                // фокус идёт за диктором в большинстве случаев, и по нему видно, куда
+                // перенос всё-таки дошёл.
+                val sys = runCatching { describe(v.rootView.findFocus() ?: v.rootView) }.getOrNull()
                 Diag.log(
                     v.context, "focus",
-                    "ИТОГ: фокус на ${f ?: "нигде/неизвестно"} (цель была ${describe(v)})",
+                    "ИТОГ: фокус на ${all.joinToString(" | ").ifEmpty { "нигде/неизвестно" }} " +
+                        "(цель была ${describe(v)}; системный фокус: ${sys ?: "?"})",
                 )
             }
         }, 250)
+    }
+
+    /** ВСЕ узлы, которые сообщают о доступностном фокусе (28.09.2026).
+     *
+     *  Нужно, чтобы отличить настоящий уход фокуса от нашего же лога: диктор,
+     *  переезжая, не всегда снимает флаг с прежнего узла, а поиск «первого
+     *  попавшегося» в порядке дерева показывал бы старую строку. Если в строке
+     *  журнала два имени — фокус ушёл по-настоящему; если одно — и это цель, значит
+     *  всё в порядке. */
+    private fun a11yFocusedAll(root: View): List<String> {
+        val out = ArrayList<String>(2)
+        fun walk(v: View) {
+            if (v.isAccessibilityFocused()) out.add(describe(v))
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(root)
+        return out
     }
 
     /** Наблюдение без вмешательства (эксперимент L1, msg1553): записать, где через
      *  паузу окажется accessibility-фокус, ничего не перенося. */
     fun observeFocusSettle(v: View) {
         if (v.isShown) scheduleSettleLog(v)
+    }
+
+    /**
+     * Перенос фокуса на строку книги — способом, который нынешний Android считает
+     * правильным (28.09.2026).
+     *
+     * Чем отличается от [a11yFocus]. Там мы шлём событие TYPE_VIEW_ACCESSIBILITY_FOCUSED
+     * руками — так делали, потому что публичного вызова переноса мы не знали, а нода
+     * из createAccessibilityNodeInfo падала (краш 0.3.57). Здесь три вещи:
+     *   1) `View.performAccessibilityAction(ACTION_ACCESSIBILITY_FOCUS)` — публичный
+     *      вызов самого View (есть с Android 4.1), его и просит документация;
+     *   2) на Android 14 и новее строка помечается «начальным фокусом» окна
+     *      (`AccessibilityNodeInfo.setRequestInitialAccessibilityFocus`, публичный с
+     *      API 34): диктор встанет на неё сам, даже если вызов (1) он проигнорирует;
+     *   3) обрыв текущей речи (`AccessibilityManager.interrupt()`), чтобы хвост
+     *      фразы книги не накладывался на объявление полки.
+     *
+     * Событие шлём ровно одно: TalkBack объявляет каждое наше событие, а флаг
+     * `isAccessibilityFocused()` при этом не выставляет (см. msg1629/1647), поэтому
+     * «проверил и повторил» давало тройную озвучку одного и того же.
+     */
+    fun a11yFocusBook(v: View): Boolean {
+        if (!v.isShown) {
+            Diag.log(v.context, "focus", "перенос на книгу: цель не видна (${describe(v)})")
+            return false
+        }
+        if (v.isAccessibilityFocused()) {
+            Diag.log(v.context, "focus", "перенос на книгу: цель уже в фокусе (${describe(v)})")
+            scheduleSettleLog(v)
+            return true
+        }
+        interruptSpeech(v)
+        Diag.log(
+            v.context, "focus",
+            "перенос на книгу ${describe(v)} (API ${Build.VERSION.SDK_INT}, " +
+                "focusable=${v.isFocusable}, a11yFocused=${v.isAccessibilityFocused()})",
+        )
+        val handled = v.performAccessibilityAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null)
+        Diag.log(v.context, "focus", "перенос на книгу: вызов переноса ответил $handled")
+        // requestFocus здесь НЕ зовём: системный фокус в списке и доступностный — две
+        // разные вещи, и вторая половина дня 28.09.2026 показала, что от лишнего
+        // системного фокуса диктор через полторы секунды уезжает на соседнюю строку
+        // (журнал: цель «Коллекция анекдотов», а через 1.5 с фокус на «Самые свежие
+        // угарные анекдоты»). Вызова переноса диктору достаточно: он ответил true, и
+        // фокус встал на книгу.
+        scheduleSettleLog(v)
+        return handled
+    }
+
+    /**
+     * Пометка «начальный фокус» для [v] — Android 14 и новее.
+     *
+     * НЕ ИСПОЛЬЗУЕТСЯ с 28.09.2026, оставлено как объяснение: пометку снимали через
+     * полторы секунды, а снятие — это изменение узла, на которое диктор реагирует
+     * перечитыванием списка. В журнале ровно через полторы секунды после переноса
+     * фокус оказывался на СОСЕДНЕЙ строке (цель «Коллекция анекдотов», а через 1.5 с
+     * «Самые свежие угарные анекдоты»). Вызова переноса диктору хватает, поэтому
+     * пометка убрана совсем — и лишнего события больше нет.
+     */
+    @Suppress("unused")
+    private fun markInitialFocus(v: View) {
+        if (Build.VERSION.SDK_INT < 34) return
+        val d = object : View.AccessibilityDelegate() {
+            override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
+                super.onInitializeAccessibilityNodeInfo(host, info)
+                info.setRequestInitialAccessibilityFocus(true)
+            }
+        }
+        v.accessibilityDelegate = d
+        v.postDelayed({
+            if (v.accessibilityDelegate === d) v.accessibilityDelegate = null
+        }, 1500)
+    }
+
+    /** Оборвать текущую речь: хвост фразы книги не должен звучать поверх
+     *  объявления полки. Вызов есть с самых первых версий Android. */
+    private fun interruptSpeech(v: View) {
+        runCatching {
+            val am = v.context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            am?.interrupt()
+        }
     }
 
     /** Текущее место accessibility-фокуса в дереве [root] — для наблюдения без
@@ -169,6 +277,25 @@ object TabNav {
             }
             if (v != null && v.isShown) a11yFocus(v)
         }, 350)
+    }
+
+    /**
+     * Имя панели окна (28.09.2026, по документации Android).
+     *
+     * Диктор объявляет имя панели сам — когда панель появляется или меняется.
+     * Это и есть штатный способ назвать экран; раньше мы ради имени окна уводили
+     * фокус на заголовок (msg1666), а это лишний перенос: где встать в новом окне,
+     * решает служба доступности. Теперь имя даёт само окно, а фокус остаётся там,
+     * куда его поставила система.
+     */
+    fun namePane(root: View, title: CharSequence?) {
+        if (title.isNullOrBlank()) return
+        runCatching { ViewCompat.setAccessibilityPaneTitle(root, title) }
+        // Пишем в журнал: по этой строке видно, ЧТО мы дали диктору как имя экрана.
+        // Озвучку услышать мы не можем (её делает служба доступности), но проверить,
+        // дали ли мы имя вовсе, надо — иначе не отличить «мы не сказали» от
+        // «диктор панельные имена не читает».
+        Diag.log(root.context, "a11y", "имя панели: $title")
     }
 
     /** msg1666: вход в окно-секцию — фокус ридера на ЗАГОЛОВОК окна. TalkBack

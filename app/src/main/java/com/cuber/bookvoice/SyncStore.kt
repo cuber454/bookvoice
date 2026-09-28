@@ -83,6 +83,130 @@ object SyncStore {
     private const val KIND = "bvsync"
     private const val VERSION = 1
 
+    // ---------------- Облако: Гугл или Яндекс ----------------
+    //
+    // Файл синхронизации и книги лежат в папке приложения облака. Способы разные
+    // (у Яндекса — REST Диска, у Гугла — Drive API), а работа одна и та же,
+    // поэтому оба приводятся к одному виду [Cloud]: прогон не знает, чьё облако.
+
+    /** Файл синхронизации: тело или причина отказа. */
+    private class Remote(val body: String? = null, val error: String? = null)
+
+    /** Одна книга в облаке. */
+    private class RemoteFile(val name: String, val size: Long)
+
+    /** Содержимое папки книг. */
+    private class RemoteList(val list: List<RemoteFile> = emptyList(), val error: String? = null)
+
+    /** Папка приложения в облаке — всё, что нужно прогону. */
+    private interface Cloud {
+        /** Чьё облако — для журнала. */
+        val title: String
+
+        fun read(c: Context): Remote
+        fun write(c: Context, body: String): String?
+        fun listBooks(c: Context): RemoteList
+        fun ensureBooks(c: Context): String?
+        fun ensureTrash(c: Context): String?
+        fun uploadBook(c: Context, name: String, src: File): String?
+        fun downloadBook(c: Context, name: String, dest: File): String?
+        fun moveToTrash(c: Context, name: String): String?
+    }
+
+    private object YandexCloud : Cloud {
+        override val title = "Яндекс"
+        override fun read(c: Context) = YandexDisk.read(c).let { Remote(it.body, it.error) }
+        override fun write(c: Context, body: String) = YandexDisk.write(c, body)
+        override fun listBooks(c: Context) = YandexDisk.listBooks(c).let {
+            RemoteList(it.list.map { e -> RemoteFile(e.name, e.size) }, it.error)
+        }
+        override fun ensureBooks(c: Context) = YandexDisk.ensureBooks(c)
+        override fun ensureTrash(c: Context) = YandexDisk.ensureTrash(c)
+        override fun uploadBook(c: Context, name: String, src: File) = YandexDisk.uploadBook(c, name, src)
+        override fun downloadBook(c: Context, name: String, dest: File) = YandexDisk.downloadBook(c, name, dest)
+        override fun moveToTrash(c: Context, name: String) = YandexDisk.moveToTrash(c, name)
+    }
+
+    private object GoogleCloud : Cloud {
+        override val title = "Google"
+        override fun read(c: Context) = GoogleDrive.read(c).let { Remote(it.body, it.error) }
+        override fun write(c: Context, body: String) = GoogleDrive.write(c, body)
+        override fun listBooks(c: Context) = GoogleDrive.listBooks(c).let {
+            RemoteList(it.list.map { e -> RemoteFile(e.name, e.size) }, it.error)
+        }
+        override fun ensureBooks(c: Context) = GoogleDrive.ensureBooks(c)
+        override fun ensureTrash(c: Context) = GoogleDrive.ensureTrash(c)
+        override fun uploadBook(c: Context, name: String, src: File) = GoogleDrive.uploadBook(c, name, src)
+        override fun downloadBook(c: Context, name: String, dest: File) = GoogleDrive.downloadBook(c, name, dest)
+        override fun moveToTrash(c: Context, name: String) = GoogleDrive.moveToTrash(c, name)
+    }
+
+    // Место синхронизации выбирает владелец: Google, Яндекс или папка. Раньше
+    // приложение решало само (Гугл, если вход есть, иначе Яндекс, иначе папка), и
+    // в подсказках при этом оставался «Яндекс.Диск» — человек читал одно, а файл
+    // уезжал в другое место (разбор 28.09.2026).
+
+    /** Выбранное место. null — владелец ещё не выбирал (старые настройки). */
+    fun chosen(c: Context): String? =
+        prefs(c).getString(KEY_CLOUD, null)?.takeIf { it.isNotBlank() }
+
+    fun setChosen(c: Context, kind: String) {
+        prefs(c).edit().putString(KEY_CLOUD, kind).apply()
+    }
+
+    /** Каким местом работаем: выбор владельца, а пока его нет — по входам
+     *  (Google, иначе Яндекс, иначе папка). Догадку НЕ запоминаем: иначе она
+     *  застыла бы и потом мешала человеку войти в другое облако. */
+    fun kind(c: Context): String = chosen(c) ?: when {
+        GoogleDrive.connected(c) -> CLOUD_GOOGLE
+        YandexDisk.connected(c) -> CLOUD_YANDEX
+        else -> CLOUD_FOLDER
+    }
+
+    /** Подключено ли выбранное место: облако — по входу, папка — по выбору папки. */
+    fun ready(c: Context): Boolean = when (kind(c)) {
+        CLOUD_GOOGLE -> GoogleDrive.connected(c)
+        CLOUD_YANDEX -> YandexDisk.connected(c)
+        else -> folderFor(c) != null
+    }
+
+    /** Чьё облако подключено к работе; null — работать через облако нельзя (место
+     *  не выбрано, выбран Яндекс без входа, папка и т. п.). */
+    private fun cloudFor(c: Context): Cloud? = when (kind(c)) {
+        CLOUD_GOOGLE -> if (GoogleDrive.connected(c)) GoogleCloud else null
+        CLOUD_YANDEX -> if (YandexDisk.connected(c)) YandexCloud else null
+        else -> null
+    }
+
+    /** Почему выбранное облако не работает. null — работает. */
+    private fun cloudWhy(c: Context): String? = when (kind(c)) {
+        CLOUD_GOOGLE -> if (GoogleDrive.connected(c)) null
+        else c.getString(R.string.sync_cloud_lost, c.getString(R.string.google_title))
+        CLOUD_YANDEX -> if (YandexDisk.connected(c)) null
+        else c.getString(R.string.sync_cloud_lost, c.getString(R.string.yandex_title))
+        else -> null
+    }
+
+    /** Почему прогон сейчас не пойдёт. null — всё готово. */
+    fun trouble(c: Context): String? {
+        cloudWhy(c)?.let { return it }
+        if (cloudFor(c) != null) return null
+        return if (folderFor(c) == null) c.getString(R.string.sync_err_no_dir) else null
+    }
+
+    /** Почему книги сейчас не поедут. null — можно. */
+    fun booksTrouble(c: Context): String? {
+        cloudWhy(c)?.let { return it }
+        return if (cloudFor(c) == null) c.getString(R.string.sync_books_need_cloud) else null
+    }
+
+    const val CLOUD_GOOGLE = "google"
+    const val CLOUD_YANDEX = "yandex"
+    const val CLOUD_FOLDER = "folder"
+
+    /** Ключ: выбранное место синхронизации (google, yandex, folder). */
+    private const val KEY_CLOUD = "sync_cloud"
+
     /** Один прогон за раз: автосинхронизация может позваться и с полки, и из
      *  читалки почти одновременно. */
     private val running = AtomicBoolean(false)
@@ -203,6 +327,9 @@ object SyncStore {
         val error: String?,
         /** Сколько книг уехало на Диск в этом прогоне (msg6130). */
         val booksUp: Int = 0,
+        /** Сколько книг залить не удалось (не читается с телефона или отказ
+         *  облака) — 28.09.2026: такие книги пропускаем, а не бросаем очередь. */
+        val booksFailed: Int = 0,
         /** Сколько книг убрано с полки по метке удаления (msg6142). */
         val gone: Int = 0,
         /** Сколько книг на Диске переехало в «BookVoice — удалённое» (msg6142). */
@@ -218,11 +345,12 @@ object SyncStore {
     fun sync(c: Context, withBooks: Boolean = true): Result {
         if (!running.compareAndSet(false, true)) return Result(0, 0, 0, null)
         try {
-            // Вход в Яндекс важнее выбранной папки (msg6114): папка приложения на
-            // Диске не требует ни облачного приложения на телефоне, ни выбора —
-            // владелец вошёл, и файл уже лежит где надо. Папка остаётся для тех,
-            // у кого аккаунта нет.
-            if (YandexDisk.connected(c)) return syncYandex(c, withBooks)
+            // Место выбирает владелец (см. kind/cloudFor). Выбрано облако, а вход
+            // потерян — об этом и говорим: молча уходить в папку нельзя, иначе
+            // человек снова читает одно, а файл уезжает в другое место.
+            val cloud = cloudFor(c)
+            if (cloud != null) return syncCloud(c, cloud, withBooks)
+            cloudWhy(c)?.let { return finish(c, Result(0, 0, 0, it)) }
             val tree = folderFor(c)
                 ?: return finish(c, Result(0, 0, 0, c.getString(R.string.sync_err_no_dir)))
             val remote = readRemote(c, tree)?.let { parse(it) }
@@ -249,12 +377,12 @@ object SyncStore {
         }
     }
 
-    /** Прогон через папку приложения на Яндекс.Диске (msg6114). Разбор, слияние и
+    /** Прогон через папку приложения в облаке (msg6114). Разбор, слияние и
      *  запись — те же самые; отличается только место, где лежит файл.
      *  [withBooks] — заливать ли книги (0.4.87, msg7031): у фонового прогона
      *  false, книги уезжают только по кнопке. */
-    private fun syncYandex(c: Context, withBooks: Boolean): Result {
-        val t = YandexDisk.read(c)
+    private fun syncCloud(c: Context, cloud: Cloud, withBooks: Boolean): Result {
+        val t = cloud.read(c)
         if (t.error != null) return finish(c, Result(0, 0, 0, t.error))
         val remote = t.body?.let { parse(it) }
         val merged = merge(collect(c), remote?.books ?: emptyList())
@@ -269,11 +397,13 @@ object SyncStore {
             unionQuotes(QuoteStore.all(c), remote?.quotes ?: emptyList()),
             del,
         )
-        YandexDisk.write(c, body.toString())?.let { return finish(c, Result(0, 0, 0, it)) }
+        cloud.write(c, body.toString())?.let { return finish(c, Result(0, 0, 0, it)) }
+        Diag.log(c, "sync", "место синхронизации: ${cloud.title}")
         // Книги (msg6130): заливаем то, чего на Диске ещё нет. Забор книг сюда не
         // входит — он тянет десятки мегабайт и на чужом тарифе, и это решение
         // владельца, а не фоновая подробность: книги забираются кнопкой.
         var booksUp = 0
+        var booksFailed = 0
         var moved = 0
         if (withBooks && booksOn(c)) {
             val plan = planBooks(c)
@@ -281,9 +411,10 @@ object SyncStore {
             if (err != null) {
                 Diag.log(c, "sync", "список книг на Диске не получен: $err")
             } else {
-                val (n, upErr) = pushBooks(c, plan)
-                booksUp = n
-                if (upErr != null) Diag.log(c, "sync", "книга не залилась: $upErr")
+                val pushed = pushBooks(c, plan)
+                booksUp = pushed.done
+                booksFailed = pushed.failed
+                if (pushed.error != null) Diag.log(c, "sync", "книга не залилась: ${pushed.error}")
             }
             if (err == null) {
                 // 0.4.87 (msg7030): с Диска уносим только те книги, которые метка
@@ -295,9 +426,8 @@ object SyncStore {
         }
         return finish(c, Result(
             got, sent, remote?.quotes?.let { rq -> countNewQuotes(c, rq) } ?: 0, null,
-            booksUp, gone.size, moved,
-        ))
-    }
+            booksUp, booksFailed, gone.size, moved,
+        ))    }
 
     // ---------------- Книги (msg6130) ----------------
     //
@@ -326,7 +456,10 @@ object SyncStore {
 
     /** Считаем перенос: список Диска и размеры своих книг. Ничего не качаем. */
     fun planBooks(c: Context): BookPlan {
-        val items = YandexDisk.listBooks(c)
+        val cloud = cloudFor(c) ?: return BookPlan(
+            error = booksTrouble(c) ?: c.getString(R.string.sync_books_need_cloud)
+        )
+        val items = cloud.listBooks(c)
         val listErr = items.error
         if (listErr != null) return BookPlan(error = listErr)
         val remote = items.list.associateBy { key(it.name) }
@@ -344,6 +477,12 @@ object SyncStore {
         val inPlan = HashSet<String>()
         for (rec in local) {
             val k = key(rec.name)
+            // Мёртвая запись (файла за ней нет) в план не идёт: иначе прогон
+            // каждый раз спотыкается об неё и говорит «не залилось».
+            if (BookStore.fileGone(c, rec.uri)) {
+                Diag.log(c, "sync", "книга без файла, в план не беру: ${rec.name}")
+                continue
+            }
             val size = sizeOf(c, rec.uri)
             val there = remote[k]
             if (!inPlan.add(k)) {
@@ -394,23 +533,44 @@ object SyncStore {
         stuckUp[k] = mark
     }
 
-    /** Заливаем книги на Диск. Возвращает (сколько залито, причина отказа). */
-    fun pushBooks(c: Context, plan: BookPlan): Pair<Int, String?> {
-        if (plan.up.isEmpty()) return 0 to null
-        if (!moving.compareAndSet(false, true)) return 0 to c.getString(R.string.sync_books_busy)
+    /** Итог заливки: сколько книг уехало, сколько не смогло и общая причина,
+     *  если заливка вообще не началась (нет облака, занято). */
+    class PushResult(val done: Int = 0, val failed: Int = 0, val error: String? = null)
+
+    /** Заливаем книги на Диск. Нечитаемая книга НЕ останавливает остальные:
+     *  журнал Сергея 28.09.2026 — одна запись с исчезнувшим файлом
+     *  («варочная панель.pdf») держала очередь, и из тридцати с лишним книг
+     *  уезжали только первые пять. Теперь такую книгу пропускаем, пишем в
+     *  журнал и говорим владельцу числом. */
+    fun pushBooks(c: Context, plan: BookPlan): PushResult {
+        if (plan.up.isEmpty()) return PushResult()
+        if (!moving.compareAndSet(false, true)) {
+            return PushResult(error = c.getString(R.string.sync_books_busy))
+        }
         try {
-            YandexDisk.ensureBooks(c)?.let { return 0 to it }
+            val cloud = cloudFor(c)
+                ?: return PushResult(error = booksTrouble(c) ?: c.getString(R.string.sync_books_need_cloud))
+            cloud.ensureBooks(c)?.let { return PushResult(error = it) }
             var done = 0
+            var failed = 0
             for (rec in plan.up) {
                 val src = uploadSource(c, rec)
-                    ?: return done to c.getString(R.string.sync_books_no_read, rec.name)
-                val err = YandexDisk.uploadBook(c, rec.name, src.file)
+                if (src == null) {
+                    failed++
+                    Diag.log(c, "sync", "книга не читается с телефона, пропускаю: ${rec.name}")
+                    continue
+                }
+                val err = cloud.uploadBook(c, rec.name, src.file)
                 src.temp?.delete()
-                if (err != null) return done to c.getString(R.string.sync_books_up_fail, rec.name, err)
+                if (err != null) {
+                    failed++
+                    Diag.log(c, "sync", "книга не залилась, пропускаю: ${rec.name}: $err")
+                    continue
+                }
                 done++
                 Diag.log(c, "sync", "книга залита на Диск: ${rec.name}")
             }
-            return done to null
+            return PushResult(done, failed)
         } finally {
             moving.set(false)
         }
@@ -429,7 +589,9 @@ object SyncStore {
         if (removed.isEmpty()) return 0 to null
         val list = marks(c).filter { it.key in removed }
         if (list.isEmpty()) return 0 to null
-        val items = YandexDisk.listBooks(c)
+        val cloud = cloudFor(c)
+            ?: return 0 to (booksTrouble(c) ?: c.getString(R.string.sync_books_need_cloud))
+        val items = cloud.listBooks(c)
         items.error?.let { return 0 to it }
         val onDisk = items.list.associateBy { key(it.name) }
         if (onDisk.isEmpty()) return 0 to null
@@ -438,11 +600,11 @@ object SyncStore {
         for (m in list) {
             val e = onDisk[m.key] ?: continue
             if (!dirReady) {
-                val err = YandexDisk.ensureTrash(c)
+                val err = cloud.ensureTrash(c)
                 if (err != null) return done to err
                 dirReady = true
             }
-            val err = YandexDisk.moveToTrash(c, e.name)
+            val err = cloud.moveToTrash(c, e.name)
             if (err != null) return done to err
             done++
             Diag.log(c, "sync", "книга на Диске убрана в «BookVoice — удалённое»: ${e.name}")
@@ -458,6 +620,8 @@ object SyncStore {
         if (plan.down.isEmpty()) return 0 to null
         if (!moving.compareAndSet(false, true)) return 0 to c.getString(R.string.sync_books_busy)
         try {
+            val cloud = cloudFor(c)
+                ?: return 0 to (booksTrouble(c) ?: c.getString(R.string.sync_books_need_cloud))
             val dir = File(c.filesDir, "books").apply { mkdirs() }
             var done = 0
             for (name in plan.down) {
@@ -465,7 +629,7 @@ object SyncStore {
                 // Файл уже лежит (забрали раньше, а запись потерялась) — заводим
                 // запись и идём дальше: те же мегабайты второй раз не тянем.
                 if (!dest.isFile || dest.length() == 0L) {
-                    val err = YandexDisk.downloadBook(c, name, dest)
+                    val err = cloud.downloadBook(c, name, dest)
                     if (err != null) return done to c.getString(R.string.sync_books_down_fail, name, err)
                 }
                 BookStore.upsert(c, BookRecord(
@@ -700,7 +864,7 @@ object SyncStore {
     private fun finish(c: Context, r: Result): Result {
         var text = when {
             r.error != null -> r.error
-            r.got == 0 && r.sent == 0 && r.booksUp == 0 && r.gone == 0 ->
+            r.got == 0 && r.sent == 0 && r.booksUp == 0 && r.booksFailed == 0 && r.gone == 0 ->
                 c.getString(R.string.sync_same)
             else -> c.getString(R.string.sync_counts, r.sent, r.got)
         }
@@ -708,6 +872,11 @@ object SyncStore {
         // молчать о залитых книгах нельзя (владелец ждёт их появления на Диске).
         if (r.error == null && r.booksUp > 0) {
             text += " " + c.getString(R.string.sync_books_pushed, r.booksUp)
+        }
+        // Про незалившиеся говорим числом: книга может лежать на полке записью,
+        // а файла за ней уже нет — молчать об этом нельзя.
+        if (r.error == null && r.booksFailed > 0) {
+            text += " " + c.getString(R.string.sync_books_failed, r.booksFailed)
         }
         // Удалённое называем вслух: книга пропала с полки не сама, а потому что
         // её удалили на другом устройстве (msg6142).

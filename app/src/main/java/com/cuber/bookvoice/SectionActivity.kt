@@ -149,6 +149,18 @@ abstract class SectionActivity : AppCompatActivity() {
     /** Страница показана. [arrival]=true — первый показ окна (свежий вход). */
     abstract fun resumeSection(arrival: Boolean)
 
+    /**
+     * Имя панели окна (28.09.2026, по документации Android). Все наши окна
+     * называют себя через setTitle — и при входе, и при смене раздела; отсюда же
+     * берём имя панели, и диктор объявляет его сам, когда панель появляется или
+     * меняется. Так и должно быть: где встать фокусом, решает служба доступности,
+     * а имя экрана даёт само окно. Раньше ради имени мы уводили фокус на заголовок.
+     */
+    override fun setTitle(title: CharSequence?) {
+        super.setTitle(title)
+        if (::container.isInitialized) TabNav.namePane(container, title)
+    }
+
     /** «Назад» на странице. True — обработано (окно дальше не пускает). */
     abstract fun onSectionBackKey(): Boolean
 

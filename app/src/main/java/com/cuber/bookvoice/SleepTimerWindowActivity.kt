@@ -46,8 +46,8 @@ class SleepTimerWindowActivity : RowsActivity() {
 
     override fun resumeSection(arrival: Boolean) {
         if (arrival) {
-            // Свежий вход — фокус на заголовок окна: сразу ясно, куда зашёл.
-            TabNav.focusHeader(binding.tvTitle, 550)
+            // 28.09.2026, по документации: имя экрана даёт имя панели, а фокус в
+            // новом окне ставит служба доступности — свой перенос убран.
             return
         }
         // Возврат из окна настроек таймера: там могли снять таймер или сменить

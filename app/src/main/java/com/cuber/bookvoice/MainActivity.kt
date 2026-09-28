@@ -208,6 +208,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private val adapter = SentenceAdapter(
         onSentenceClick = { ch, s -> onSentenceTapped(ch, s) },
         onSentenceLongClick = { ch, s -> onSentenceLongPressed(ch, s) },
+        onSentenceDict = { ch, s -> openDictForSentence(ch, s) },
+        onSentenceDrop = { ch, s -> dropSimilarLines(ch, s) },
+        onSentenceShow = { ch, s -> showSentenceForA11y(ch, s) },
     )
 
     private val prefs by lazy { getSharedPreferences("reader", MODE_PRIVATE) }
@@ -282,8 +285,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     override fun onToast(msg: String) = toast(msg)
 
-    override fun onAnnounce(text: String) {
-        binding.sentenceList.announceForAccessibility(text)
+    override fun onAnnounce(text: String) {        binding.sentenceList.announceForAccessibility(text)
     }
 
     override fun onSpeedUiRefresh() {
@@ -297,6 +299,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private var currentName: String?
         get() = ReaderEngine.currentName
         set(v) { ReaderEngine.currentName = v }
+
+    /** Почему последняя книга не открылась, словами — для журнала (28.09.2026).
+     *  Раньше и «файл не прочитан», и «разбор упал» давали одну фразу про формат,
+     *  и по логу нельзя было понять, что случилось: проверка показала, что две
+     *  книги из чужого проводника не открывались обе, а причин могло быть две
+     *  разных. */
+    private var lastOpenWhy: String? = null
+
+    /** Чем кончилась попытка прочитать файл (исключение провайдера). */
+    private var lastReadError: String? = null
 
     // Аудиофокус (#98/#99), состояние звонков и наушников целиком переехали в
     // движок (ReaderEngine): там живут haveAudioFocus, pausedByFocusLoss,
@@ -333,6 +345,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.sentenceList.layoutManager = layoutManager
         binding.sentenceList.adapter = adapter
         binding.sentenceList.setHasFixedSize(true)
+        // Наблюдение за фокусом диктора (29.09.2026, жалоба «фокус улетает на
+        // кнопку Ещё или Читать»): пишем, кто получает доступностный фокус.
+        // Поведение не меняем — только журнал; по нему видно, уходит ли диктор из
+        // текста на кнопку и в какой момент.
+        A11y.watchFocus(binding.root, "читалка") { ribbonState() }
         // Портянка (msg4330): лента теперь одна на всю книгу, и рука уезжает по
         // ней дальше, чем уезжала по одной главе. Остановился — верхняя строка
         // экрана становится местом книги: слайдер, «Глава N из M» и процент едут
@@ -393,6 +410,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             onPlayPauseLongClick()
             true
         }
+        // Тем же способом у кнопки «▶»: слов о долгом нажатии диктор не говорит,
+        // действие (таймер сна) остаётся и в меню «Действия».
+        if (prefs.getString(KEY_PLAY_LONG, PLAY_LONG_SLEEP) != PLAY_LONG_OFF) {
+            A11y.replaceLongPress(binding.btnPlayPause, getString(R.string.play_long_sleep)) {
+                onPlayPauseLongClick()
+            }
+        }
         // msg5220/msg5266: у каждой из четырёх кнопок читалки два действия из
         // общей палитры — короткое и долгое; оба назначаются в «Управлении»,
         // диспетчер тот же, что у свайпов. Долгое подтверждаем вибрацией: списка
@@ -414,6 +438,19 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     runGestureAction(long)
                 }
                 true
+            }
+            // 28.09.2026 (просьба Сержа): диктор больше не объявляет «долгое
+            // нажатие» на этих кнопках — о срабатывании говорит вибрация. Само
+            // действие остаётся и доступно из меню «Действия» диктора.
+            val longAct = readerButtonLongAction(prefs, b)
+            if (longAct != G_NONE) {
+                A11y.replaceLongPress(
+                    view,
+                    gestureActionLabel(this, prefs, longAct),
+                ) {
+                    Vibra.confirm(this)
+                    runGestureAction(longAct)
+                }
             }
         }
         // Кнопки скорости (#58): шаг по списку скорости, меняют темп на лету.
@@ -469,16 +506,30 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // ДРУГУЮ книгу — гасим живую (close) и открываем как обычно.
         val liveUri = ReaderEngine.liveWindowlessUri()
         val requested = intent.getStringExtra(EXTRA_URI)
-        if (liveUri != null && (requested == null || requested == liveUri)) {
+        // 29.09.2026 (разобрано по журналу тестера, 11:41): «открылась новая
+        // книга, а кусок старой остался». Движок держит книгу не только когда
+        // чтение идёт без окна — книгу НА ПАУЗЕ он тоже оставляет себе (msg4629,
+        // [ReaderEngine.keepCardWhenWindowGone]), а окно над ней открывается новое.
+        // Раньше решение принималось только по [liveUri], и такая книга проходила
+        // мимо: движок оставался с прежней книгой, окно уже называлось новой, и
+        // «читать» звучал старый текст — вместе с фразой, отложенной на паузе.
+        // Теперь смотрим на сам движок: он держит книгу, а просят другую —
+        // отпускаем прежнюю сразу (её звук гаснет вместе с плеером) и открываем
+        // новую с нуля.
+        val heldBook = ReaderEngine.book
+        val heldUri = if (heldBook != null) ReaderEngine.currentUri else null
+        val otherBook = requested != null && heldBook != null && requested != heldUri
+        if (!otherBook && liveUri != null && (requested == null || requested == liveUri)) {
             rejoinLiveReading()
         } else {
             // #38: «сердце» чтения — плеер, состояние, цикл, аудиофокус — живёт в
             // движке ReaderEngine. Окно лишь подключается к нему и рисует по его
             // событиям (см. ReaderEngine.Host). attach создаёт плеер и ставит
             // MediaSessionService.listener на команды движка.
-            if (liveUri != null) {
-                // Живую книгу бросаем ради другой: сначала фиксируем её место в
-                // записи (вдали от окна позиция шла вперёд только в prefs).
+            if (heldBook != null) {
+                // Прежнюю книгу бросаем ради другой (или окно переоткрывают без
+                // неё): сначала фиксируем её место в записи (вдали от окна позиция
+                // шла вперёд только в prefs), потом отпускаем движок целиком.
                 ReaderEngine.savePosition()
                 ReaderEngine.close()
             }
@@ -547,9 +598,17 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg5295: следом уровень «главы» кнопки гарнитуры переезжает в сам шаг
         // (читает уже перенесённый migrateReaderButtons ключ CH_NAV).
         migrateHeadsetStep()
+        // 28.09.2026: «умный шаг» убран — у тех, кто успел его назначить, переносим
+        // жест на «абзац», иначе он молча ничего бы не делал.
+        migrateSmartStep()
         // Возврат из экрана настроек: там могли поменять, какие элементы
         // читалки показывать, скорость и голос — применяем к живой книге.
         applyReaderUi()
+        // 29.09.2026: панель «Голос» остаётся открытой, пока режим ролей
+        // переключают в окне «Чтение по ролям» (оно встаёт поверх читалки).
+        // Строки и галочку берём из настроек заново: иначе панель показывала бы
+        // прежний режим, и следующее касание галочки переключало бы его не туда.
+        if (binding.voicePanel.visibility == View.VISIBLE) voicePicker?.refresh()
         // msg5220: имена и короткие подписи четырёх кнопок читалки — по их
         // текущим действиям (вернулись из читалки после долгого нажатия —
         // переименовываем).
@@ -688,7 +747,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // метаданных, метаданные — важнее имени файла. Для записи оно есть
         // всегда, так что окно не остаётся с label приложения даже у книг без
         // встроенного названия (например PDF).
-        if (rec != null) {
+        if (rec != null && ReaderEngine.book == null) {
             // msg4809/4811: в шапке название книги — заголовком, автор — второй
             // строкой ОТДЕЛЬНЫМ элементом (свайп вправо от названия). Имя окна —
             // только название: при входе объявляется книга.
@@ -699,6 +758,17 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             setTitle(line)
             headerAnnouncedAtOpen = true
             Diag.log(this, "a11y", "имя окна читалки (setTitle) = «$line»")
+        } else if (rec != null) {
+            // 29.09.2026: движок ещё держит книгу — имя новой в шапку НЕ ставим.
+            // Жалоба тестера «открылась новая книга, а кусок старой остался» в
+            // журнале выглядела ровно так: заголовок новой книги, а сохранялось и
+            // звучало место прежней. Имя поставит openBook, когда книга правда
+            // откроется (refreshChrome по фактической книге движка).
+            Diag.log(
+                this, "activity",
+                "движок ещё держит книгу «${ReaderEngine.currentName ?: "?"}» — " +
+                    "имя новой книги поставим после её открытия",
+            )
         }
     }
 
@@ -824,7 +894,39 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         return getString(R.string.book_format_unreadable, ext.uppercase(Locale.ROOT))
     }
 
+    /** Файла по адресу книги нет вовсе: книгу удалили, перенесли или переименовали,
+     *  а запись на полке осталась. Это НЕ «файл повреждён» — раньше на пропавшую
+     *  книгу отвечали общей фразой про формат (журнал Сергея 28.09.2026), и человек
+     *  шёл искать поломку там, где её нет. Причину отдаём текстом, чтобы [failOpen]
+     *  сказал её вместо общей; null — файл на месте или проверить нечем. */
+    private fun fileGoneReason(uri: Uri): String? = runCatching {
+        val name = currentName ?: uri.lastPathSegment ?: uri.toString()
+        when (uri.scheme) {
+            "file" -> {
+                val f = uri.path?.let { File(it) }
+                if (f != null && f.isFile) null else getString(R.string.book_file_missing, name)
+            }
+            // content:// (своя папка, чужой проводник): спрашиваем провайдера,
+            // откроется ли поток вовсе — читать при этом ничего не нужно.
+            "content" -> {
+                val ok = contentResolver.openInputStream(uri)?.use { true } ?: false
+                if (ok) null else getString(R.string.book_file_missing, name)
+            }
+            else -> null
+        }
+    }.getOrElse { getString(R.string.book_file_missing, currentName ?: uri.toString()) }
+
     private fun openBook(uri: Uri, chapter: Int, sentence: Int, rewindOnOpen: Boolean = false) {
+        // 29.09.2026: другой книге — другой звук, и сразу. Пока новая книга
+        // разбирается (тяжёлый PDF — секунды), прежняя не должна звучать: тестер
+        // слышал «кусок старой книги» уже после того, как открылась новая. Гасим
+        // звук до разбора; ниже, когда книга правда откроется, тот же stop идёт
+        // ещё раз — он уже ничего не делает, но пусть остаётся на месте.
+        if (book != null) {
+            playing = false
+            ReaderEngine.player?.stop()
+            Diag.log(this, "activity", "открываю книгу — прежнее чтение остановлено")
+        }
         // msg2679: новое открытие снимает неисполненное «Читать» прошлого раза.
         playWantedWhileLoading = false
         // msg2679: пока книга разбирается в фоне, кнопку «Читать» держим активной
@@ -860,11 +962,17 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // название). Имя окна уже несёт название (restoreSession → setTitle).
         Thread {
             val t0 = System.currentTimeMillis()
+            // Файла по адресу может не быть вовсе (книгу удалили или перенесли, а
+            // запись на полке осталась). Это НЕ «файл повреждён», и говорим мы об
+            // этом отдельной фразой — см. fileGoneReason.
+            lastOpenWhy = null
+            lastReadError = null
+            val gone = fileGoneReason(uri)
             val doc = try {
                 // msg3081+: тяжёлый разбор (большой PDF) кэшируем на диск. Первое
                 // открытие — разбор, повторное — готовый текст из кэша (BookCache.get
                 // сам проверяет, что файл книги не менялся).
-                BookCache.get(this, uri) ?: readBook(uri)
+                if (gone != null) null else BookCache.get(this, uri) ?: readBook(uri)
             } catch (_: Exception) {
                 null
             }
@@ -894,9 +1002,17 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 // «ReaderEngine не подключён» на плеере.
                 if (isDestroyed || isFinishing || ReaderEngine.player == null) return@post
                 if (doc == null) {
-                    failOpen(unreadableFormatMessage()
+                    Diag.log(this, "activity", "разбор не удался: ${lastOpenWhy ?: "без подробностей"}")
+                    failOpen(gone
+                        ?: unreadableFormatMessage()
                         ?: "Не удалось открыть: формат не поддерживается или файл повреждён")
                     return@post
+                }
+                // Разметка книги была сломана, и разбор пошёл только после починки
+                // (см. BookParser.repairBrokenTags): по этой строке в журнале видно,
+                // сколько таких книг приходит из сетевых библиотек.
+                if (BookParser.lastRepaired) {
+                    Diag.log(this, "activity", "разметка книги была сломана — открыл после починки: $currentName")
                 }
                 // PDF, который распознан, но текст не извлекается (скан/пароль) —
                 // показываем конкретную причину, а не общую ошибку (msg727-752).
@@ -1008,8 +1124,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 if (!headerAnnouncedAtOpen) {
                     binding.tvHeader.postDelayed({
                         if (book != null && !isFinishing) {
-                            Diag.log(this, "focus", "книга готова (названия заранее не было) — озвучиваю заголовок")
-                            TabNav.focusHeader(binding.tvHeader, 0)
+                            // 28.09.2026, по документации: имя окна читалки даёт имя
+                            // панели (его ставит setReaderHeader при каждой смене
+                            // названия) — диктор объявляет его сам. Свой перенос
+                            // фокуса на заголовок убран.
+                            Diag.log(this, "focus", "книга готова (названия заранее не было) — имя панели обновлено")
+                            setReaderHeader(docDisplayTitle() ?: getString(R.string.no_book), book?.author)
                         }
                     }, 300)
                 }
@@ -1052,10 +1172,22 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // PDF разбираем с диска (msg2619): читать большой файл в память целиком
         // нельзя — он разворачивался и валил приложение OOM ещё до разбора.
         if (name.lowercase(Locale.ROOT).endsWith(".pdf")) return readPdfDisk(uri)
-        val bytes = openBytes(uri) ?: return null
+        val bytes = openBytes(uri)
+        if (bytes == null) {
+            lastOpenWhy = "файл не прочитан: $lastReadError"
+            return null
+        }
         // Короткий блок в начале FB2 (титул, копирайт) пропускается всегда:
         // книга начинается с первой главы. Настройка убрана (msg4653).
-        return BookParser.parse(name, bytes)
+        val doc = BookParser.parse(name, bytes)
+        // Подробности для журнала: раньше и «файл не прочитан», и «разбор упал»
+        // давали одну фразу, и по логу нельзя было понять, что именно случилось
+        // (проверка 28.09.2026: не открывались две книги из чужого проводника).
+        if (doc == null) {
+            lastOpenWhy = "байт ${bytes.size}; строгий разбор FB2: ${BookParser.lastFb2Error ?: "не падал"}; " +
+                "починка: ${BookParser.lastRepairNote ?: "не пробовали"}"
+        }
+        return doc
     }
 
     /** PDF с диска (msg2619): файл не читаем в память целиком. Для content:// —
@@ -1089,12 +1221,45 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             val p = uri.path ?: return null
             return try {
                 java.io.File(p).readBytes()
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                lastReadError = "${e.javaClass.simpleName}: ${e.message}"
                 null
             }
         }
-        return contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        return try {
+            val stream = contentResolver.openInputStream(uri)
+            if (stream == null) {
+                lastReadError = "провайдер не отдал поток"
+                byRealPath(uri)
+            } else {
+                stream.use { it.readBytes() }
+            }
+        } catch (e: Exception) {
+            // Так бывает у файлов, отданных своим проводником (например
+            // com.mixplorer.silver.file): разрешения на такой адрес у нас нет.
+            lastReadError = "${e.javaClass.simpleName}: ${e.message}"
+            byRealPath(uri)
+        }
     }
+
+    /** Обходной путь для адресов своего проводника: Mixplorer отдаёт
+     *  `content://com.mixplorer.silver.file/528!/один/1.fb2` — «528» это том, а
+     *  дальше путь внутри него. Разрешения на такой адрес у нас нет, но с доступом
+     *  ко всем файлам книга лежит на месте, и её можно прочитать напрямую.
+     *  null — не наш случай или файла по пути нет. */
+    private fun byRealPath(uri: Uri): ByteArray? = runCatching {
+        if (!AllFiles.granted(this)) return@runCatching null
+        val tail = uri.path?.substringAfter("!/", "")?.takeIf { it.isNotEmpty() }
+            ?: return@runCatching null
+        for (root in listOf("/storage/emulated/0/", "/sdcard/")) {
+            val f = File(root + tail)
+            if (f.isFile) {
+                Diag.log(this, "activity", "книга прочитана по пути: ${f.absolutePath}")
+                return@runCatching f.readBytes()
+            }
+        }
+        null
+    }.getOrNull()
 
     /** msg6042: дозаполнить серию книги в записи полки. null — делать нечего:
      *  записи нет, она уже проверена (в том числе «проверено, серии нет»), формат
@@ -1434,6 +1599,104 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         return p.first to (first + i)
     }
 
+    /** Обстановка ленты для журнала: какие строки РАЗЛОЖЕНЫ (не только видны) и
+     *  какие видны. Нужна в строке о переносе фокуса: по ней видно, где стоял
+     *  обход диктора, когда фокус уехал на кнопку (29.09.2026). */
+    private fun ribbonState(): String {
+        var first = -1
+        var last = -1
+        for (i in 0 until layoutManager.childCount) {
+            val child = layoutManager.getChildAt(i) ?: continue
+            val pos = layoutManager.getPosition(child)
+            if (pos < 0) continue
+            if (first < 0 || pos < first) first = pos
+            if (pos > last) last = pos
+        }
+        return "разложено $first…$last, видно " +
+            "${layoutManager.findFirstVisibleItemPosition()}…" +
+            "${layoutManager.findLastVisibleItemPosition()} из ${adapter.itemCount}"
+    }
+
+    /** Показать предложение, на которое встал диктор (29.09.2026).
+     *
+     *  Просьба Сержа: «при достижении нижней границы текста прокручивал экран с
+     *  текстом, потому что иногда прокручивает, а иногда нет». Диктор, встав на
+     *  узел предложения, просит показать его на экране — ACTION_SHOW_ON_SCREEN
+     *  (см. [ParagraphView.onSentenceShow]). Узел виртуальный, «настоящего»
+     *  представления у предложения нет, поэтому платформа строку не двигает:
+     *  прокрутку заказываем сами и только тогда, когда предложение видно не
+     *  целиком.
+     *
+     *  Прокрутка считается УХОДОМ ПО ТЕКСТУ, как рука читателя: верхняя строка
+     *  экрана становится новым местом книги (решение Сержа 29.09.2026: «хочу
+     *  наоборот» — место чтения должно переезжать за обходом строк диктором).
+     *  Поэтому [markSelfScroll] здесь НЕ зовём: он как раз запрещает цели с ленты
+     *  менять место. Наша собственная авто-прокрутка за голосом по-прежнему
+     *  помечена и место не трогает. */
+    private fun showSentenceForA11y(chapter: Int, sentence: Int) {
+        val bk = book ?: return
+        if (chapter !in bk.chapters.indices) return
+        if (suppressScroll) return logShowSkip(-1, "идёт своя прокрутка")
+        val row = adapter.flatOf(chapter, sentence)
+        if (row < 0) return logShowSkip(-1, "строки для этого предложения нет")
+        val v = layoutManager.findViewByPosition(row) as? ParagraphView
+        if (v == null) {
+            // Строка ещё не разложена (переход далеко вперёд) — сначала к строке,
+            // предложение внутри покажет доводка.
+            Diag.log(
+                this, "a11y",
+                "диктор просит показать предложение главы $chapter, предл. $sentence: " +
+                    "строки $row на экране нет — прокручиваю к строке"
+            )
+            layoutManager.scrollToPosition(row)
+            binding.sentenceList.post { alignSentence(row, sentence) }
+            return
+        }
+        val first = adapter.firstInRow(row)
+        if (first < 0) return logShowSkip(row, "это строка-заголовок главы")
+        val top = v.top + v.sentenceTop(sentence - first)
+        val bottom = v.top + v.sentenceBottom(sentence - first)
+        if (top < 0 || bottom < 0) return logShowSkip(row, "не знаю места предложения в абзаце")
+        val above = binding.sentenceList.paddingTop
+        val below = binding.sentenceList.height - binding.sentenceList.paddingBottom
+        // Держим строку под фокусом НЕ У САМОЙ КРОМКИ, а с запасом в четверть
+        // экрана (29.09.2026). Жалоба Сержа: «прокручиваю текст дальше — фокус
+        // прыгает на верхние кнопки, а сверху вниз всё нормально». Причина, судя
+        // по всему, в том, что у самой кромки диктор берётся прокручивать ленту
+        // сам — и теряет фокус. Пусть лучше подкручиваем мы, заранее: тогда
+        // строка всегда стоит с видимым запасом текста сверху и снизу.
+        val edge = ((below - above) / 4).coerceAtLeast((24 * resources.displayMetrics.density).toInt())
+        val delta = when {
+            top < above + edge -> top - above - edge
+            bottom > below - edge -> bottom - below + edge
+            else -> 0
+        }
+        if (delta == 0) return logShowSkip(row, "предложение и так видно с запасом")
+        Diag.log(
+            this, "a11y",
+            "диктор встал на предложение главы $chapter, предл. $sentence " +
+                "(строка $row): показываю, сдвиг $delta"
+        )
+        binding.sentenceList.scrollBy(0, delta)
+    }
+
+    /** Почему предложение диктора не подкрутили — в журнал (29.09.2026). Жалоба
+     *  Сержа: «иногда прокручивает, а иногда нет». Пишем по разу на повод и с
+     *  обстановкой ленты: по строке видно и причину, и сколько строк вообще
+     *  разложено (это же и проверка запаса строк за краем экрана). */
+    private val showSkipsLogged = HashSet<String>()
+
+    private fun logShowSkip(row: Int, why: String) {
+        if (!showSkipsLogged.add(why)) return
+        Diag.log(
+            this, "a11y",
+            "предложение диктора не подкручиваю (строка $row): $why; " +
+                "разложено строк ${binding.sentenceList.childCount}, " +
+                "видно ${layoutManager.findFirstVisibleItemPosition()}…" +
+                "${layoutManager.findLastVisibleItemPosition()} из ${adapter.itemCount}"
+        )
+    }
+
     /** Пока читатель ведёт ленту рукой, помним верхнюю строку — она станет новым
      *  местом (msg4372). Наша авто-прокрутка за голосом цель не ставит: при ней
      *  читаемое предложение остаётся на экране, а условие — оно уехало вниз. */
@@ -1562,6 +1825,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private fun runGestureAction(act: String) {
         if (book == null) return
         when (act) {
+            // 28.09.2026 (просьба Сержа): при прыжке называем ТИП того, на что
+            // встали — «Абзац», «Заголовок», «Разделитель». Для ПРЕДЛОЖЕНИЙ слова
+            // нет нарочно: при листании по одному предложению «Предложение,
+            // предложение…» только болтало бы, а по строке места и так видно, что
+            // сдвинулись на единицу. Объявляется только на паузе (см.
+            // jumpAndAnnounce) — во время чтения диктор молчит.
             G_PREV_SENT -> jumpAndAnnounce { moveBySentence(-1) }
             G_NEXT_SENT -> jumpAndAnnounce { moveBySentence(+1) }
             // msg5234: прыжок — сразу N предложений в сторону; число у каждого
@@ -1572,14 +1841,35 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_NEXT_SENT_N -> jumpAndAnnounce {
                 moveBySentences(+1, jumpCount(prefs, forward = true))
             }
-            G_PREV_PARA -> jumpAndAnnounce { moveByParagraph(-1) }
-            G_NEXT_PARA -> jumpAndAnnounce { moveByParagraph(+1) }
-            G_PREV_CH -> jumpAndAnnounce { moveByChapter(-1, CH_NAV_CHAPTERS) }
-            G_NEXT_CH -> jumpAndAnnounce { moveByChapter(+1, CH_NAV_CHAPTERS) }
-            G_PREV_MAJOR -> jumpAndAnnounce { moveByChapter(-1, CH_NAV_MAJOR) }
-            G_NEXT_MAJOR -> jumpAndAnnounce { moveByChapter(+1, CH_NAV_MAJOR) }
-            G_PREV_HEADER -> jumpAndAnnounce { moveByChapter(-1, CH_NAV_ALL) }
-            G_NEXT_HEADER -> jumpAndAnnounce { moveByChapter(+1, CH_NAV_ALL) }
+            G_PREV_PARA -> jumpAndAnnounce(kindIfLineNames(R.string.a11y_para_word)) {
+                moveByParagraph(-1)
+            }
+            G_NEXT_PARA -> jumpAndAnnounce(kindIfLineNames(R.string.a11y_para_word)) {
+                moveByParagraph(+1)
+            }
+            G_PREV_CH -> jumpAndAnnounce(withTitle = true) { moveByChapter(-1, CH_NAV_CHAPTERS) }
+            G_NEXT_CH -> jumpAndAnnounce(withTitle = true) { moveByChapter(+1, CH_NAV_CHAPTERS) }
+            G_PREV_MAJOR -> jumpAndAnnounce(R.string.a11y_heading_word, withTitle = true) {
+                moveByChapter(-1, CH_NAV_MAJOR)
+            }
+            G_NEXT_MAJOR -> jumpAndAnnounce(R.string.a11y_heading_word, withTitle = true) {
+                moveByChapter(+1, CH_NAV_MAJOR)
+            }
+            G_PREV_HEADER -> jumpAndAnnounce(R.string.a11y_heading_word, withTitle = true) {
+                moveByChapter(-1, CH_NAV_ALL)
+            }
+            G_NEXT_HEADER -> jumpAndAnnounce(R.string.a11y_heading_word, withTitle = true) {
+                moveByChapter(+1, CH_NAV_ALL)
+            }
+            // 26.09.2026: шаг по разделителям («* * *») — для сборников, где глав
+            // в файле нет, а границы между вещами помечены только звёздочками.
+            // Слово «Разделитель» в объявлении говорит, что жест сработал.
+            G_PREV_SUB -> jumpAndAnnounce(kindIfLineNames(R.string.a11y_separator)) {
+                moveBySeparator(-1)
+            }
+            G_NEXT_SUB -> jumpAndAnnounce(kindIfLineNames(R.string.a11y_separator)) {
+                moveBySeparator(+1)
+            }
             // msg2547: свайп можно назначить на «Ничего не делать» — просто игнорируем.
             G_NONE -> {}
             G_PLAY -> togglePlay()
@@ -1597,10 +1887,18 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     /** Переход по жесту: если чтение не шло, озвучить, куда встали (при паузе
      *  свайп иначе «молчит», и не видно, сработал ли он). Если чтение шло —
      *  [goTo] сам продолжит его с новой позиции. */
-    private inline fun jumpAndAnnounce(move: () -> Unit) {
-        val wasPlaying = playing
+    private inline fun jumpAndAnnounce(
+        kindRes: Int? = null,
+        withTitle: Boolean = false,
+        move: () -> Unit,
+    ) {
         move()
-        if (!wasPlaying) announcePosition()
+        // Объявляем ТОЛЬКО если после прыжка книга молчит. Если чтение шло и
+        // продолжилось — молчим: голос диктора поверх синтезатора и был бы тем
+        // самым шумом, которого Серж опасается. Если прыжок сам завёл чтение
+        // (настройка «начинать чтение после прыжка»), тоже молчим — книжка
+        // скажет о своём месте сама.
+        if (!playing) announcePosition(kindRes, withTitle)
     }
 
     // ---------------- Навигация ----------------
@@ -1662,6 +1960,83 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (left == count) return
         goTo(ch, s)
         startAfterStep()
+    }
+
+    /** Шаг по разделителям-подзаголовкам: «* * *», «— — —», «...» (26.09.2026).
+     *
+     *  Зачем отдельный шаг. В сборниках анекдотов и рассказов глав в файле часто
+     *  нет вовсе (весь текст — одна секция FB2), а границы между вещами помечены
+     *  только строкой из звёздочек. Тогда «следующая глава» перескакивать некуда,
+     *  и такой шаг — единственный способ перейти к следующей вещи.
+     *
+     *  Идём ВПЕРЁД до ближайшего разделителя и встаём на строку ПОСЛЕ него: сам
+     *  разделитель читать незачем, он и так пропускается как строка без букв.
+     *  Назад — так же: находим предыдущий разделитель и встаём на начало той
+     *  вещи, что за ним. Границу ищем и в соседних главах, как шаг по абзацам. */
+    private fun moveBySeparator(delta: Int) {
+        val bk = book ?: return
+        if (delta > 0) {
+            var ch = chapterIdx
+            var s = sentenceIdx + 1
+            while (ch < bk.chapters.size) {
+                val cur = bk.chapters[ch].sentences
+                while (s < cur.size) {
+                    if (Roles.looksSeparator(cur[s].text)) {
+                        // Встаём на первую строку следующей вещи.
+                        var t = s + 1
+                        while (t < cur.size && Roles.looksSeparator(cur[t].text)) t++
+                        if (t < cur.size) {
+                            goTo(ch, t)
+                        } else if (ch + 1 < bk.chapters.size) {
+                            goTo(ch + 1, 0)
+                        } else {
+                            goTo(ch, s)
+                        }
+                        startAfterStep()
+                        return
+                    }
+                    s++
+                }
+                ch++
+                s = 0
+            }
+            return
+        }
+        // Назад идём к ПРЕДЫДУЩЕМУ куску. Ближайший разделитель позади — это
+        // граница, с которой начался ТЕКУЩИЙ кусок, поэтому его пропускаем и
+        // ищем следующий назад: он и есть начало предыдущего. Без этого «назад»
+        // вёл в начало текущего анекдота (жалоба Сержа 26.09.2026).
+        var ch = chapterIdx
+        var s = sentenceIdx - 1
+        var seenSeparator = false
+        while (ch >= 0) {
+            val cur = bk.chapters[ch].sentences
+            var prev = -1
+            while (s >= 0) {
+                if (Roles.looksSeparator(cur[s].text)) {
+                    if (seenSeparator) { prev = s; break }
+                    seenSeparator = true
+                }
+                s--
+            }
+            if (prev >= 0) {
+                var t = prev + 1
+                while (t < cur.size && Roles.looksSeparator(cur[t].text)) t++
+                goTo(ch, if (t < cur.size) t else prev)
+                startAfterStep()
+                return
+            }
+            ch--
+            if (ch >= 0) s = bk.chapters[ch].sentences.size - 1
+        }
+        // Разделитель позади был, а раньше него — ни одного: значит мы во ВТОРОМ
+        // куске, и «назад» ведёт в начало первого. Не было ни одного разделителя
+        // позади вовсе — идти некуда, остаёмся на месте (в обычной книге без
+        // звёздочек этот жест так и должен молчать).
+        if (seenSeparator && (chapterIdx != 0 || sentenceIdx != 0)) {
+            goTo(0, 0)
+            startAfterStep()
+        }
     }
 
     /** Шаг по «главам» ([mode] — по какому уровню ходим: [CH_NAV_MAJOR] — крупные
@@ -1906,6 +2281,44 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  кнопка) — в движке, ему стартовать нужно и при чтении без окна. */
     private fun startSpeakingCurrent() = ReaderEngine.startSpeakingCurrent()
 
+    /**
+     * 28.09.2026 (код 174): «умный шаг» попробовали и убрали — он сам выбирал, по
+     * чему идти, и выбор оказывался непредсказуемым (журнал Сержа: в сборнике
+     * анекдотов уходил по редким разделителям через десятки анекдотов, а в книге с
+     * двумя главами — по заголовкам, где идти было некуда).
+     *
+     *  У тех, кто успел назначить его на свайп, кнопку или гарнитуру, в настройках
+     *  остался бы несуществующий номер действия — такой жест молча ничего не делал
+     *  бы. Переносим на «Следующий/Предыдущий абзац»: ближайший по смыслу шаг, и в
+     *  настройках сразу видно, что стоит.
+     */
+    private fun migrateSmartStep() {
+        val gestures = mapOf("prev_smart" to G_PREV_PARA, "next_smart" to G_NEXT_PARA)
+        val keys = listOf(KEY_GESTURE_LEFT, KEY_GESTURE_RIGHT) +
+            READER_BUTTONS.flatMap { listOf(it.key, it.longKey) }
+        val e = prefs.edit()
+        var changed = false
+        for (k in keys) {
+            val v = prefs.getString(k, null) ?: continue
+            gestures[v]?.let {
+                e.putString(k, it)
+                changed = true
+            }
+        }
+        // Гарнитура: у неё свой список шагов, «умный» (значение "smart") становится
+        // «абзацем».
+        for (k in listOf(KEY_HS_PREV, KEY_HS_NEXT)) {
+            if (prefs.getString(k, null) == "smart") {
+                e.putString(k, HS_PARAGRAPH)
+                changed = true
+            }
+        }
+        if (changed) {
+            e.apply()
+            Diag.log(this, "nav", "умный шаг убран: перенёс назначенные жесты на абзац")
+        }
+    }
+
     // ---------------- UI ----------------
 
     /** displayTitle (msg2559) для окна ридера: ручное название из
@@ -1930,6 +2343,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val a = author?.takeIf { it.isNotBlank() }
         binding.tvHeaderAuthor.text = a.orEmpty()
         binding.tvHeaderAuthor.visibility = if (a == null) View.GONE else View.VISIBLE
+        // 28.09.2026, по документации: имя окна читалки — имя панели. Диктор
+        // объявляет его сам, когда панель появляется или меняется, поэтому отдельно
+        // уводить фокус на заголовок ради названия книги больше не нужно.
+        TabNav.namePane(binding.root, title)
     }
 
     private fun refreshChrome() {
@@ -2009,6 +2426,27 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         show(KEY_UI_MORE, binding.btnMore)
         show(KEY_UI_SPEED, binding.speedRow)
         show(KEY_UI_VOICE, binding.btnVoice)
+        // Панель «Голос» развёрнута на весь экран — соседей прячем СНОВА
+        // (29.09.2026). Это ответ на жалобу Сержа: «открываю из книги настройки
+        // голоса, а там в самом низу опять ползунок книги». applyReaderUi
+        // возвращает видимость по настройкам и про полноэкранную панель не знает:
+        // он и перекрывал её при каждом onStart, то есть при возврате в книгу из
+        // окна «Реплики» или из Настроек.
+        if (voiceFullscreen) hideForVoicePanel()
+    }
+
+    /** Спрятать всё, кроме панели голоса: шапку, значок «⋮», кнопки поиска и
+     *  закладки, место в книге, ползунок книги, статистику, скорость, главы и
+     *  нижний ряд — и список предложений. Соседи скрываются СВОИМ значением
+     *  (какое было видно до шторки), поэтому восстановление возвращает картину
+     *  как была, а настройки показа применяются следом ([exitVoiceFullscreen]). */
+    private fun hideForVoicePanel() {
+        val root = binding.root as LinearLayout
+        for (i in 0 until root.childCount) {
+            val v = root.getChildAt(i)
+            if (v !== binding.voiceArea) v.visibility = View.GONE
+        }
+        binding.sentenceList.visibility = View.GONE
     }
 
     /** Подпись текущей скорости над рядом кнопок «Медленнее/Быстрее». */
@@ -2280,8 +2718,30 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     /** Проговорить, куда прыгнули (оглалвление/слайдер) — TalkBack читает
      *  строку позиции, даже если фокус остался на кнопке. */
-    private fun announcePosition() {
-        val txt = binding.tvPosition.text?.toString().orEmpty()
+    /** Слово о типе строки — только если в настройках включены «Названия строк в
+     *  тексте» (29.09.2026). Выключено — переходам слова не достаётся, но место
+     *  всё равно объявляется: видно, что жест сработал. */
+    private fun kindIfLineNames(res: Int): Int? =
+        if (prefs.getBoolean(KEY_LINE_NAMES, true)) res else null
+
+    /** Объявить место, куда встали. [kindRes] — слово о ТИПЕ границы
+     *  («Разделитель», «Заголовок»): по нему слышно, сработал ли жест, ведь
+     *  сама строка места одинакова после любого прыжка. [withTitle] — добавить
+     *  название главы (для прыжков по главам и заголовкам). */
+    private fun announcePosition(kindRes: Int? = null, withTitle: Boolean = false) {
+        val place = binding.tvPosition.text?.toString().orEmpty()
+        val title = if (withTitle) {
+            book?.chapters?.getOrNull(chapterIdx)?.title?.trim().orEmpty()
+        } else {
+            ""
+        }
+        val head = kindRes?.let { getString(it) }
+        val body = listOf(place, title).filter { it.isNotBlank() }.joinToString(", ")
+        val txt = when {
+            head == null -> body
+            body.isBlank() -> head
+            else -> "$head. $body"
+        }
         if (txt.isNotBlank()) binding.sentenceList.announceForAccessibility(txt)
     }
 
@@ -3434,6 +3894,89 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         return t.replace(Regex("\\s+"), " ").trim()
     }
 
+    // ---------- Умные замены: «убрать такие строки» (28.09.2026) ----------
+
+    /**
+     * «Убрать такие строки» из меню действий диктора: владелец показывает мусорную
+     * строку, а приложение ищет по книге похожие и собирает правило, которое их
+     * убирает ([DictSmart]).
+     *
+     * Ищем в фоне (проход по всей книге), затем спрашиваем: показываем число и
+     * примеры — вслепую соглашаться нельзя. Правило сохраняется КНИЖНЫМ: оно
+     * сработает только в этой книге и уйдёт вместе с ней.
+     */
+    private fun dropSimilarLines(ch: Int, s: Int) {
+        val bk = book ?: return
+        val sample = sentenceTextAt(ch, s)
+        if (sample.isEmpty()) {
+            toast(getString(R.string.dict_need_find))
+            return
+        }
+        val bookName = currentName
+        if (bookName.isNullOrBlank()) {
+            toast(getString(R.string.dict_drop_nobook))
+            return
+        }
+        toast(getString(R.string.dict_drop_searching))
+        Thread {
+            val found = DictSmart.find(bk, bookName, sample)
+            handler.post {
+                if (isFinishing || isDestroyed) return@post
+                if (found == null) {
+                    Diag.log(this, "dict", "умная замена: похожих строк не нашлось для «$sample»")
+                    toast(getString(R.string.dict_drop_none))
+                    return@post
+                }
+                askDrop(found, bookName)
+            }
+        }.start()
+    }
+
+    /** Окно подтверждения: сколько строк уберём и как они выглядят. */
+    private fun askDrop(found: DictSmart.Found, bookName: String) {
+        val examples = found.examples.joinToString("; ")
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.dict_drop_title))
+            .setMessage(getString(R.string.dict_drop_ask, found.count, examples))
+            .setPositiveButton(R.string.dict_drop_go) { _, _ ->
+                Dict.addBookRule(this, found.rule)
+                Diag.log(
+                    this, "dict",
+                    "умная замена: правило для книги «$bookName» на ${found.count} строк: ${found.rule.find}"
+                )
+                toast(getString(R.string.dict_drop_done, found.count))
+            }
+            .setNeutralButton(R.string.dict_drop_more) { _, _ -> showDropExamples(found) }
+            .setNegativeButton(R.string.dialog_cancel, null)
+            .show()
+    }
+
+    /** Показать найденные строки списком — прослушать перед согласием. */
+    private fun showDropExamples(found: DictSmart.Found) {
+        val items = found.examples.mapIndexed { i, t -> "${i + 1}. $t" }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.dict_drop_examples, found.count))
+            .setItems(items, null)
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** «Добавить в словарь» из меню действий диктора (27.09.2026): открываем
+     *  правило словаря, отдав ему текст предложения, — из него приложение
+     *  предложит слова флажками, чтобы слово не диктовать заново. */
+    private fun openDictForSentence(ch: Int, s: Int) {
+        val text = sentenceTextAt(ch, s)
+        if (text.isEmpty()) {
+            toast(getString(R.string.dict_need_find))
+            return
+        }
+        Diag.log(this, "dict", "добавить в словарь из книги: глава ${ch + 1}, предл. $s")
+        startActivity(
+            Intent(this, DictRuleActivity::class.java)
+                .putExtra(DictRuleActivity.EXTRA_SENTENCE, text)
+        )
+    }
+
     // ---------- Диалог «Голос чтения»: ползунки + движок → голоса (#1099/#1102/#1141) ----------
 
     /** Ползунок скорости/тона в диалогах ридера — те же значения (список [values]
@@ -3492,12 +4035,24 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         container.addView(seek, sliderLp())
     }
 
+    /** Отступ ползунка в панели — как bottomMargin у ползунков настроек. */
+    private fun sliderLp(): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp2px(6f) }
+
     /** Ползунок громкости чтения (0..100%) в диалогах ридера. Хранится Float 0..1
      *  в общем KEY_VOLUME — единый с Настройками → «Голос» (SettingsActivity.addVolumeSlider). */
-    private fun addVolumeSliderTo(container: LinearLayout, apply: (Float) -> Unit) {
-        val startP = Math.round(prefs.getFloat(KEY_VOLUME, 1f) * 100).coerceIn(0, 100)
+    private fun addVolumeSliderTo(
+        container: LinearLayout,
+        key: String = KEY_VOLUME,
+        labelRes: Int = R.string.volume_value,
+        apply: (Float) -> Unit,
+    ) {
+        val startP = Math.round(prefs.getFloat(key, 1f) * 100).coerceIn(0, 200)
         val label = TextView(this).apply {
-            text = getString(R.string.volume_value, startP)
+            text = getString(labelRes, startP)
             textSize = 17f
             setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp2px(2f))
@@ -3506,7 +4061,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
         val cd = getString(R.string.volume_cd)
         val seek = SeekBar(this).apply {
-            max = 100
+            max = 200
             progress = startP
             contentDescription = cd
         }
@@ -3521,7 +4076,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 val v = progress / 100f
                 apply(v)
                 announce(progress)
-                label.text = getString(R.string.volume_value, progress)
+                label.text = getString(labelRes, progress)
             }
 
             override fun onStartTrackingTouch(sb: SeekBar?) {}
@@ -3529,13 +4084,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         })
         container.addView(seek, sliderLp())
     }
-
-    /** Отступ ползунка в диалоге — как bottomMargin у ползунков настроек. */
-    private fun sliderLp(): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp2px(6f) }
 
     // Включена ли в открытой шторке галочка «Запомнить для этой книги» — нужна
     // при закрытии шторки, чтобы зафиксировать профиль книги.
@@ -3611,6 +4159,31 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         override fun langApplied(code: String) {
             // Язык в панели читалки — только фильтр списка голосов: в настройки
             // он уйдёт при закрытии панели вместе с выбранным голосом (#70).
+        }
+
+        override fun openReplyWindow() {
+            // Окно одно на оба входа: из книги оно открывается поверх читалки, и
+            // «назад» из него возвращает в книгу (окно просто закрывается).
+            startActivity(Intent(this@MainActivity, ReplyVoiceActivity::class.java))
+        }
+
+        /** Галочка «Чтение по ролям» в панели «Голос» (29.09.2026).
+         *
+         *  Роли переключаются НА ХОДУ: отдаём живому плееру новые настройки и
+         *  перечитываем текущее предложение — иначе разницу было бы слышно
+         *  только со следующей фразы, а с выключенными ролями ещё и не сразу
+         *  понятно, сработало ли. */
+        override fun replyToggled(on: Boolean) {
+            Diag.log(
+                this@MainActivity, "tts",
+                "роли: ${if (on) "включены" else "выключены"} галочкой в панели голоса"
+            )
+            ReaderEngine.player?.setReplyVoice(
+                on,
+                prefs.getString(MainActivity.KEY_REPLY_ENGINE, null),
+                prefs.getString(MainActivity.KEY_REPLY_VOICE, null),
+            )
+            if (book != null) ReaderEngine.restartAfterSwitch()
         }
 
         override fun redraw() = Unit
@@ -3698,6 +4271,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             if (player.isReady) player.volume = v
         }
 
+        // «По ролям» с галочкой рядом — внизу набора (просьба Сержа 29.09.2026).
+        body.addView(picker.replyBlock())
+
+        // Словарь произношения — той же строкой, что в Настройках → «Голос»
+        // (VoicePicker.dictRow): параметры голоса в обоих входах одинаковые.
+        body.addView(picker.dictRow())
+
         // Галочка «Запомнить для этой книги» с подсказкой — тоже из набора.
         picker.addRemember(body)
 
@@ -3761,6 +4341,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 v.visibility = View.GONE
             }
         }
+        // Список предложений живёт внутри voiceArea, поэтому его прячем отдельно
+        // (и запоминаем — вернуть надо тем же значением).
         voiceSavedViews.add(binding.sentenceList to binding.sentenceList.visibility)
         binding.sentenceList.visibility = View.GONE
         binding.voicePanel.layoutParams =
@@ -3776,6 +4358,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         voiceFullscreen = false
         for ((v, vis) in voiceSavedViews) v.visibility = vis
         voiceSavedViews.clear()
+        // Возвращаем картину по НАСТРОЙКАМ показа: пока шторка была открыта,
+        // настройки могли поменять (ушли в «Реплики» или в Настройки), и простое
+        // возвращение прежних значений показало бы устаревшее.
+        applyReaderUi()
         binding.voicePanel.layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -3863,6 +4449,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
          *  голос выбран, а язык в строке «Язык» — пусто. Код ISO 639-2 («rus»). */
         internal const val KEY_VOICE_LANG = "voice_lang"
 
+        /** Реплики другим голосом (26.09.2026). Ключи свои: у реплик отдельный
+         *  голос и, если человек так захотел, отдельный движок. */
+        internal const val KEY_REPLY_ON = "reply_on"
+        internal const val KEY_REPLY_ENGINE = "reply_engine"
+        internal const val KEY_REPLY_LANG = "reply_lang"
+        internal const val KEY_REPLY_VOICE = "reply_voice"
+        internal const val KEY_REPLY_SPEED = "reply_speed"
+        internal const val KEY_REPLY_PITCH = "reply_pitch"
+        internal const val KEY_REPLY_VOLUME = "reply_volume"
+
         /** msg5726: голос, выбранный КОНКРЕТНОМУ движку (префикс ключа, дальше
          *  пакет движка). Раньше голос был один на всё приложение: сменил движок
          *  — строка «Голос» показывала имя голоса прошлого движка, которого у
@@ -3898,6 +4494,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_LONG_LOAD_ANNOUNCE = "long_load_announce"
         internal const val KEY_AUTO_RESUME = "auto_resume"
         internal const val KEY_SAY_CHAPTER_START = "say_chapter_start"
+        // «Названия строк в тексте» (29.09.2026, просьба Сержа): называть ли
+        // «Абзац» и «Разделитель» при обходе текста и при переходах. По умолчанию
+        // включено. Выключенное — мы молчим: ни при свайпах по тексту, ни на
+        // прыжках по абзацам и разделителям. Пометка «заголовок» у названий глав
+        // этой настройке не подчиняется: её слово говорит сам диктор, и по ней же
+        // он умеет ходить своим переходом по заголовкам.
+        internal const val KEY_LINE_NAMES = "say_line_names"
         internal const val KEY_STEP = "step"
         internal const val STEP_SENTENCE = "sentence"
         internal const val STEP_PARAGRAPH = "paragraph"
@@ -4134,6 +4737,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val G_NEXT_MAJOR = "next_major"
         internal const val G_PREV_HEADER = "prev_header"
         internal const val G_NEXT_HEADER = "next_header"
+
+        /** Шаг по разделителям-подзаголовкам: «* * *», «— — —», «...»
+         *  (26.09.2026). Нужен там, где в файле нет глав, а границы между
+         *  рассказами или анекдотами помечены только такой строкой. */
+        internal const val G_PREV_SUB = "prev_sub"
+        internal const val G_NEXT_SUB = "next_sub"
         // msg5234: прыжок — шаг сразу на N предложений (число из настроек).
         internal const val G_PREV_SENT_N = "prev_sent_n"
         internal const val G_NEXT_SENT_N = "next_sent_n"
@@ -4158,6 +4767,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_PREV_MAJOR to R.string.g_action_prev_major,
             G_NEXT_HEADER to R.string.g_action_next_header,
             G_PREV_HEADER to R.string.g_action_prev_header,
+            G_NEXT_SUB to R.string.g_action_next_sub,
+            G_PREV_SUB to R.string.g_action_prev_sub,
             G_NEXT_SENT to R.string.g_action_next_sent,
             G_PREV_SENT to R.string.g_action_prev_sent,
             // msg5234: прыжок — рядом с соседями по смыслу (шаг по предложениям),
@@ -4264,6 +4875,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_NEXT_MAJOR -> R.string.btn_short_next_major
             G_PREV_HEADER -> R.string.btn_short_prev_header
             G_NEXT_HEADER -> R.string.btn_short_next_header
+            G_PREV_SUB -> R.string.btn_short_prev_sub
+            G_NEXT_SUB -> R.string.btn_short_next_sub
             G_PLAY -> R.string.btn_short_play
             G_PAUSE -> R.string.btn_short_pause
             G_REPEAT -> R.string.btn_short_repeat

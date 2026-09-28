@@ -274,6 +274,10 @@
     <string name="dl_cancel">Отменить</string>
     <string name="dl_cancelled">Скачивание отменено</string>
     <string name="dl_notif_done">Скачано, книга в библиотеке</string>
+    <!-- Кнопка на карточке итога (26.09.2026): жалоба «уведомление висит и
+         убрать нечем». Карточку можно и смахнуть, и убрать этой кнопкой, а
+         касание ведёт на полку. -->
+    <string name="dl_dismiss">Убрать</string>
     <string name="dl_need_login">Книга отдаётся после входа в библиотеку. Войди в неё и попробуй снова.</string>
     <string name="catalog_already">„%1$s“ уже в библиотеке</string>
 
@@ -487,6 +491,25 @@
     </plurals>
     <string name="g_action_next_header">Следующий заголовок</string>
     <string name="g_action_prev_header">Предыдущий заголовок</string>
+    <!-- 26.09.2026: шаг по разделителям-подзаголовкам («* * *», «— — —», «...»).
+         Нужен в сборниках, где глав в файле нет, а границы между вещами
+         помечены только такой строкой. -->
+    <string name="g_action_next_sub">Следующий разделитель</string>
+    <string name="g_action_prev_sub">Предыдущий разделитель</string>
+    <!-- Так диктор называет строку-разделитель («* * *») при обходе текста:
+         слышно, что это граница куска, а не мусор (26.09.2026). -->
+    <string name="a11y_separator">Разделитель</string>
+    <!-- Так диктор называет заголовок главы при объявлении места после прыжка. -->
+    <string name="a11y_heading_word">Заголовок</string>
+    <!-- Слово о типе того, на что встали после прыжка (28.09.2026, просьба Сержа):
+         без него не понять, что именно делает свайп — в книге с бедной разметкой
+         «следующий абзац» от «следующего заголовка» на слух не отличить. Для
+         предложений слова нет нарочно: при листании по одному оно только болтало
+         бы. Заголовок и разделитель называют себя так же, как раньше. -->
+    <string name="a11y_para_word">Абзац</string>
+    <!-- Карта прыжков в «Управлении»: чем «глава» отличается от «заголовка» и
+         «разделителя» (26.09.2026, вопрос Сержа). -->
+    <string name="controls_jumps_hint">Прыжки: «глава» — по оглавлению книги; «заголовок» — по всем его уровням, включая вложенные; «разделитель» — по строкам вроде «* * *», которыми в сборниках отделяют рассказы и анекдоты, когда глав в файле нет; «абзац» и «предложение» — по тексту внутри главы.</string>
     <!-- msg5220: короткая видимая надпись на кнопке читалки — своя у каждого
          действия (влезает в прежнюю ширину кнопок). -->
     <string name="btn_short_prev_sent">Пред.</string>
@@ -499,6 +522,8 @@
     <string name="btn_short_next_major">Разд. ▶</string>
     <string name="btn_short_prev_header">◀ Заг.</string>
     <string name="btn_short_next_header">Заг. ▶</string>
+    <string name="btn_short_prev_sub">◀ Звёзд.</string>
+    <string name="btn_short_next_sub">Звёзд. ▶</string>
     <!-- msg5234: у прыжка на кнопке короткая подпись с числом — «+15»/«−15»;
          в прежнюю ширину кнопок длинное название прыжка не влезло бы. -->
     <string name="btn_short_jump_next">+%1$d</string>
@@ -652,6 +677,24 @@
     <string name="tone_value">Тон: %1$s</string>
     <string name="volume_value">Громкость: %1$d%%</string>
     <string name="volume_cd">Громкость</string>
+    <!-- Свои ползунки реплик (26.09.2026): появляются, когда «По ролям» включено.
+         Значения независимы от книжных: скорость и тон уходят в репликовый
+         синтезатор, громкость — нашему плееру на репликовой фразе. -->
+    <string name="reply_speed_value">Скорость реплик: %1$s</string>
+    <string name="reply_tone_value">Тон реплик: %1$s</string>
+    <string name="reply_volume_value">Громкость реплик: %1$d%%</string>
+    <string name="reply_speed_cd">Скорость реплик</string>
+    <string name="reply_tone_cd">Тон реплик</string>
+    <string name="reply_volume_cd">Громкость реплик</string>
+    <!-- Окно «Чтение по ролям» (26.09.2026): одно на оба входа — из Настроек и
+         из панели «Голос» в книге. Внутри: предупреждение, режим, голос реплик
+         и три ползунка. В общем списке «Голос» остаётся одна строка-переход. -->
+    <string name="reply_window_title">Чтение по ролям</string>
+    <string name="reply_mode_row">Реплики</string>
+    <!-- Кнопка в окне реплик — как «Читать» в читалке: читает пробу репликовым
+         голосом, чтобы услышать выбор (26.09.2026). -->
+    <string name="reply_read">Читать</string>
+    <string name="voice_reply_engine_fail">Не удалось запустить голосовой движок</string>
     <string name="voice_engine_title">Голос и движок</string>
     <string name="voice_engine_value">Голос и движок…</string>
     <!-- msg5632/msg5640: первая строка набора «Голос чтения» — одна и та же.
@@ -675,6 +718,29 @@
     <string name="voice_lang_row">Язык</string>
     <string name="voice_voice_row">Голос</string>
     <string name="voice_row_value">%1$s: %2$s</string>
+
+    <!-- Реплики другим голосом (26.09.2026). Строка режима и строка голоса
+         стоят сразу под «Голосом»: реплики — это тот же выбор голоса, только
+         для прямой речи. Голос реплик может быть у другого движка. -->
+    <string name="voice_reply_row">По ролям</string>
+    <!-- 29.09.2026 (просьба Сержа): галочка стоит сразу под строкой «По ролям» —
+         свайп со строки попадает на неё, и одно касание включает или выключает
+         роли. Своего «включено» мы не добавляем: состояние называет сам флажок
+         («отмечено» / «не отмечено»), как у правил словаря. -->
+    <string name="voice_reply_check">Чтение по ролям</string>
+    <string name="voice_reply_row_exp">По ролям (эксперимент)</string>
+    <string name="voice_reply_off">выключено</string>
+    <string name="voice_reply_other">реплики другим голосом</string>
+    <string name="voice_reply_voice_row">Голос реплик</string>
+    <string name="voice_reply_engine_title">Движок для реплик</string>
+    <string name="voice_reply_voice_title">Голос реплик, язык %1$s</string>
+    <!-- Предупреждение под строками реплик: настройка опытная, обещать за неё
+         нельзя. Читается диктором там же, где её включают. -->
+    <string name="voice_reply_hint">Опытная настройка: второй движок может не подняться — тогда читает основной.</string>
+    <!-- 26.09.2026: альтернативный способ озвучки (фразу целиком читает движок)
+         несовместим с репликами: у нас нет файла, значит нет ни второго движка,
+         ни обрезки паузы, ни выравнивания громкости. Говорим одной строкой. -->
+    <string name="reply_alt_voice_hint">Реплики другим голосом здесь не работают.</string>
     <string name="voice_engine_system">системный</string>
     <string name="voice_lang_unset">не выбран</string>
     <string name="voice_pick_lang">Язык голосов</string>
@@ -704,6 +770,13 @@
     <string name="chapter_start_on">Озвучка названия главы включена</string>
     <string name="chapter_start_off">Озвучка названия главы выключена</string>
 
+    <!-- 29.09.2026 (просьба Сержа): одно слово на структуру текста — «Абзац» и
+         «Разделитель». Правило про абзац из одного предложения живёт в коде
+         (ParagraphView.sentenceCount): такое слово на каждой строке сборников
+         анекдотов было шумом. -->
+    <string name="line_names_title">Названия строк в тексте</string>
+    <string name="line_names_hint">Диктор говорит «Абзац», когда начинается абзац из нескольких предложений, и «Разделитель» на строках вроде «* * *». Выключи, если это лишнее: текст пойдёт без этих слов.</string>
+
     <string name="start_screen_title">Стартовый экран</string>
     <string name="start_screen_dialog">При открытии приложения показывать</string>
     <!-- Значения — в именительном падеже: они подставляются и в строку-резюме
@@ -722,7 +795,7 @@
     <!-- 0.4.86 (msg7025): объяснение было абзацем на девять строк и читалось
          отдельной остановкой. Оставили суть: что делает, чем платим, что это
          проба. -->
-    <string name="alt_voice_hint">Фразу целиком читает движок, а не читалка: он может заговорить быстрее, но на стыке предложений возможны зазоры. Включи и сравни на слух — галочка пробная, по умолчанию выключена.</string>
+    <string name="alt_voice_hint">Читает сам движок: быстрее, но с зазорами. Роли и выравнивание звука здесь не работают. Сетевой движок, который не отдаёт готовые файлы, переключается сюда сам.</string>
     <string name="scroll_on">Прокрутка к читаемому включена</string>
     <string name="scroll_off">Прокрутка к читаемому выключена</string>
 
@@ -805,6 +878,7 @@
     <string name="book_info_annotation_none">Аннотации в файле нет</string>
     <string name="book_share_missing">Файла книги больше нет на устройстве</string>
     <string name="book_share_failed">Не удалось отправить файл — книга лежит в недоступном месте</string>
+    <string name="book_file_missing">Файл книги не найден: %1$s. Запись на полке осталась, а файла по этому адресу нет — книгу надо скачать заново или убрать её с полки</string>
     <string name="book_delete_title">Удалить из библиотеки</string>
     <string name="book_delete_msg">Удалить „%1$s“ из библиотеки и сам файл с устройства? Это необратимо.</string>
     <string name="book_delete_yes">Удалить</string>
@@ -1015,6 +1089,19 @@
     <string name="sync_err_write">Не получилось записать файл синхронизации в папку</string>
     <string name="sync_need_folder">Сначала выбери папку синхронизации — ту же, что на втором устройстве</string>
     <string name="sync_dir_yandex">Яндекс.Диск, папка приложения</string>
+    <string name="sync_dir_google">Google Диск, папка приложения</string>
+    <string name="sync_cloud_used">Синхронизация идёт через %1$s — папка не нужна</string>
+    <!-- 28.09.2026: место синхронизации выбирает владелец. Раньше приложение
+         решало само, а подсказки оставались яндексовыми — человек читал про
+         Яндекс.Диск, а файл уезжал в Google. -->
+    <string name="sync_place_title">Куда синхронизировать</string>
+    <string name="sync_place_folder">Папка на телефоне или в облаке</string>
+    <string name="sync_place_mark"> — выбрано</string>
+    <string name="sync_cloud_lost">%1$s: вход потерян, синхронизация не пошла — войди заново в настройках</string>
+    <!-- Обмен файлом вручную: одна строка вместо двух кнопок и подсказки
+         (28.09.2026, просьба Сержа — подраздел компактнее). -->
+    <string name="sync_manual_row">Вручную файлом</string>
+    <string name="sync_manual_row_hint">если облака нет: отправить файл себе и забрать его на втором устройстве</string>
     <string name="yandex_title">Яндекс.Диск</string>
     <string name="yandex_on">подключён (%1$s)</string>
     <string name="yandex_on_plain">подключён</string>
@@ -1027,6 +1114,26 @@
     <string name="yandex_login_fail">Войти в Яндекс не получилось</string>
     <string name="yandex_no_token">Яндекс.Диск не подключён</string>
     <string name="yandex_need_login">Яндекс требует войти заново — нажми строку «Яндекс.Диск»</string>
+    <!-- Вход в Google Диск (28.09.2026). Второй облачный сервис рядом с Яндексом:
+         у людей за границей Яндекс закрыт, а аккаунт Google есть почти у всех.
+         Окно входа показывает сама библиотека Google — браузерный вход Google
+         для Android-приложений запрещает. -->
+    <string name="google_title">Google Диск</string>
+    <string name="google_on">подключён (%1$s)</string>
+    <string name="google_off_state">не подключён, нажми, чтобы войти</string>
+    <string name="google_off">Отключить Google Диск</string>
+    <string name="google_off_done">Google Диск отключён</string>
+    <string name="google_opening">Открываю окно входа в Google</string>
+    <string name="google_login_ok">Вход в Google выполнен, доступ к папке приложения есть</string>
+    <string name="google_login_fail">Войти в Google не получилось</string>
+    <string name="google_no_play">На телефоне нет сервисов Google — вход в Google Диск невозможен. Подойдёт Яндекс.Диск, папка или WebDAV</string>
+    <string name="google_no_token">Google Диск не подключён</string>
+    <string name="google_need_login">Google требует войти заново — нажми строку «Google Диск»</string>
+    <string name="google_check">Проверить доступ к Google Диску</string>
+    <string name="google_check_ok">Доступ к папке приложения на Google Диске есть</string>
+    <string name="google_check_fail">Проверка не прошла: %1$s</string>
+    <string name="google_err">Google Диск: %1$s</string>
+    <string name="google_consent_asking">Google просит подтвердить доступ — открываю его экран</string>
     <string name="yandex_err">Яндекс.Диск: %1$s</string>
     <string name="yandex_used">Синхронизация идёт через Яндекс.Диск — папка не нужна</string>
 
@@ -1034,25 +1141,28 @@
          мегабайты, и решать про них владелец должен сам. Строка «Книги на
          Диске» — забор; он всегда рукой владельца, автоматически не тянем. -->
     <string name="sync_books_title">Переносить и книги</string>
-    <string name="sync_books_hint">Книги уходят в папку приложения на Яндекс.Диске и заливаются по одной — при слабой сети это долго. Забрать книги на втором устройстве можно строкой ниже; места чтения подтянутся сами. Удалённая книга уходит с полки и на втором устройстве, а её файл на Диске переезжает в папку «BookVoice — удалённое».</string>
+    <string name="sync_books_hint">Книги уходят в служебную папку приложения в облаке (туда, куда выбрана синхронизация) и заливаются по одной — при слабой сети это долго. Книги из облака забираются строкой выше; места чтения подтянутся сами. Убранная с полки книга помечается в облаке удалённой: файл не стирается, и на втором устройстве книга тоже уходит с полки.</string>
     <string name="sync_books_need_yandex">Сначала войди в Яндекс.Диск — без него книги не поедут</string>
+    <string name="sync_books_need_cloud">Сначала войди в облако — в Яндекс.Диск или в Google Диск: без этого книги не поедут</string>
     <string name="sync_books_counting">Считаю книги…</string>
-    <string name="sync_books_checking">Смотрю, что есть на Диске…</string>
-    <string name="sync_books_check">Книги на Диске: нажми, чтобы проверить</string>
-    <string name="sync_books_none">Книги на Диске: новых нет</string>
-    <string name="sync_books_get">Книги на Диске: %1$d, забрать</string>
-    <string name="sync_books_all_there">Все твои книги уже на Диске — заливать нечего</string>
-    <string name="sync_books_none_toast">Новых книг на Диске нет</string>
+    <string name="sync_books_checking">Смотрю, что есть в облаке…</string>
+    <string name="sync_books_check">Книги в облаке: нажми, чтобы проверить</string>
+    <string name="sync_books_none">Книги в облаке: новых нет</string>
+    <string name="sync_books_get">Книги в облаке: %1$d, забрать</string>
+    <string name="sync_books_all_there">Все твои книги уже в облаке — заливать нечего</string>
+    <string name="sync_books_none_toast">Новых книг в облаке нет</string>
     <string name="sync_books_list_fail">Список книг не получен: %1$s</string>
-    <string name="sync_books_ask">Залить на Диск? Книги уходят по одной — при слабой сети это долго.</string>
+    <string name="sync_books_ask">Залить книги в облако? Книги уходят по одной — при слабой сети это долго.</string>
     <string name="sync_books_go">Залить</string>
     <string name="sync_books_what">%1$s, всего %2$s</string>
     <string name="sync_books_pushing">Заливаю книг: %1$d</string>
     <string name="sync_books_pushed">Залито книг: %1$d</string>
+    <string name="sync_books_pushed_part">Залито книг: %1$d, не залилось: %2$d</string>
+    <string name="sync_books_failed">Не залилось книг: %1$d</string>
     <string name="sync_books_push_fail">Не вышло залить: %1$s</string>
     <string name="sync_books_up_fail">книга «%1$s»: %2$s</string>
     <string name="sync_books_no_read">книга «%1$s» не читается с телефона</string>
-    <string name="sync_books_pull_ask">Забрать с Диска? %1$s</string>
+    <string name="sync_books_pull_ask">Забрать из облака? %1$s</string>
     <string name="sync_books_size_unknown">размер неизвестен</string>
     <string name="sync_books_pull_go">Забрать</string>
     <string name="sync_books_pulling">Забираю книг: %1$d</string>
@@ -1061,14 +1171,22 @@
     <string name="sync_books_down_fail">книга «%1$s»: %2$s</string>
     <string name="sync_books_busy">Перенос книг уже идёт — подожди</string>
     <string name="sync_gone">Убрано с полки по удалению с другого устройства: %1$d</string>
-    <string name="sync_moved">На Диске убрано в «удалённое»: %1$d</string>
+    <string name="sync_moved">В облаке помечено удалённым: %1$d</string>
     <plurals name="sync_books_n">
         <item quantity="one">%1$d книга</item>
         <item quantity="few">%1$d книги</item>
         <item quantity="many">%1$d книг</item>
         <item quantity="other">%1$d книг</item>
     </plurals>
-
+    <!-- Записи, за которыми нет файла, убираются с полки сами (28.09.2026, просьба
+         Сержа: «без всяких подтверждений»). Об этом говорим словами: книга с полки
+         исчезла не сама, и молчание выглядело бы поломкой. -->
+    <plurals name="shelf_dead_removed">
+        <item quantity="one">Убрал с полки %1$d запись без файла: %2$s</item>
+        <item quantity="few">Убрал с полки %1$d записи без файлов: %2$s</item>
+        <item quantity="many">Убрал с полки %1$d записей без файлов: %2$s</item>
+        <item quantity="other">Убрал с полки %1$d записей без файлов: %2$s</item>
+    </plurals>
     <!-- 0.3.42: отмена перехода — меню «⋮ Ещё» в читалке (#101) -->
     <string name="reader_more_cd">Ещё</string>
     <string name="ui_more_title">Кнопка «Ещё»</string>
@@ -1188,6 +1306,18 @@
     <string name="sel_copied">Скопировано</string>
     <string name="sel_empty">Выделять нечего — сначала начни выделение</string>
     <string name="sel_long_hint">долгое нажатие — выделить или прочитать отсюда</string>
+    <!-- Умные замены (28.09.2026): владелец показывает мусорную строку, приложение
+         ищет по книге похожие и собирает правило, которое их убирает. -->
+    <string name="sel_action_drop">Убрать такие строки</string>
+    <string name="dict_drop_title">Убрать такие строки</string>
+    <string name="dict_drop_searching">Ищу похожие строки в книге…</string>
+    <string name="dict_drop_none">Похожих строк в книге не нашлось</string>
+    <string name="dict_drop_nobook">Книга не из библиотеки — правило убрать некуда</string>
+    <string name="dict_drop_ask">Нашлось строк: %1$d. Например: %2$s\n\nУбрать их из чтения в этой книге?</string>
+    <string name="dict_drop_go">Убрать</string>
+    <string name="dict_drop_more">Показать строки</string>
+    <string name="dict_drop_examples">Найденные строки, всего %1$d</string>
+    <string name="dict_drop_done">Убрал таких строк: %1$d</string>
     <!-- 0.4.52: именованные действия узла предложения — видны в меню TalkBack, пункт «Действия» -->
     <string name="sel_action_mark">Выделить фрагмент отсюда</string>
     <string name="sel_action_read">Читать отсюда</string>
@@ -1252,5 +1382,104 @@
     <string name="quick_full">Все кнопки заняты — снимите одну долгим нажатием</string>
     <string name="quick_empty">Нет недавних книг — откройте книгу из библиотеки</string>
     <string name="quick_panel_cd">Панель недавних книг</string>
+
+    <!-- Словарь произношения (27.09.2026): правила подмены текста перед синтезом.
+         Части словаря — по движкам, потому что хитрое написание, подобранное на
+         слух на одном движке, на другом звучит иначе. -->
+    <string name="cancel">Отмена</string>
+    <string name="dict_row">Словарь произношения</string>
+    <string name="dict_row_off">выключен</string>
+    <string name="dict_row_on">включён, правил %1$d</string>
+    <string name="dict_title">Словарь произношения</string>
+    <string name="dict_hint">Правила заменяют текст перед озвучкой: сокращения, значки, чужие имена. Работают только на чтение — текст книги, закладки и поиск остаются как есть. По умолчанию словарь выключен.</string>
+    <string name="dict_on">Словарь</string>
+    <string name="dict_on_hint_on">включён: правила применяются к тексту перед чтением</string>
+    <string name="dict_on_hint_off">выключен: правила не применяются вовсе</string>
+    <string name="dict_group_common">Общие правила: %1$d</string>
+    <string name="dict_group_common_title">Общие правила</string>
+    <string name="dict_group_engine_title">Правила для %1$s</string>
+    <string name="dict_group_common_hint">работают на любом движке</string>
+    <string name="dict_group_engine">Для %1$s: %2$d</string>
+    <string name="dict_group_on">включены</string>
+    <string name="dict_group_off">выключены</string>
+    <string name="dict_group_no_engine">движок не установлен</string>
+    <string name="dict_group_no_engine_hint">Этого движка на телефоне нет: правила лежат без дела и заработают, если движок поставят.</string>
+    <string name="dict_group_switch">Правила для %1$s</string>
+    <string name="dict_group_switch_hint">одно касание выключает всю часть, сами правила остаются как были</string>
+    <string name="dict_total">всего правил %1$d, файл %2$d КБ</string>
+    <string name="dict_add">Добавить правило</string>
+    <!-- Правила в части: у каждого свой флажок (28.09.2026, просьба Сержа).
+         Переключать правило — частое действие, поэтому оно у самого правила, а
+         правка ушла на долгое нажатие. -->
+    <string name="dict_rule_toggle_hint">Двойной тап переключает правило, долгое нажатие открывает его</string>
+    <string name="dict_all_on">Включить все правила части</string>
+    <string name="dict_all_off">Выключить все правила части</string>
+    <string name="dict_all_on_done">Включено правил: %1$d</string>
+    <string name="dict_all_off_done">Выключено правил: %1$d</string>
+    <string name="dict_all_none">Менять нечего: все правила части уже так</string>
+    <string name="dict_rule_open">Открыть правило</string>
+    <!-- Правила из книг (28.09.2026): собираются «умной заменой» из читалки, лежат
+         отдельным файлом и уходят вместе с книгой. -->
+    <string name="dict_books_group">Правила из книг: %1$d</string>
+    <string name="dict_books_group_hint">собраны по книгам, работают только в своей книге</string>
+    <string name="dict_books_group_title">Правила из книг</string>
+    <string name="dict_books_hint">Эти правила собраны по книгам. Двойной тап выключает, долгое нажатие открывает правило. Их можно убрать все разом или только те, чьей книги нет на полке.</string>
+    <string name="dict_books_empty">Правил из книг нет</string>
+    <string name="dict_books_orphan">книги нет на полке: %1$s</string>
+    <string name="dict_books_drop_orphans">Убрать правила книг, которых нет на полке: %1$d</string>
+    <string name="dict_books_drop_all">Убрать все правила из книг</string>
+    <string name="dict_books_drop_all_ask">Убрать все правила из книг? Их %1$d. Твой словарь это не тронет.</string>
+    <string name="dict_books_dropped">Убрал правил из книг: %1$d</string>
+    <!-- Импорт и выгрузка словаря (28.09.2026). Формат файла тот же, что у нас
+         внутри, и тот же, что у готовых словарей @Voice и Librera. -->
+    <string name="dict_import">Импорт словаря</string>
+    <string name="dict_import_hint">добавить правила из файла — своего или готового словаря @Voice и Librera</string>
+    <string name="dict_import_reading">Читаю файл словаря…</string>
+    <string name="dict_import_done">Добавлено правил: %1$d, пропущено повторов: %2$d</string>
+    <string name="dict_import_empty">В файле правил словаря не нашлось</string>
+    <string name="dict_import_fail">Файл словаря не прочитался</string>
+    <string name="dict_export">Выгрузить словарь</string>
+    <string name="dict_export_hint">сохранить все правила в файл — например, чтобы перенести на другое устройство</string>
+    <string name="dict_export_done">Словарь выгружен, правил: %1$d</string>
+    <string name="dict_export_fail">Не удалось сохранить словарь</string>
+    <string name="dict_empty">в этой части правил нет</string>
+    <string name="dict_is_regex">регулярное выражение</string>
+    <string name="dict_is_off">выключено</string>
+    <string name="dict_rule_hint">Правило меняет найденный текст как он написан, без границ слова: правило «Иванов» поймает и «Иванова», и «Иванову». Проверить можно на слух — кнопкой «Проверить».</string>
+    <string name="dict_rule_title">Правило словаря</string>
+    <string name="dict_rule_new">Новое правило</string>
+    <string name="dict_rule_find">Что искать</string>
+    <string name="dict_rule_repl">На что менять</string>
+    <string name="dict_rule_regex">Регулярное выражение</string>
+    <string name="dict_rule_regex_hint">для сложных правил, как в словарях @Voice: (?i) — не различать регистр, \\b — граница слова</string>
+    <string name="dict_rule_engines">Действует для: %1$s</string>
+    <string name="dict_rule_engines_dialog">Каким движкам годится правило</string>
+    <string name="dict_engines_all">все движки</string>
+    <string name="dict_engines_none">установленных движков синтеза не нашлось</string>
+    <string name="dict_rule_letters">По буквам</string>
+    <string name="dict_rule_letters_hint">сокращение читается по буквам: СВО станет «эс-вэ-о»</string>
+    <string name="dict_rule_pick">Подобрать произношение</string>
+    <string name="dict_rule_pick_hint">варианты написания — со знаком ударения, с «ё», с дефисами; каждый произносится движком</string>
+    <string name="dict_rule_check">Проверить</string>
+    <string name="dict_rule_check_hint">произносит замену и говорит, сколько таких мест в книге</string>
+    <string name="dict_save">Сохранить</string>
+    <string name="dict_rule_edit">Изменить</string>
+    <string name="dict_rule_delete">Удалить</string>
+    <string name="dict_rule_on">Включить</string>
+    <string name="dict_rule_off">Выключить</string>
+    <string name="dict_need_find">Сначала напишите, что искать</string>
+    <string name="dict_need_word">В правиле нет ни одного слова</string>
+    <string name="dict_pick_word">Какое слово подбирать</string>
+    <string name="dict_pick_all">Прослушать все варианты</string>
+    <string name="dict_pick_title">Варианты: %1$d</string>
+    <string name="dict_variant">Вариант %1$d из %2$d: %3$s</string>
+    <string name="dict_variant_spoken">Вариант %1$d</string>
+    <string name="dict_check_count">в книге таких мест: %1$d</string>
+    <string name="dict_check_nobook">книга не открыта — посчитать места нечем</string>
+    <string name="dict_speak_fail">движок не отозвался</string>
+    <string name="dict_from_sentence">Слова из предложения</string>
+    <string name="dict_from_sentence_hint">%1$s</string>
+    <string name="dict_not_in_row">Между отмеченными словами есть пропуск — отметьте и его, иначе правило не найдёт текст в книге</string>
+    <string name="sel_action_dict">Добавить в словарь</string>
 
 </resources>

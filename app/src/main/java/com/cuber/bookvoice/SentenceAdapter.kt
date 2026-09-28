@@ -8,6 +8,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import androidx.core.view.ViewCompat
 import androidx.recyclerview.widget.RecyclerView
 
 /**
@@ -35,6 +36,14 @@ import androidx.recyclerview.widget.RecyclerView
 class SentenceAdapter(
     private val onSentenceClick: (Int, Int) -> Unit,
     private val onSentenceLongClick: (Int, Int) -> Unit = { _, _ -> },
+    /** «Добавить в словарь» из меню действий диктора (27.09.2026). */
+    private val onSentenceDict: (Int, Int) -> Unit = { _, _ -> },
+    /** «Убрать такие строки» из меню действий диктора (28.09.2026). */
+    private val onSentenceDrop: (Int, Int) -> Unit = { _, _ -> },
+    /** Диктор подвёл предложение к экрану (ACTION_SHOW_ON_SCREEN, 29.09.2026):
+     *  узел предложения виртуальный, строка сама не поедет — прокрутку
+     *  заказывает читалка. */
+    private val onSentenceShow: (Int, Int) -> Unit = { _, _ -> },
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     /** Строка ленты: заголовок главы ([first] == -1) или абзац.
@@ -274,6 +283,11 @@ class SentenceAdapter(
         when (holder) {
             is HeadVH -> {
                 holder.tv.text = row.title
+                // 26.09.2026: заголовок помечаем ЗАГОЛОВКОМ для диктора —
+                // он читает «заголовок» и умеет по ним ходить своим обходом.
+                // Раньше это была обычная строка текста, и отличить заголовок
+                // от абзаца на слух было нельзя (просьба Сержа).
+                ViewCompat.setAccessibilityHeading(holder.tv, true)
                 // Тап по заголовку — переход в начало главы.
                 holder.tv.setOnClickListener {
                     onSentenceClick(row.chapter, 0)
@@ -285,6 +299,9 @@ class SentenceAdapter(
                 v.bindSentences(row.starts, row.ends)
                 v.onSentenceClick = { i -> onSentenceClick(row.chapter, row.first + i) }
                 v.onSentenceLongClick = { i -> onSentenceLongClick(row.chapter, row.first + i) }
+                v.onSentenceDict = { i -> onSentenceDict(row.chapter, row.first + i) }
+                v.onSentenceDrop = { i -> onSentenceDrop(row.chapter, row.first + i) }
+                v.onSentenceShow = { i -> onSentenceShow(row.chapter, row.first + i) }
             }
         }
     }

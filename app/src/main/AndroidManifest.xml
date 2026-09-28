@@ -224,6 +224,23 @@
             android:name=".SleepTimerSettingsActivity"
             android:exported="false" />
 
+        <!-- «Чтение по ролям» (26.09.2026): одно окно на оба входа — строка в
+             разделе «Голос» и та же строка в панели «Голос» из книги. Внутри
+             режим реплик, голос реплик и свои ползунки. -->
+        <activity
+            android:name=".ReplyVoiceActivity"
+            android:exported="false" />
+
+        <!-- Словарь произношения (27.09.2026): окно со списком правил и окно
+             одного правила. Вход — строкой внизу раздела «Голос». -->
+        <activity
+            android:name=".DictActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".DictRuleActivity"
+            android:exported="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="false" />
@@ -251,6 +268,20 @@
                 <data android:scheme="bookvoice" android:host="oauth" />
             </intent-filter>
         </activity>
+
+        <!-- Вход в Google Диск (28.09.2026). В отличие от Яндекса, снаружи сюда
+             ничего не приходит: браузерный возврат Google для Android-приложений
+             запрещён, поэтому свой экран (выбор аккаунта и согласие) показывает
+             сама библиотека Google.
+             Без `noHistory`: экран согласия Google закрывает наше окно собой, а
+             «без истории» система дочищает такое окно сразу — ответ тогда некуда
+             вернуть, и вход молча обрывается. Свой экран окно закрывает само
+             (finish) в обоих исходах, поэтому в истории не остаётся. -->
+        <activity
+            android:name=".GoogleAuthActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!-- Медиа-сессия живёт в сервисе, а не в окне — так система отдаёт
              кнопки гарнитуры и «волшебное касание» нам, а не чужому плееру. -->

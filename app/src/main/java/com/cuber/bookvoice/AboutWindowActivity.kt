@@ -42,10 +42,10 @@ class AboutWindowActivity : SectionActivity() {
     }
 
     override fun resumeSection(arrival: Boolean) {
-        // Свежий вход — фокус на заголовок окна (msg1666). Повторные показы
-        // (возврат из фона) фокус не трогают (msg1465) — справка не хранит
-        // позицию, незачем и дёргать курсор.
-        if (arrival) TabNav.focusHeader(binding.tvTitle, 550)
+        // 28.09.2026, по документации: имя экрана даёт имя панели (см.
+        // SectionActivity.setTitle), а фокус в новом окне ставит служба
+        // доступности сама. Раньше мы уводили фокус на заголовок ради названия —
+        // лишний перенос, от него и уезжал курсор.
     }
 
     override fun onSectionBackKey(): Boolean {

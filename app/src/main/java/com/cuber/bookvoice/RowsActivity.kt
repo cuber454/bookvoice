@@ -96,24 +96,33 @@ abstract class RowsActivity : SectionActivity() {
     /** Галочка-настройка (msg4721). Флажок сам говорит скринридеру «включено» или
      *  «выключено» — для переключателя это роднее, чем переписывать состояние в
      *  текст строки. Значение ложится в те же prefs «reader», что и прочие
-     *  настройки чтения, и применяется на месте ([onChange]). */
+     *  настройки чтения, и применяется на месте ([onChange]).
+     *
+     *  [hintOf] — подсказка, зависящая от состояния (28.09.2026). Нужна там, где
+     *  неподвижный текст врёт: у словаря под галочкой было написано «пока выключен,
+     *  правила не применяются вовсе», и после включения Серж слышал то же самое —
+     *  галка включена, а строка говорит «выключен». Если [hintOf] задан, текст
+     *  строки пересобирается при каждом переключении. */
     protected fun addCheck(
         title: String,
-        hint: String,
+        hint: String?,
         key: String,
         def: Boolean,
         tag: String? = null,
+        hintOf: ((Boolean) -> String)? = null,
         onChange: (Boolean) -> Unit,
-    ) {
+    ): CheckBox {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val v = CheckBox(this).apply {
-            text = withHint(title, hint)
+            val on = prefs.getBoolean(key, def)
+            text = withHint(title, hintOf?.invoke(on) ?: hint)
             textSize = 17f
-            isChecked = prefs.getBoolean(key, def)
+            isChecked = on
             setPadding(dp(12), dp(6), dp(12), dp(6))
             if (tag != null) this.tag = tag
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(key, checked).apply()
+                if (hintOf != null) text = withHint(title, hintOf.invoke(checked))
                 onChange(checked)
             }
         }
@@ -127,6 +136,7 @@ abstract class RowsActivity : SectionActivity() {
                 bottomMargin = dp(2)
             },
         )
+        return v
     }
 
     /** Вернуть фокус строке с меткой [tag] после пересборки содержимого: строка

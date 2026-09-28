@@ -99,9 +99,24 @@ object VoicePick {
     fun voicesOf(voices: List<Voice>, code: String?): List<Voice> =
         if (code == null) sortVoices(voices) else sortVoices(voices.filter { codeOf(it) == code })
 
-    /** Имя голоса для списка: как отдаёт движок, сетевые — с пометкой. */
-    fun voiceLabel(v: Voice): String =
-        if (v.isNetworkConnectionRequired) "${v.name} (сеть)" else v.name
+    /** Имя голоса для списка: как отдаёт движок, сетевые — с пометкой, плюс пол.
+     *  Пол даёт сам движок (features «gender=male/female»), и он нужен на слух:
+     *  репликам подбирают голос ДРУГОГО пола, иначе переключение не слышно
+     *  (26.09.2026: Серж выбрал репликам женский Google при женском у книги и
+     *  решил, что второй движок не работает). */
+    fun voiceLabel(v: Voice): String {
+        val net = if (v.isNetworkConnectionRequired) " (сеть)" else ""
+        val sex = v.features
+            ?.firstOrNull { it.startsWith("gender=", ignoreCase = true) }
+            ?.substringAfter('=')
+            ?.lowercase(Locale.ROOT)
+        val sexRu = when (sex) {
+            "male" -> "мужской"
+            "female" -> "женский"
+            else -> null
+        }
+        return if (sexRu == null) "${v.name}$net" else "${v.name}$net, $sexRu"
+    }
 
     /** Название языка по-русски: сначала пробуем ICU (он знает все языки),
      *  потом свою таблицу, в крайнем случае — сам код. С большой буквы. */

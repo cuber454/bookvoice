@@ -1,6 +1,7 @@
 package com.cuber.bookvoice
 
 import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserException
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.ByteArrayInputStream
 import java.io.StringReader
@@ -20,6 +21,10 @@ object BookParser {
 
     fun parse(fileName: String, data: ByteArray): BookDocument? {
         if (data.isEmpty()) return null
+        // Заметки о разборе — про ЭТУ книгу: старые значения сбили бы с толку
+        // журнал (см. MainActivity.lastOpenWhy).
+        lastFb2Error = null
+        lastRepairNote = null
         val lower = fileName.lowercase(Locale.ROOT)
         // 0.4.70: файл описания flibusta (см. [FBD_EXT]) — не книга: в нём одни
         // метаданные и ни одной главы. Разобравшись как FB2, он открылся бы
@@ -671,11 +676,244 @@ object BookParser {
 
     // ---------------- FB2 ----------------
 
+    /** Последняя книга открылась только после починки разметки (28.09.2026).
+     *  Читалка говорит об этом в журнале: по такой строке видно, сколько книг
+     *  приходит с битой разметкой, и не пора ли чинить их при скачивании. */
+    @Volatile var lastRepaired: Boolean = false
+        private set
+
+    /** Чем кончился строгий разбор FB2 — для журнала (сообщение парсера со
+     *  строкой и столбцом). null — разбор не падал. */
+    @Volatile var lastFb2Error: String? = null
+        private set
+
+    /** Что сделала починка разметки — для журнала. null — чинить не пробовали. */
+    @Volatile var lastRepairNote: String? = null
+        private set
+
     private fun parseFb2(data: ByteArray): BookDocument? {
         // Сначала декодируем байты в текст: многие FB2 лежат в windows-1251 или
         // UTF-16, и отдавать их XML-парсеру «как есть» ненадёжно.
         val text = decodeText(data).trimStart()
-        if (!text.startsWith('<')) return null
+        lastRepaired = false
+        if (!text.startsWith('<')) {
+            lastFb2Error = "текст не начинается со знака «<» (${data.size} байт)"
+            lastRepairNote = null
+            return null
+        }
+        val strict = runCatching { parseFb2Body(text) }
+        strict.getOrNull()?.let {
+            lastFb2Error = null
+            lastRepairNote = null
+            return it
+        }
+        lastFb2Error = strict.exceptionOrNull()
+            ?.let { "${it.javaClass.simpleName}: ${it.message}" } ?: "разбор вернул пусто"
+        // Строгий разбор не прошёл — в книге сломана разметка. Такие книги
+        // попадаются на Флибусте (журнал Сергея 28.09.2026: вместо «<p>» стоит
+        // «<p  Диалог Адам с Богом: >»), и строгий XML отказывается читать весь
+        // файл из-за одной строки, хотя другие читалки книгу показывают.
+        for (fixed in listOfNotNull(sanitizeTags(text), repairBrokenTags(text))) {
+            val doc = runCatching { parseFb2Body(fixed) }.getOrNull()
+            if (doc != null) {
+                lastRepaired = true
+                lastRepairNote = "починил разметку и разобрал"
+                return doc
+            }
+        }
+        lastRepairNote = "починка не помогла"
+        return null
+    }
+
+    private val TAG_NAME = Regex("[A-Za-z_:][-A-Za-z0-9_:.]*")
+    private val TAG_ATTRS = Regex("""(\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*("[^"]*"|'[^']*'))*\s*""")
+
+    /**
+     * Терпимый проход по разметке (28.09.2026): сломанный тег превращаем в текст,
+     * лишний закрывающий — тоже, а незакрытые закрываем перед концом корня. Так
+     * делают мягкие читалки, и книга с одной поломанной строкой остаётся читаемой.
+     *
+     * Почему не «спросить парсер и поправить там, где он ругается» (как в
+     * [repairBrokenTags]): строка и столбец есть не у всех реализаций парсера, а
+     * этот проход идёт по самому тексту и находит все поломки сразу. null — текст
+     * оказался правильным, чинить нечего.
+     */
+    private fun sanitizeTags(text: String): String? {
+        val out = StringBuilder(text.length + 64)
+        val open = ArrayList<String>()
+        var i = 0
+        var changed = false
+        while (i < text.length) {
+            val c = text[i]
+            if (c != '<') {
+                out.append(c)
+                i++
+                continue
+            }
+            // Комментарии, CDATA и объявления пропускаем целиком: внутри них знаки
+            // «<» и «>» — обычный текст.
+            val special = when {
+                text.startsWith("<!--", i) -> "-->" to 4
+                text.startsWith("<![CDATA[", i) -> "]]>" to 9
+                text.startsWith("<?", i) -> "?>" to 2
+                text.startsWith("<!", i) -> ">" to 2
+                else -> null
+            }
+            if (special != null) {
+                val end = text.indexOf(special.first, i + special.second)
+                val stop = if (end < 0) text.length else end + special.first.length
+                out.append(text, i, stop)
+                i = stop
+                continue
+            }
+            val close = tagEnd(text, i)
+            if (close < 0) {
+                out.append("&lt;")
+                i++
+                changed = true
+                continue
+            }
+            val raw = text.substring(i + 1, close)
+            val selfClosing = raw.endsWith("/")
+            val body = raw.removeSuffix("/").trim()
+            val end = body.startsWith("/")
+            val name = (if (end) body.substring(1) else body)
+                .substringBefore(' ').substringBefore('\t').substringBefore('\n')
+                .trim().lowercase(Locale.ROOT)
+            val attrs = if (end) "" else body.substring(name.length.coerceAtMost(body.length))
+            val good = TAG_NAME.matches(name) && (end || TAG_ATTRS.matches(attrs))
+            when {
+                // Сломанный тег: в XML так нельзя (атрибут без значения, знак
+                // внутри тега) — оставляем как текст.
+                !good -> {
+                    out.append("&lt;")
+                    i++
+                    changed = true
+                }
+                end -> {
+                    if (open.isNotEmpty() && open.last() == name) {
+                        open.removeAt(open.size - 1)
+                        out.append(text, i, close + 1)
+                    } else {
+                        // Закрывающий, которому нет пары: тоже в текст.
+                        out.append("&lt;")
+                        i++
+                        changed = true
+                    }
+                }
+                else -> {
+                    if (!selfClosing) open.add(name)
+                    out.append(text, i, close + 1)
+                }
+            }
+            i = close + 1
+        }
+        if (open.size > 1) {
+            // Незакрытые теги: закрываем перед концом корня, иначе разбор упадёт на
+            // конце документа, хотя текст книги цел.
+            val root = open.first()
+            val tail = "</" + root + ">"
+            val at = out.lastIndexOf(tail)
+            if (at >= 0) {
+                val closers = StringBuilder()
+                for (k in open.indices.reversed()) {
+                    if (open[k] != root) closers.append("</").append(open[k]).append('>')
+                }
+                out.insert(at, closers)
+                changed = true
+            }
+        }
+        return if (changed) out.toString() else null
+    }
+
+    /** Конец тега, начавшегося в [from]: индекс «>» вне кавычек. -1 — тег не
+     *  закрылся или внутри него начался новый («<» без «>»). */
+    private fun tagEnd(text: String, from: Int): Int {
+        var quote = ' '
+        var i = from + 1
+        while (i < text.length) {
+            val c = text[i]
+            if (quote != ' ') {
+                if (c == quote) quote = ' '
+            } else {
+                when (c) {
+                    '"', '\'' -> quote = c
+                    '>' -> return i
+                    '<' -> return -1
+                }
+            }
+            i++
+        }
+        return -1
+    }
+
+    /**
+     * Починка сломанной разметки: экранируем «<», на который жалуется парсер.
+     *
+     * Идём по жалобам строгого разбора: он называет строку и столбец — там и
+     * ставим `&lt;` вместо знака. Так чинится и один сломанный абзац, и десяток:
+     * каждая следующая попытка идёт до следующей ошибки. Больше [tries] правок не
+     * делаем — если файл битый целиком, честнее сказать «повреждён», чем крутить
+     * его минуту. null — починить не вышло.
+     */
+    private fun repairBrokenTags(text: String, tries: Int = 24): String? {
+        // Очень большие книги чинить построчным перебором накладно: там на каждый
+        // заход новый разбор с начала. Пусть лучше скажет «повреждён».
+        if (text.length > 8 * 1024 * 1024) return null
+        var cur = text
+        var left = tries
+        while (left-- > 0) {
+            val err = runCatching {
+                val xp = XmlPullParserFactory.newInstance().newPullParser()
+                xp.setInput(StringReader(cur))
+                while (xp.eventType != XmlPullParser.END_DOCUMENT) xp.next()
+            }.exceptionOrNull() ?: return cur
+            if (err !is XmlPullParserException) return null
+            val at = offsetOf(cur, err.lineNumber, err.columnNumber) ?: return null
+            val lt = brokenLtBefore(cur, at) ?: return null
+            cur = cur.substring(0, lt) + "&lt;" + cur.substring(lt + 1)
+        }
+        return null
+    }
+
+    /** Смещение в тексте по строке и столбцу из жалобы парсера (нумерация с
+     *  единицы). */
+    private fun offsetOf(text: String, line: Int, column: Int): Int? {
+        if (line <= 0 || column <= 0) return null
+        var n = 1
+        var i = 0
+        while (n < line) {
+            val nl = text.indexOf('\n', i)
+            if (nl < 0) return null
+            i = nl + 1
+            n++
+        }
+        val at = i + column - 1
+        return if (at in text.indices) at else null
+    }
+
+    /** Ближайший знак «<», на который указывает жалоба парсера: сперва ищем назад
+     *  до начала строки (парсер называет место уже внутри тега), а если позади
+     *  знака нет — смотрим вперёд по той же строке. null — знака рядом нет, чинить
+     *  нечего. */
+    private fun brokenLtBefore(text: String, at: Int): Int? {
+        var i = at
+        while (i >= 0) {
+            if (text[i] == '<') return i
+            if (text[i] == '\n') break
+            i--
+        }
+        var j = at
+        val limit = minOf(text.length - 1, at + 120)
+        while (j <= limit) {
+            if (text[j] == '<') return j
+            if (text[j] == '\n') break
+            j++
+        }
+        return null
+    }
+
+    private fun parseFb2Body(text: String): BookDocument? {
         val factory = XmlPullParserFactory.newInstance()
         val xp = factory.newPullParser()
         xp.setInput(StringReader(text))

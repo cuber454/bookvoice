@@ -249,11 +249,26 @@
         android:paddingEnd="4dp"
         android:visibility="gone">
 
+        <!-- 26.09.2026: шапка панели приведена к тому же виду, что во всех окнах
+             (activity_settings.xml): выход — кнопкой «←» СЛЕВА от заголовка, как
+             в Android 16. Раньше «Закрыть» стояло справа текстом, и панель была
+             единственным экраном, живущим по старым правилам. -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnVoiceClose"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_marginEnd="8dp"
+                android:minWidth="48dp"
+                android:contentDescription="@string/catalog_back_top"
+                android:text="@string/catalog_back_icon"
+                android:textSize="22sp" />
 
             <TextView
                 android:id="@+id/tvVoiceTitle"
@@ -261,6 +276,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:accessibilityHeading="true"
+                android:accessibilityTraversalBefore="@id/btnVoiceClose"
                 android:ellipsize="end"
                 android:focusable="true"
                 android:screenReaderFocusable="true"
@@ -271,19 +287,6 @@
 
             <!-- msg5632: кнопки «Прослушать» в шапке панели больше нет —
                  «Читать/Пауза» стала первой строкой набора VoicePicker. -->
-
-            <!-- 0.4.83 (msg7002): высота 48dp — по норме касания. Было 44dp:
-                 единственное место в разметке ниже нормы. Значение выбрано
-                 руками: у кнопок на этом стиле минимум 48dp держит сама
-                 библиотека, а явная высота её перебивает. -->
-            <Button
-                android:id="@+id/btnVoiceClose"
-                android:layout_width="wrap_content"
-                android:layout_height="48dp"
-                android:layout_marginStart="4dp"
-                android:minWidth="48dp"
-                android:text="@string/dialog_close"
-                android:textSize="14sp" />
         </LinearLayout>
 
         <ScrollView

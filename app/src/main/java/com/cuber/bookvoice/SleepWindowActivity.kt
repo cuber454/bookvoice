@@ -59,8 +59,9 @@ class SleepWindowActivity : RowsActivity() {
 
     override fun resumeSection(arrival: Boolean) {
         if (arrival) {
-            // Свежий вход — фокус на заголовок окна (msg1666): сразу ясно, куда зашёл.
-            TabNav.focusHeader(binding.tvTitle, 550)
+            // 28.09.2026, по документации: имя экрана даёт имя панели (см.
+            // SectionActivity.setTitle), а фокус в новом окне ставит служба
+            // доступности сама — свой перенос на заголовок больше не делаем.
             return
         }
         // Возврат из системного окна: запреты могли поменяться — пересобираем

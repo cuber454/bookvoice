@@ -80,7 +80,8 @@ class SleepTimerSettingsActivity : RowsActivity() {
 
     override fun resumeSection(arrival: Boolean) {
         if (arrival) {
-            TabNav.focusHeader(binding.tvTitle, 550)
+            // 28.09.2026, по документации: имя экрана даёт имя панели, а фокус в
+            // новом окне ставит служба доступности — свой перенос убран.
             return
         }
         buildContent()

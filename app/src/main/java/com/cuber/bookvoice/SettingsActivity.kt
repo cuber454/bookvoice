@@ -135,15 +135,16 @@ class SettingsActivity(private val act: SectionActivity) {
     // 0.4.86 (msg7020): строка «Резервные копии» в «Библиотеке» — открывает
     // подраздел; туда же возвращает фокус «назад» из подраздела.
     private var backupGroupRow: Button? = null
-    // msg6046…6078: синхронизация чтения между устройствами — папка и строка
-    // «последняя синхронизация». Сам выключатель — обычная галочка.
-    private var syncDirRow: Button? = null
+    // msg6046…6078: синхронизация чтения между устройствами. 28.09.2026 место
+    // синхронизации выбирает владелец: строка «Куда синхронизировать», строка
+    // выбранного места со входом и строка состояния — куда файл идёт сейчас.
+    private var syncPlaceRow: Button? = null
+    private var syncAccountRow: Button? = null
+    private var syncStateRow: TextView? = null
     private var syncLastRow: TextView? = null
     // 0.4.86 (msg7020): строка «Синхронизация» в «Библиотеке» — открывает
     // подраздел (весь блок переехал туда).
     private var syncGroupRow: Button? = null
-    // msg6114: строка входа в Яндекс.Диск — рекомендованный путь синхронизации.
-    private var yandexRow: Button? = null
     private var booksBox: CheckBox? = null
     private var booksRow: Button? = null
     // #57: галочка «Бесшовная передача» — при альтернативном способе озвучки
@@ -279,13 +280,16 @@ class SettingsActivity(private val act: SectionActivity) {
         // Возврат из браузера после входа в Яндекс (msg6114): строка «Яндекс.Диск»
         // обязана показать новое состояние сразу, а не после перезахода в раздел.
         if (group == Group.LIBRARY) refreshRows()
+        // 27.09.2026: возврат из окна словаря произношения — строку «Словарь
+        // произношения» надо переписать: состояние меняется там, а строка живёт
+        // здесь (жалоба Сержа: галочка стоит, а строка говорит «выключен»).
+        voicePicker?.refresh()
         if (byTab || firstShow) {
-            // byTab (первый показ): фокус на заголовок после паузы — окно
-            // показалось, TalkBack отпустил нажатый элемент. Первый показ не по
-            // навигации (первый вход вообще) — пауза короче (окно только что
-            // открылось). build контент не дёргает (noFocus), чтобы не было
-            // конкурирующего переноса.
-            TabNav.focusHeader(binding.tvTitle, if (byTab) 550 else 350)
+            // 28.09.2026, по документации Android: имя экрана даёт имя панели —
+            // его ставит setTitle (см. SectionActivity), и диктор объявляет его
+            // сам, когда панель появляется. Свой перенос фокуса на заголовок убран:
+            // где встать в новом окне, решает служба доступности. build контент не
+            // дёргает (noFocus), конкурирующего переноса нет.
         }
     }
 
@@ -317,7 +321,7 @@ class SettingsActivity(private val act: SectionActivity) {
             // раздел и поставить фокус на строку «Кнопки и жесты»
             // (как focusGroupButton после «назад» из раздела — msg1468). openGroup
             // здесь не зовём: он объявляет заголовок «Управление» ещё раз.
-            binding.tvTitle.text = getString(Group.START.titleRes)
+            screenTitle(getString(Group.START.titleRes))
             content().removeAllViews()
             buildStartGroup()
             refreshRows()
@@ -331,7 +335,7 @@ class SettingsActivity(private val act: SectionActivity) {
             backupSubOpen = false
             syncSubOpen = false
             forgetSubRows()
-            binding.tvTitle.text = getString(Group.LIBRARY.titleRes)
+            screenTitle(getString(Group.LIBRARY.titleRes))
             content().removeAllViews()
             buildLibraryGroup()
             refreshRows()
@@ -343,7 +347,7 @@ class SettingsActivity(private val act: SectionActivity) {
             // фокусом на строку подраздела.
             showSubOpen = false
             forgetSubRows()
-            binding.tvTitle.text = getString(Group.READER.titleRes)
+            screenTitle(getString(Group.READER.titleRes))
             content().removeAllViews()
             buildReaderGroup()
             refreshRows()
@@ -389,12 +393,22 @@ class SettingsActivity(private val act: SectionActivity) {
         showMenu(noFocus = true)
     }
 
+    /** Имя экрана настроек: заголовок в шапке плюс имя окна и панели для диктора
+     *  (28.09.2026, по документации Android). Диктор объявляет имя панели сам,
+     *  когда панель меняется, — поэтому имя обязаны менять ВСЕ переходы между
+     *  экранами настроек. Раньше менял только вход в раздел, и обратный выход
+     *  («назад» из раздела или подраздела) звучал молча — жалоба Сержа. */
+    private fun screenTitle(text: String) {
+        binding.tvTitle.text = text
+        act.setTitle(text)
+    }
+
     /** Главный экран настроек: список разделов (0.3.32). [focusGroup] — раздел,
      *  из которого вернулись «назад»: фокус встаёт на его строку (msg1468);
      *  null — обычный вход. [noFocus] — контент строится без переноса фокуса
      *  (первый показ: фокус ставит resume(), msg1652). */
     private fun showMenu(focusGroup: Group? = null, noFocus: Boolean = false) {
-        binding.tvTitle.text = getString(R.string.settings_title)
+        screenTitle(getString(R.string.settings_title))
         content().removeAllViews()
         Group.values().forEach { g -> addGroupButton(g) }
         // msg4476: энергетические запреты — первой из «не разделов». Тестеры на
@@ -448,7 +462,10 @@ class SettingsActivity(private val act: SectionActivity) {
         showSubOpen = false
         forgetSubRows()
         group = g
-        binding.tvTitle.text = getString(g.titleRes)
+        // Имя панели — имя раздела: диктор объявляет его, когда панель меняется
+        // (28.09.2026, по документации). Свой announce ниже оставлен как запасной:
+        // если диктор панельные имена не читает, название раздела всё равно звучит.
+        screenTitle(getString(g.titleRes))
         content().removeAllViews()
         when (g) {
             Group.VOICE -> buildVoiceGroup()
@@ -489,6 +506,14 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         // Громкость чтения (0..100%) — общий KEY_VOLUME (тот же, что был в окне «Голос и речь»).
         addVolumeSlider()
+        // «По ролям» с галочкой рядом — там же, где у панели читалки: внизу
+        // набора, перед строкой словаря (просьба Сержа 29.09.2026).
+        content().addView(picker.replyBlock())
+
+        // Словарь произношения (27.09.2026) — строкой внизу звукового раздела, и
+        // та же строка стоит внизу панели «Голос» из книги (VoicePicker.dictRow):
+        // настройка одна, дверей две, и обе выглядят одинаково.
+        content().addView(picker.dictRow())
     }
 
     /** Что набор спрашивает у Настроек (msg5618). Здесь всё пишется в общие
@@ -497,6 +522,24 @@ class SettingsActivity(private val act: SectionActivity) {
     private val pickerHost = object : VoicePicker.Host {
         override fun withPlayer(titleRes: Int, onReady: (SpeechPlayer, Boolean) -> Unit) =
             withVoiceEngine(titleRes, onReady)
+
+        /** Окно «Чтение по ролям» — то же, что открывает читалка: настройка
+         *  одна, дверей две (26.09.2026). */
+        override fun openReplyWindow() {
+            act.startActivity(Intent(act, ReplyVoiceActivity::class.java))
+        }
+
+        /** Галочка «Чтение по ролям» в наборе голоса (29.09.2026). Настройка
+         *  одна на читалку и Настройки, поэтому сразу отдаём её живому плееру,
+         *  если книга открыта. */
+        override fun replyToggled(on: Boolean) {
+            MainActivity.active?.player?.setReplyVoice(
+                on,
+                prefs.getString(MainActivity.KEY_REPLY_ENGINE, null),
+                prefs.getString(MainActivity.KEY_REPLY_VOICE, null),
+            )
+            ReaderEngine.restartAfterSwitch()
+        }
 
         override fun playerOrNull(): SpeechPlayer? = MainActivity.active?.player
 
@@ -566,6 +609,13 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg5711: «Переходы» — откуда чтение подхватывает, когда человек сам
         // ткнул в место книги: касание по тексту, оглавление, закладка, поиск.
         addHeading(getString(R.string.reading_section_jumps))
+        // 29.09.2026 (просьба Сержа): одно слово о структуре текста — «Абзац» и
+        // «Разделитель». Стоит первым в «Переходах»: это про то, что слышно,
+        // когда идёшь по книге.
+        addCheck(
+            R.string.line_names_title, MainActivity.KEY_LINE_NAMES, true,
+            hintRes = R.string.line_names_hint,
+        )
         addCheck(R.string.tap_to_play_title, MainActivity.KEY_TAP_TO_PLAY, true)
         addCheck(R.string.toc_play_title, MainActivity.KEY_TOC_PLAY, true)
         addCheck(R.string.bm_play_title, MainActivity.KEY_BM_PLAY, true)
@@ -726,10 +776,14 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Ползунок громкости чтения (0..100%). Значение хранится как Float 0..1
      *  в том же KEY_VOLUME, что громкость в старом окне «Голос и речь»
      *  (переехала сюда в #1102) — единый источник для чтения. */
-    private fun addVolumeSlider() {
-        val startP = Math.round(prefs.getFloat(MainActivity.KEY_VOLUME, 1f) * 100).coerceIn(0, 100)
+    private fun addVolumeSlider(
+        key: String = MainActivity.KEY_VOLUME,
+        labelRes: Int = R.string.volume_value,
+        apply: (Float) -> Unit = { MainActivity.active?.player?.volume = it },
+    ) {
+        val startP = Math.round(prefs.getFloat(key, 1f) * 100).coerceIn(0, 200)
         val label = TextView(act).apply {
-            text = getString(R.string.volume_value, startP)
+            text = getString(labelRes, startP)
             textSize = 17f
             setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp(2))
@@ -738,7 +792,7 @@ class SettingsActivity(private val act: SectionActivity) {
 
         val cd = getString(R.string.volume_cd)
         val seek = SeekBar(act).apply {
-            max = 100
+            max = 200
             progress = startP
             contentDescription = cd
         }
@@ -751,10 +805,10 @@ class SettingsActivity(private val act: SectionActivity) {
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 val v = progress / 100f
-                prefs.edit().putFloat(MainActivity.KEY_VOLUME, v).apply()
-                MainActivity.active?.player?.volume = v
+                prefs.edit().putFloat(key, v).apply()
+                apply(v)
                 announce(progress)
-                label.text = getString(R.string.volume_value, progress)
+                label.text = getString(labelRes, progress)
             }
             override fun onStartTrackingTouch(sb: SeekBar?) {}
             override fun onStopTrackingTouch(sb: SeekBar?) {}
@@ -1166,9 +1220,12 @@ class SettingsActivity(private val act: SectionActivity) {
      *  (onBackKey), а не в корень. */
     private fun openControlsSub() {
         controlsSubOpen = true
-        binding.tvTitle.text = getString(R.string.controls_group_title)
+        screenTitle(getString(R.string.controls_group_title))
         content().removeAllViews()
         addHeading(getString(R.string.controls_section_swipes))
+        // 26.09.2026 (вопрос Сержа «что на что переназначать»): короткая карта
+        // прыжков — чем «глава» отличается от «заголовка» и «разделителя».
+        addHint(getString(R.string.controls_jumps_hint))
         addGestureRows()
         // msg5266: у каждой из четырёх кнопок читалки два действия — короткое и
         // долгое нажатие; оба выбираются здесь из той же палитры, что у свайпов.
@@ -1297,7 +1354,7 @@ class SettingsActivity(private val act: SectionActivity) {
      *  держит пометка «скрыта» в строках действий (см. [actionRowText]). */
     private fun openShowSub() {
         showSubOpen = true
-        binding.tvTitle.text = getString(R.string.show_group_title)
+        screenTitle(getString(R.string.show_group_title))
         content().removeAllViews()
         addHint(getString(R.string.reader_group_hint))
         addHeading(getString(R.string.show_panels_heading))
@@ -1331,7 +1388,7 @@ class SettingsActivity(private val act: SectionActivity) {
      *  них сюда и заходят), потом расписание и папка. */
     private fun openBackupSub() {
         backupSubOpen = true
-        binding.tvTitle.text = getString(R.string.backup_group_title)
+        screenTitle(getString(R.string.backup_group_title))
         content().removeAllViews()
         // Чем копия отличается от синхронизации — говорим прямо: обе умеют
         // «отправить файл», и без этого человек путает два разных файла.
@@ -1351,34 +1408,54 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     /** Подраздел «Синхронизация» (0.4.86, msg7020). Порядок — по частоте: сперва
-     *  включение и вход, потом прогон вручную, потом книги и папка, в конце —
-     *  ручной обмен файлом и след последнего прогона. */
+     *  включение и выбор места, потом прогон вручную, потом книги, в конце —
+     *  ручной обмен файлом и след последнего прогона.
+     *
+     *  28.09.2026: место синхронизации выбирает владелец, а не приложение. Раньше
+     *  здесь стояли две строки входа (Яндекс и Google) и отдельная строка папки, и
+     *  человек читал подсказки про Яндекс, когда файл уезжал в Google. */
     private fun openSyncSub() {
         syncSubOpen = true
-        binding.tvTitle.text = getString(R.string.sync_title)
+        screenTitle(getString(R.string.sync_title))
         content().removeAllViews()
-        addHint(getString(R.string.sync_hint))
+        // 28.09.2026, просьба Сержа: подраздел сжат — длинной подсказки сверху нет,
+        // строки говорят сами за себя. Выключатель стоит первым и вплотную к строке,
+        // где выбрано место: «включить» и «через кого» — два первых решения, и они
+        // рядом.
         // 0.4.86: галочка называлась так же, как заголовок окна, — диктор читал
         // «Синхронизация» дважды подряд. Теперь она про действие.
         addCheck(R.string.sync_enable_title, SyncStore.KEY_ON, false) { refreshRows() }
-        yandexRow = addValueButton { yandexAction() }
+        syncPlaceRow = addValueButton { syncPlaceAction() }
+        syncAccountRow = addValueButton { syncAccountAction() }
+        // Строка состояния показывается ТОЛЬКО когда что-то не так (место не
+        // выбрано или вход потерян): когда всё в порядке, она повторяла бы строки
+        // выше — а именно этого Серж и не хотел.
+        syncStateRow = addValueText().apply { visibility = android.view.View.GONE }
         addButton(getString(R.string.sync_now)) { runSyncNow() }
         booksBox = addCheck(R.string.sync_books_title, SyncStore.KEY_BOOKS, false) { on ->
             onBooksToggle(on)
         }
         booksRow = addValueButton { pullBooksAction() }
-        addHint(getString(R.string.sync_books_hint))
-        // Папка нужна только тем, у кого нет входа в Яндекс: при подключённом
-        // Диске синхронизация идёт через него, и строка только сбивала бы с толку
-        // (см. refreshRows — там она и прячется).
-        syncDirRow = addValueButton { pickSyncDir() }
-        addButton(getString(R.string.sync_send)) { sendSyncFile() }
-        addButton(getString(R.string.sync_get)) { openSyncFilePicker() }
-        addHint(getString(R.string.sync_manual_hint))
+        // Вручную файлом — одной строкой вместо двух кнопок и подсказки: выбор из
+        // «отправить» и «забрать» открывается нажатием.
+        addMenuRow(getString(R.string.sync_manual_row), getString(R.string.sync_manual_row_hint)) {
+            syncManualAction()
+        }
         syncLastRow = addValueText()
         refreshRows()
         scrollTop()
         binding.tvTitle.announceForAccessibility(getString(R.string.sync_title))
+    }
+
+    /** Обмен файлом вручную — для тех, у кого облака нет. */
+    private fun syncManualAction() {
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.sync_manual_row)
+            .setItems(arrayOf(getString(R.string.sync_send), getString(R.string.sync_get))) { _, which ->
+                if (which == 0) sendSyncFile() else openSyncFilePicker()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
     }
 
     /** Забыть строки подразделов (0.4.86, msg7020): пока «Копии» или
@@ -1387,11 +1464,12 @@ class SettingsActivity(private val act: SectionActivity) {
     private fun forgetSubRows() {
         backupDirRow = null
         backupAutoRow = null
-        yandexRow = null
+        syncPlaceRow = null
+        syncAccountRow = null
+        syncStateRow = null
+        syncLastRow = null
         booksRow = null
         booksBox = null
-        syncDirRow = null
-        syncLastRow = null
         // 0.4.86 (msg7026): галочки «что показывать» живут в подразделе — вне его
         // ссылки на них мертвы. Заодно чистим список для «простого экрана»: он
         // обновляет галочки на месте, а обновлять, пока подраздел закрыт, нечего.
@@ -1557,10 +1635,21 @@ class SettingsActivity(private val act: SectionActivity) {
         titleRes: Int,
         key: String,
         def: Boolean,
+        hintRes: Int = 0,
         onChange: ((Boolean) -> Unit)? = null,
     ): CheckBox {
         val box = CheckBox(act).apply {
-            text = getString(titleRes)
+            // Подсказка идёт второй строкой того же пункта (как у строк-разделов,
+            // см. addMenuRow): диктор читает её там же, где название, и лишней
+            // остановки в списке не появляется (29.09.2026, «Названия строк»).
+            text = if (hintRes == 0) getString(titleRes) else SpannableStringBuilder().apply {
+                append(getString(titleRes))
+                append("\n")
+                val hintStart = length
+                append(getString(hintRes))
+                setSpan(RelativeSizeSpan(0.76f), hintStart, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(ForegroundColorSpan(Palette.DIM), hintStart, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
             textSize = 17f
             isChecked = prefs.getBoolean(key, def)
             isClickable = true
@@ -1743,18 +1832,23 @@ class SettingsActivity(private val act: SectionActivity) {
         // кнопкой и отправить в Telegram. Выключено расписание — строку прячем.
         backupDirRow?.visibility =
             if (backupAutoOff()) android.view.View.GONE else android.view.View.VISIBLE
-        // msg6046…6078: папка синхронизации и след последнего прогона.
-        // msg6114: при выполненном входе в Яндекс папка не нужна вовсе — говорим
-        // об этом прямо, иначе человек пойдёт выбирать папку, которая не работает.
-        yandexRow?.text = yandexLabel()
+        // msg6046…6078: место синхронизации и след последнего прогона.
+        // 28.09.2026: строки про Яндекс и Google больше не висят обе — показываем
+        // выбранное место, а в состоянии честно называем, куда идёт файл.
+        syncPlaceRow?.text = syncPlaceLabel()
+        syncAccountRow?.text = syncAccountLabel()
+        // Состояние говорим только когда есть о чём: место не выбрано или вход
+        // потерян. Иначе строки выше уже назвали и место, и вход.
+        syncStateRow?.let { row ->
+            val trouble = SyncStore.trouble(act)
+            if (trouble == null) {
+                row.visibility = android.view.View.GONE
+            } else {
+                row.visibility = android.view.View.VISIBLE
+                row.text = trouble
+            }
+        }
         booksRow?.text = booksLabel()
-        syncDirRow?.text = getString(R.string.sync_dir_title) + ": " +
-            if (YandexDisk.connected(act)) getString(R.string.sync_dir_yandex) else syncDirLabel()
-        // 0.4.86 (msg7020): при подключённом Яндексе папка не нужна вовсе —
-        // синхронизация идёт через него. Прячем, а не показываем с оговоркой:
-        // строка, которой не пользуются, — лишняя остановка в обходе.
-        syncDirRow?.visibility =
-            if (YandexDisk.connected(act)) android.view.View.GONE else android.view.View.VISIBLE
         syncLastRow?.text = getString(R.string.sync_last_title) + ": " +
             (SyncStore.lastResult(act) ?: getString(R.string.sync_last_never))
 
@@ -2172,6 +2266,65 @@ class SettingsActivity(private val act: SectionActivity) {
 
     // ---------------- Синхронизация (msg6046…6114) ----------------
 
+    /** Строка «Куда синхронизировать»: выбранное место словами. */
+    private fun syncPlaceLabel(): String {
+        val where = when (SyncStore.kind(act)) {
+            SyncStore.CLOUD_GOOGLE -> getString(R.string.google_title)
+            SyncStore.CLOUD_YANDEX -> getString(R.string.yandex_title)
+            else -> getString(R.string.sync_place_folder)
+        }
+        return getString(R.string.sync_place_title) + ": " + where
+    }
+
+    /** Строка выбранного места: вход, проверка доступа или смена папки. */
+    private fun syncAccountLabel(): String = when (SyncStore.kind(act)) {
+        SyncStore.CLOUD_GOOGLE -> googleLabel()
+        SyncStore.CLOUD_YANDEX -> yandexLabel()
+        else -> getString(R.string.sync_dir_title) + ": " + syncDirLabel()
+    }
+
+    /** Выбор места синхронизации: Google, Яндекс или папка. Одного, не всех сразу:
+     *  два облака разом — это две разные правды о месте чтения на одном телефоне. */
+    private fun syncPlaceAction() {
+        val now = SyncStore.kind(act)
+        val mark = getString(R.string.sync_place_mark)
+        val items = arrayOf(
+            getString(R.string.google_title) + if (now == SyncStore.CLOUD_GOOGLE) mark else "",
+            getString(R.string.yandex_title) + if (now == SyncStore.CLOUD_YANDEX) mark else "",
+            getString(R.string.sync_place_folder) + if (now == SyncStore.CLOUD_FOLDER) mark else "",
+        )
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.sync_place_title)
+            .setItems(items) { _, which ->
+                val kind = when (which) {
+                    0 -> SyncStore.CLOUD_GOOGLE
+                    1 -> SyncStore.CLOUD_YANDEX
+                    else -> SyncStore.CLOUD_FOLDER
+                }
+                SyncStore.setChosen(act, kind)
+                Diag.log(act, "sync", "место синхронизации выбрано: $kind")
+                refreshRows()
+                // Выбрал облако, а входа нет — сразу предлагаем войти: иначе
+                // человек нажмёт «Синхронизировать сейчас» и получит отказ.
+                when {
+                    kind == SyncStore.CLOUD_GOOGLE && !GoogleDrive.connected(act) -> googleAction()
+                    kind == SyncStore.CLOUD_YANDEX && !YandexDisk.connected(act) -> yandexAction()
+                    kind == SyncStore.CLOUD_FOLDER && SyncStore.folderFor(act) == null -> pickSyncDir()
+                }
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Действие строки выбранного места: вход или выход, проверка доступа, папка. */
+    private fun syncAccountAction() {
+        when (SyncStore.kind(act)) {
+            SyncStore.CLOUD_GOOGLE -> googleAction()
+            SyncStore.CLOUD_YANDEX -> yandexAction()
+            else -> pickSyncDir()
+        }
+    }
+
     /** Строка «Яндекс.Диск» на экране: кто вошёл или предложение войти. */
     private fun yandexLabel(): String {
         val who = YandexDisk.user(act)
@@ -2208,8 +2361,65 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
-    // ---------------- Перенос книг (msg6130) ----------------
+    /** Строка «Google Диск»: кто вошёл или предложение войти. */
+    private fun googleLabel(): String {
+        val who = GoogleDrive.user(act)
+        val state = if (who != null) getString(R.string.google_on, who)
+        else getString(R.string.google_off_state)
+        return getString(R.string.google_title) + ": " + state
+    }
 
+    /** Вход в Google или отказ от него (28.09.2026). Пароль владелец вводит в
+     *  окне Google; у нас остаётся только имя аккаунта, а токен берётся молча и
+     *  нигде не хранится. Там, где сервисов Google нет, так и говорим. */
+    private fun googleAction() {
+        if (!GoogleDrive.available()) {
+            toast(getString(R.string.google_no_play))
+            return
+        }
+        if (GoogleDrive.connected(act)) {
+            MaterialAlertDialogBuilder(act)
+                .setTitle(R.string.google_title)
+                .setItems(
+                    arrayOf(
+                        getString(R.string.google_off),
+                        getString(R.string.google_check),
+                    )
+                ) { _, which ->
+                    if (which == 0) {
+                        GoogleDrive.reset(act)
+                        toast(getString(R.string.google_off_done))
+                        refreshRows()
+                    } else {
+                        checkGoogle()
+                    }
+                }
+                .setNegativeButton(R.string.toc_close, null)
+                .show()
+            return
+        }
+        toast(getString(R.string.google_opening))
+        runCatching { startActivity(Intent(act, GoogleAuthActivity::class.java)) }
+            .onFailure {
+                Diag.log(act, "sync", "не открылось окно входа в Google: ${it.message}")
+                toast(getString(R.string.google_login_fail))
+            }
+    }
+
+    /** Проверка доступа к служебной папке: спрашиваем у Google список файлов.
+     *  В сеть — из фонового потока, ответ говорим словами. */
+    private fun checkGoogle() {
+        toast(getString(R.string.google_check))
+        Thread {
+            val err = GoogleDrive.check(act)
+            runOnUiThread {
+                if (err == null) toast(getString(R.string.google_check_ok))
+                else toast(getString(R.string.google_check_fail, err))
+            }
+        }.start()
+    }
+
+    // ---------------- Перенос книг (msg6130) ----------------
     /** Строка «Книги на Диске»: сколько там книг, которых у нас нет. Число берём
      *  из памяти прошлой проверки — лезть в сеть на каждой перерисовке экрана
      *  нельзя. Ещё не считали — так и говорим: «нажми, чтобы проверить». */
@@ -2227,8 +2437,9 @@ class SettingsActivity(private val act: SectionActivity) {
      *  галочку возвращаем назад и говорим почему. */
     private fun onBooksToggle(on: Boolean) {
         if (!on) return
-        if (!YandexDisk.connected(act)) {
-            toast(getString(R.string.sync_books_need_yandex))
+        val trouble = SyncStore.booksTrouble(act)
+        if (trouble != null) {
+            toast(trouble)
             booksBox?.isChecked = false // вернёт и галочку, и память
             return
         }
@@ -2267,11 +2478,14 @@ class SettingsActivity(private val act: SectionActivity) {
     private fun startBooksPush(plan: SyncStore.BookPlan) {
         toast(getString(R.string.sync_books_pushing, plan.up.size))
         Thread {
-            val (n, err) = SyncStore.pushBooks(act, plan)
+            val res = SyncStore.pushBooks(act, plan)
             runOnUiThread {
                 toast(
-                    if (err != null) getString(R.string.sync_books_push_fail, err)
-                    else getString(R.string.sync_books_pushed, n)
+                    when {
+                        res.error != null -> getString(R.string.sync_books_push_fail, res.error)
+                        res.failed > 0 -> getString(R.string.sync_books_pushed_part, res.done, res.failed)
+                        else -> getString(R.string.sync_books_pushed, res.done)
+                    }
                 )
                 refreshRows()
             }
@@ -2281,8 +2495,9 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Забор книг с Диска. Всегда рукой владельца: это десятки мегабайт из
      *  мобильной сети, и решать про них должен он, а не фоновая синхронизация. */
     private fun pullBooksAction() {
-        if (!YandexDisk.connected(act)) {
-            toast(getString(R.string.sync_books_need_yandex))
+        val trouble = SyncStore.booksTrouble(act)
+        if (trouble != null) {
+            toast(trouble)
             return
         }
         toast(getString(R.string.sync_books_checking))
@@ -2345,22 +2560,17 @@ class SettingsActivity(private val act: SectionActivity) {
      *  разрешения. Но если папка уже есть (своя, папка книг в облаке или папка
      *  копий) — молчим и пользуемся ею, лишний выбор не навязываем. */
     private fun pickSyncDir() {
-        if (YandexDisk.connected(act)) {
-            // При входе в Яндекс файл лежит у него, и папка ничего не решает.
-            toast(getString(R.string.yandex_used))
-            return
-        }
         if (SyncStore.folderFor(act) == null) {
             openSyncDirPicker()
-        } else {
-            MaterialAlertDialogBuilder(act)
-                .setTitle(R.string.sync_dir_title)
-                .setItems(arrayOf(getString(R.string.sync_dir_change))) { _, _ ->
-                    openSyncDirPicker()
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
+            return
         }
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.sync_dir_title)
+            .setItems(arrayOf(getString(R.string.sync_dir_change))) { _, _ ->
+                openSyncDirPicker()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
     }
 
     private fun openSyncDirPicker() {
@@ -2376,6 +2586,8 @@ class SettingsActivity(private val act: SectionActivity) {
         } catch (_: Exception) {
         }
         SyncStore.setDir(act, tree)
+        // Выбрал папку — значит синхронизация идёт через папку: запоминаем место.
+        SyncStore.setChosen(act, SyncStore.CLOUD_FOLDER)
         toast(getString(R.string.sync_dir_saved))
         refreshRows()
     }
@@ -2383,9 +2595,11 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Ручной прогон. Работает и при выключенной галочке: галочка отвечает за
      *  фоновую синхронизацию на полке и в читалке, а не за право нажать кнопку. */
     private fun runSyncNow() {
-        if (!YandexDisk.connected(act) && SyncStore.folderFor(act) == null) {
-            toast(getString(R.string.sync_need_folder))
-            pickSyncDir()
+        val trouble = SyncStore.trouble(act)
+        if (trouble != null) {
+            toast(trouble)
+            // Папки нет — сразу предлагаем выбрать: без неё прогон не пойдёт.
+            if (SyncStore.kind(act) == SyncStore.CLOUD_FOLDER) pickSyncDir()
             return
         }
         toast(getString(R.string.sync_now))

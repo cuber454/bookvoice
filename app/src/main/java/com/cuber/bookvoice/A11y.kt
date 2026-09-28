@@ -3,7 +3,9 @@ package com.cuber.bookvoice
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.View
+import android.view.ViewGroup
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
@@ -63,6 +65,113 @@ object A11y {
             override fun sendAccessibilityEvent(host: View, eventType: Int) {
                 if (eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED) return
                 super.sendAccessibilityEvent(host, eventType)
+            }
+        }
+    }
+
+    /** Наблюдение за доступностным фокусом окна (29.09.2026).
+     *
+     *  Жалоба Сержа: в книге свайпы по строкам иногда уводят фокус на кнопку
+     *  «Ещё» или «Читать/Пауза» сами по себе. Спросить у службы доступности,
+     *  куда она встала, приложение не может — поэтому пишем каждое событие
+     *  переноса: по журналу видно и когда это случилось, и на что именно встал
+     *  диктор (кнопка это, строка текста или служебный текст вроде «Стр. 3»).
+     *
+     *  Ставим на корень окна: событие ребёнка проходит через родителя. Своё
+     *  поведение не меняем — только пишем. */
+    fun watchFocus(root: ViewGroup, where: String, state: (() -> String)? = null) {
+        // Изменения дерева пишем не чаще раза в [CONTENT_LOG_GAP_MS]: они сыплются
+        // пачками, а нужны только как метка времени — «в этот момент окно
+        // перестроилось». По ней видно, наш ли это пересбор ленты сбросил фокус
+        // (жалоба Сержа 29.09.2026: при обходе вверх фокус ушёл на кнопки).
+        var lastContentAt = 0L
+        root.accessibilityDelegate = object : View.AccessibilityDelegate() {
+            override fun onRequestSendAccessibilityEvent(
+                host: ViewGroup,
+                child: View,
+                event: AccessibilityEvent,
+            ): Boolean {
+                val extra = state?.let { runCatching { it() }.getOrNull().orEmpty() }.orEmpty()
+                when (event.eventType) {
+                    AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED -> Diag.log(
+                        root.context, "focus",
+                        "$where: диктор встал на ${who(event)}" +
+                            if (extra.isEmpty()) "" else " [$extra]"
+                    )
+                    AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED -> Diag.log(
+                        root.context, "focus",
+                        "$where: диктор ушёл с ${who(event)}" +
+                            if (extra.isEmpty()) "" else " [$extra]"
+                    )
+                    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                        val now = SystemClock.uptimeMillis()
+                        if (now - lastContentAt >= CONTENT_LOG_GAP_MS) {
+                            lastContentAt = now
+                            Diag.log(
+                                root.context, "focus",
+                                "$where: окно перестроилось (тип ${event.contentChangeTypes})" +
+                                    if (extra.isEmpty()) "" else " [$extra]"
+                            )
+                        }
+                    }
+                }
+                return super.onRequestSendAccessibilityEvent(host, child, event)
+            }
+        }
+    }
+
+    /** Как часто писать в журнал перестройку окна (мс). */
+    private const val CONTENT_LOG_GAP_MS = 700L
+
+    /** Кто именно получил фокус (29.09.2026). Спрашиваем у ИСТОЧНИКА события, а не
+     *  у ребёнка, через которого оно прошло: `child` здесь — прямой ребёнок корня
+     *  (у читалки это контейнер текста), по нему кнопку не узнать, а именно её и
+     *  надо назвать — жалоба Сержа «фокус улетает на кнопку Ещё или Читать».
+     *  Даём имя из разметки, класс и текст; у кнопки-значка текста нет, поэтому
+     *  читаем ещё и описание. */
+    private fun who(event: AccessibilityEvent): String {
+        val src = runCatching { event.source }.getOrNull()
+        val id = src?.viewIdResourceName?.substringAfterLast('/')
+        val cls = src?.className?.toString()?.substringAfterLast('.')
+        val text = event.text.joinToString(" ").trim().take(40)
+        val desc = src?.contentDescription?.toString()?.trim()?.take(40).orEmpty()
+        val name = when {
+            text.isNotEmpty() -> "«$text»"
+            desc.isNotEmpty() -> "«$desc»"
+            else -> "(без текста)"
+        }
+        return "${id ?: "?"}|${cls ?: "?"} $name"
+    }
+
+    /**
+     * Убрать из объявления кнопки само упоминание долгого нажатия, оставив само
+     * действие (28.09.2026, просьба Сержа: «чтобы не говорил долгое нажатие,
+     * вибрации достаточно»).
+     *
+     *  Почему так. Диктор объявляет «долгое нажатие» при каждом попадании на
+     *  кнопку, у которой оно есть, — слова повторяются на каждой кнопке и на
+     *  каждом обходе, а толку в них нет: о срабатывании говорит вибрация, она на
+     *  этих кнопках уже есть ([Vibra.confirm]).
+     *
+     *  Действие при этом не теряется: вместо системного «долгое нажатие» кладём
+     *  своё именованное действие в меню диктора (пункт «Действия») — тем же
+     *  способом, что и действия строк (msg7003). Кто не может удержать палец,
+     *  выберет его из меню, а не потеряет вовсе.
+     */
+    fun replaceLongPress(v: View, label: String, action: () -> Unit) {
+        v.accessibilityDelegate = object : View.AccessibilityDelegate() {
+            override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
+                super.onInitializeAccessibilityNodeInfo(host, info)
+                info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK)
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction(A11Y_ACTION_FIRST + 40, label))
+            }
+
+            override fun performAccessibilityAction(host: View, a: Int, args: Bundle?): Boolean {
+                if (a == A11Y_ACTION_FIRST + 40) {
+                    action()
+                    return true
+                }
+                return super.performAccessibilityAction(host, a, args)
             }
         }
     }
@@ -140,7 +249,7 @@ fun View.setA11yActions(vararg actions: Pair<String, () -> Unit>) {
  * Обнуляем через framework-метод: у compat-сеттера в старых сборках core
  * параметр не помечен nullable, и передача null туда — лотерея.
  */
-class NoItemCountLayoutManager(context: Context) : LinearLayoutManager(context) {
+class NoItemCountLayoutManager(private val ctx: Context) : LinearLayoutManager(ctx) {
 
     override fun onInitializeAccessibilityNodeInfoForItem(
         recycler: RecyclerView.Recycler,
@@ -150,5 +259,37 @@ class NoItemCountLayoutManager(context: Context) : LinearLayoutManager(context) 
     ) {
         super.onInitializeAccessibilityNodeInfoForItem(recycler, state, host, info)
         info.unwrap().collectionItemInfo = null
+    }
+
+    /**
+     * Держать разложенными строки за краем экрана — по ТРИ экрана сверху и снизу
+     * (29.09.2026).
+     *
+     * Зачем. Диктор ходит по предложениям, а предложение — ВИРТУАЛЬНЫЙ узел
+     * внутри строки ленты (см. [ParagraphView]). Узел существует, только пока
+     * строка разложена: у строки за краем экрана узлов нет вовсе, и свайп по
+     * тексту упирается в пустоту — диктор уходит из ленты на кнопку («Ещё» и
+     * кнопки шапки сверху, «Читать/Пауза» снизу). Это и есть жалоба Сержа
+     * «фокус иногда улетает на кнопку сам по себе».
+     *
+     * Одного экрана оказалось мало (журнал 01:51): абзацы в книге высокие, в
+     * запас попадало всего две-три строки, и обход всё равно выходил на кнопки.
+     * Три экрана дают запас в 6–10 строк — обход уходит глубже в текст, а
+     * показать строку на экране просит уже сам диктор (ACTION_SHOW_ON_SCREEN,
+     * см. ParagraphView.onSentenceShow).
+     *
+     * Платим раскладкой лишнего текста — это доли того, что лента уже держит
+     * целой книгой.
+     */
+    override fun calculateExtraLayoutSpace(state: RecyclerView.State, extraLayoutSpace: IntArray) {
+        super.calculateExtraLayoutSpace(state, extraLayoutSpace)
+        val screen = (if (height > 0) height else ctx.resources.displayMetrics.heightPixels) * EXTRA_SCREENS
+        extraLayoutSpace[0] = screen
+        extraLayoutSpace[1] = screen
+    }
+
+    private companion object {
+        /** Сколько экранов текста держать разложенными за краем. */
+        const val EXTRA_SCREENS = 3
     }
 }

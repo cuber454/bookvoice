@@ -8,6 +8,7 @@ import android.util.AttributeSet
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.view.ViewCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
@@ -59,11 +60,63 @@ class ParagraphView @JvmOverloads constructor(
         ACTION_ID_MARK, context.getString(R.string.sel_action_mark),
     )
 
+    /** Действие «Добавить в словарь» (27.09.2026): из книги заводят правило
+     *  произношения, не диктуя слово заново, — приложение показывает слова этого
+     *  предложения флажками. */
+    private val actDict = AccessibilityNodeInfoCompat.AccessibilityActionCompat(
+        ACTION_ID_DICT, context.getString(R.string.sel_action_dict),
+    )
+
+    /** Действие «Убрать такие строки» (28.09.2026): приложение ищет по книге
+     *  похожие строки и собирает правило, которое их убирает из чтения. */
+    private val actDrop = AccessibilityNodeInfoCompat.AccessibilityActionCompat(
+        ACTION_ID_DROP, context.getString(R.string.sel_action_drop),
+    )
+
+    /** Как диктор называет строку-разделитель («* * *»). Слово, а не звёздочки:
+     *  при обходе текста должно быть слышно, что это граница куска, а не мусор
+     *  (26.09.2026, просьба Сержа). */
+    private val sepLabel: CharSequence = context.getString(R.string.a11y_separator)
+
+    /** Как диктор называет начало абзаца (28.09.2026, просьба Сержа: при обходе
+     *  текста свайпами должно быть слышно, что это абзац, — как уже слышно
+     *  «Заголовок» у названий глав и «Разделитель» у строк вроде «* * *»).
+     *  Говорим только у ПЕРВОГО предложения абзаца: называть абзацем каждое
+     *  предложение было бы неправдой и шумом.
+     *
+     *  29.09.2026, жалоба Сержа «в некоторых книгах на каждой строчке читается
+     *  абзац»: в сборниках анекдотов, диалогах и стихах абзац часто состоит из
+     *  одного предложения (в «500 неприличных анекдотов» таких 2127 из 3019), и
+     *  слово звучало на каждой строке. У абзаца из одного предложения границу
+     *  обозначать нечем — предложение и есть весь абзац, поэтому там слово не
+     *  говорим вовсе (см. [sentenceCount]). */
+    private val paraLabel: CharSequence = context.getString(R.string.a11y_para_word)
+
+    /** «Названия строк в тексте» (29.09.2026): включённая настройка разрешает
+     *  называть абзацы и разделители, выключенная — молчать. Читаем из тех же
+     *  настроек, что читалка («reader», см. MainActivity.prefs), и на каждый
+     *  вопрос диктора, а не один раз: настройку можно переключить и вернуться в
+     *  открытую книгу. */
+    private val lineNamesOn: Boolean
+        get() = context.getSharedPreferences("reader", Context.MODE_PRIVATE)
+            .getBoolean(MainActivity.KEY_LINE_NAMES, true)
+
     /** Нажатие на предложение: индекс предложения внутри абзаца. */
     var onSentenceClick: ((Int) -> Unit)? = null
 
     /** Долгое нажатие на предложении: индекс предложения внутри абзаца. */
     var onSentenceLongClick: ((Int) -> Unit)? = null
+
+    /** «Добавить в словарь» из меню действий диктора: индекс предложения. */
+    var onSentenceDict: ((Int) -> Unit)? = null
+
+    /** «Убрать такие строки» из меню действий диктора: индекс предложения. */
+    var onSentenceDrop: ((Int) -> Unit)? = null
+
+    /** Диктор просит показать предложение на экране (ACTION_SHOW_ON_SCREEN):
+     *  индекс предложения внутри абзаца. Строку двигает читалка — сама она про
+     *  виртуальные узлы ничего не знает (29.09.2026). */
+    var onSentenceShow: ((Int) -> Unit)? = null
 
     private val helper = object : ExploreByTouchHelper(this) {
 
@@ -101,6 +154,26 @@ class ParagraphView @JvmOverloads constructor(
             node.className = "android.widget.TextView"
             node.isFocusable = true
             node.isClickable = true
+            // 26.09.2026 (просьба Сержа): строка-разделитель («* * *», «— — —»,
+            // «...») объявляется СЛОВОМ и помечается заголовком. Так при обходе
+            // диктором слышно, что это граница куска текста, а не мусор, и по
+            // таким строкам диктор умеет ходить своим обходом заголовков.
+            // 29.09.2026: при выключенных «Названиях строк в тексте» слова не
+            // даём, а пометку заголовка оставляем — по ней диктор ходит между
+            // кусками сборника, и без неё пропадёт навигация.
+            if (Roles.looksSeparator(node.text?.toString().orEmpty())) {
+                node.isHeading = true
+                if (lineNamesOn) node.contentDescription = sepLabel
+            } else if (i == firstSentence() && sentenceCount() > 1 && lineNamesOn) {
+                // 28.09.2026 (просьба Сержа): у первого предложения абзаца
+                // называем тип — «Абзац». Так при обходе текста свайпами слышно,
+                // где начинается новый кусок, ровно как слышно «Заголовок» у
+                // названий глав и «Разделитель» у звёздочек. Только у первого:
+                // называть абзацем каждое предложение было бы неправдой.
+                // 29.09.2026: и только если в абзаце больше одного предложения —
+                // иначе слово звучало бы на каждой строке коротких книг.
+                node.contentDescription = "$paraLabel. ${node.text}"
+            }
             // msg6348: без этого диктор не считает узел удерживаемым, и жест
             // «двойной тап с удержанием» не начинал выделение фрагмента —
             // раньше это свойство выставлял сам TextView со слушателем.
@@ -116,6 +189,8 @@ class ParagraphView @JvmOverloads constructor(
             // «Читать отсюда» он звучал похоже и только мешал.
             node.addAction(actRead)
             node.addAction(actMark)
+            node.addAction(actDict)
+            node.addAction(actDrop)
             node.setBoundsInParent(boundsOfSentence(i))
         }
 
@@ -163,6 +238,27 @@ class ParagraphView @JvmOverloads constructor(
                 ACTION_ID_MARK -> {
                     markHandled(i)
                     onSentenceLongClick?.invoke(i)
+                    true
+                }
+                ACTION_ID_DICT -> {
+                    markHandled(i)
+                    onSentenceDict?.invoke(i)
+                    true
+                }
+                ACTION_ID_DROP -> {
+                    markHandled(i)
+                    onSentenceDrop?.invoke(i)
+                    true
+                }
+                // Диктор подвёл узел к экрану (29.09.2026). Узел предложения —
+                // виртуальный: платформа сама строку не прокрутит, потому что
+                // «настоящего» представления у предложения нет. Просим читалку
+                // показать это предложение; заодно это и есть ответ на жалобу
+                // Сержа «иногда прокручивает, а иногда нет».
+                // Число берём у действия: в публичном SDK константы-числа нет,
+                // есть само действие (AccessibilityAction, API 21).
+                ACT_SHOW_ON_SCREEN -> {
+                    onSentenceShow?.invoke(i)
                     true
                 }
                 else -> false
@@ -239,10 +335,23 @@ class ParagraphView @JvmOverloads constructor(
     }
 
     private companion object {
+        /** «Покажи этот узел на экране» — так диктор просит прокрутить к тому,
+         *  на что встал. В публичном SDK константа-число для этого действия не
+         *  выставлена (есть только само AccessibilityAction), поэтому берём её
+         *  у действия. */
+        val ACT_SHOW_ON_SCREEN: Int =
+            AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id
         // Свои действия узла нумеруются с 0x01000000 — как в платформе
         // (AccessibilityNodeInfo.ACTION_ID_FIRST_CUSTOM_ACTION).
         const val ACTION_ID_READ = 0x01000001
         const val ACTION_ID_MARK = 0x01000002
+
+        /** «Добавить в словарь» (27.09.2026) — третье именованное действие. */
+        const val ACTION_ID_DICT = 0x01000003
+
+        /** «Убрать такие строки» (28.09.2026) — четвёртое: приложение ищет
+         *  похожие строки по книге и собирает правило, которое их убирает. */
+        const val ACTION_ID_DROP = 0x01000004
 
         /** Окно, в котором жест и действие диктора считаются одним поступком. */
         const val DOUBLE_MS = 400L
@@ -300,6 +409,22 @@ class ParagraphView @JvmOverloads constructor(
         Diag.log(context, "a11y", "$tag #$n: ${msg()}")
     }
 
+    /** Первое непустое предложение абзаца — с него абзац и начинается. У него
+     *  диктор называет тип («Абзац»). */
+    private fun firstSentence(): Int {
+        for (i in starts.indices) if (ends[i] > starts[i]) return i
+        return 0
+    }
+
+    /** Сколько в абзаце непустых предложений (29.09.2026). Абзац из одного
+     *  предложения «Абзацем» не называем: обозначать нечего, а звучало это на
+     *  каждой строке коротких книг (анекдоты, диалоги, стихи). */
+    private fun sentenceCount(): Int {
+        var n = 0
+        for (i in starts.indices) if (ends[i] > starts[i]) n++
+        return n
+    }
+
     /** Задать границы предложений внутри уже выставленного [text].
      *  Звать после `text = …` — смещения считаются по его длине. */
     fun bindSentences(starts: IntArray, ends: IntArray) {
@@ -313,6 +438,13 @@ class ParagraphView @JvmOverloads constructor(
     fun sentenceTop(index: Int): Int {
         if (index !in starts.indices) return -1
         return boundsOfSentence(index).top
+    }
+
+    /** Низ предложения внутри абзаца — для проверки «видно ли его целиком»;
+     *  -1 — не знаем такого предложения. */
+    fun sentenceBottom(index: Int): Int {
+        if (index !in starts.indices) return -1
+        return boundsOfSentence(index).bottom
     }
 
     /** Предложение, стоящее на этой высоте абзаца (координаты представления);

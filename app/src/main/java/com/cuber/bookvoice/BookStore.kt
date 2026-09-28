@@ -214,6 +214,38 @@ object BookStore {
         return fromResolver ?: u.lastPathSegment ?: uri
     }
 
+    /** Файла за записью больше нет — запись мёртвая (28.09.2026).
+     *
+     *  Отличаем «файла нет» от «проверить нечем»:
+     *   — у file:// файла нет, но родительский каталог на месте — значит, книгу
+     *     убрали или перенесли (это и есть мёртвая запись); если и каталога нет,
+     *     том мог отключиться, и запись не трогаем;
+     *   — у content:// верим только честному ответу провайдера «документа нет»
+     *     (FileNotFoundException — так отвечает и проводник Mixplorer, проверено
+     *     28.09.2026). Прочие ошибки и пустой поток считаем «не знаем»: облачная
+     *     папка бывает недоступна минуту, а запись хранит место чтения. */
+    fun fileGone(context: Context, uri: String): Boolean {
+        val u = Uri.parse(uri)
+        return when (u.scheme) {
+            "file" -> {
+                val f = u.path?.let { File(it) } ?: return false
+                if (f.exists()) false else f.parentFile?.isDirectory == true
+            }
+            "content" -> try {
+                val stream = context.contentResolver.openInputStream(u)
+                if (stream == null) false else {
+                    stream.close()
+                    false
+                }
+            } catch (_: java.io.FileNotFoundException) {
+                true
+            } catch (_: Exception) {
+                false
+            }
+            else -> false
+        }
+    }
+
     @Synchronized
     fun upsert(context: Context, rec: BookRecord) {
         val list = all(context).filterNot { it.uri == rec.uri }.toMutableList()
@@ -223,6 +255,10 @@ object BookStore {
 
     @Synchronized
     fun remove(context: Context, uri: String) {
+        // Книга уходит с полки — её книжные правила в словаре уходят вместе с ней
+        // (28.09.2026, просьба Сержа: «чтобы это уходило вместе с книгой удаляемой»).
+        val rec = all(context).firstOrNull { it.uri == uri }
+        if (rec != null) runCatching { Dict.forgetBook(context, rec.name) }
         save(context, all(context).filterNot { it.uri == uri })
     }
 
