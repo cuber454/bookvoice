@@ -537,7 +537,19 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val heldBook = ReaderEngine.book
         val heldUri = if (heldBook != null) ReaderEngine.currentUri else null
         val otherBook = requested != null && heldBook != null && requested != heldUri
-        if (!otherBook && liveUri != null && (requested == null || requested == liveUri)) {
+        // 30.09.2026, жалоба Сержа: «она читала, потом я зашёл в неё и чтение
+        // прервалось» (журнал 15:53:56). Он вышел из книги на полку и снова открыл
+        // ту же книгу: окно создаётся РАНЬШЕ, чем успевает закрыться прежнее, а
+        // [ReaderEngine.liveWindowlessUri] отвечает null, пока прежнее окно ещё
+        // числится хозяином (host != null). Из-за этого мы уходили в ветку «окно
+        // переоткрывают без живого чтения», гасили движок (close: «фокус отдан»,
+        // «закрываю плеер», служба destroy) — и книга замолкала, а чтение заново не
+        // начиналось (автоматическое чтение выключено).
+        // Теперь смотрим на САМ движок: если он держит ту же книгу, которую просят
+        // показать (или место не названо вовсе), окно подключается к живому чтению
+        // и ничего не гасит.
+        val sameHeldBook = heldBook != null && (requested == null || requested == heldUri)
+        if (sameHeldBook || (!otherBook && liveUri != null && (requested == null || requested == liveUri))) {
             rejoinLiveReading()
         } else {
             // #38: «сердце» чтения — плеер, состояние, цикл, аудиофокус — живёт в
@@ -1357,7 +1369,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         ReaderBars.bookClosed()
         if (active === this) active = null
         when {
-            ReaderEngine.playing -> ReaderEngine.windowGoneWhilePlaying()
+            ReaderEngine.playing -> ReaderEngine.windowGoneWhilePlaying(this)
             ReaderEngine.keepCardWhenWindowGone() -> ReaderEngine.windowGoneWhilePaused(this)
             else -> ReaderEngine.close()
         }

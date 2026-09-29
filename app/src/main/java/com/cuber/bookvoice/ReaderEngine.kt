@@ -422,7 +422,12 @@ internal object ReaderEngine {
      *  книги (см. rejoinLiveReading) подхватит живое состояние. НЕ зовём [close]:
      *  он загасил бы звук, сессию и книгу. */
     @Synchronized
-    fun windowGoneWhilePlaying() {
+    fun windowGoneWhilePlaying(window: Host? = null) {
+        // 30.09.2026: уже другое окно у руля — чужое закрытие нам не указ (гонка
+        // переоткрытия), ровно как в [windowGoneWhilePaused]. Без этой проверки
+        // закрывающееся прежнее окно сбрасывало host у НОВОГО: звук продолжался, а
+        // окно переставало за чтением следить.
+        if (host != null && window != null && host !== window) return
         host = null
         Diag.log(ctx, "activity", "окно закрыто, чтение без окна продолжается")
     }
