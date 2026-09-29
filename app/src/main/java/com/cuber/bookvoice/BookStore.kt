@@ -262,6 +262,14 @@ object BookStore {
     private fun externalPath(path: String): Boolean =
         path.startsWith("/storage/") || path.startsWith("/sdcard") || path.startsWith("/mnt/")
 
+    /** Сколько записей полки лежит во внешнем хранилище (30.09.2026). Нужно,
+     *  чтобы сказать вслух, сколько книг не видно, пока «Доступ ко всем файлам»
+     *  выключен: иначе полка просто выглядит короче, и это похоже на пропажу. */
+    fun externalCount(context: Context): Int = all(context).count { rec ->
+        val u = Uri.parse(rec.uri)
+        u.scheme == "file" && externalPath(u.path ?: "")
+    }
+
     @Synchronized
     fun upsert(context: Context, rec: BookRecord) {
         val list = all(context).filterNot { it.uri == rec.uri }.toMutableList()

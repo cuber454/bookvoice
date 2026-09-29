@@ -75,6 +75,10 @@ class LibraryActivity(private val act: SectionActivity) {
     // авто-открытие последней книги при старте не срабатывает — открываем файл.
     private var launchWasExternal = false
 
+    // 30.09.2026: про выключенный «Доступ ко всем файлам» говорим один раз за
+    // запуск — иначе фраза звучала бы при каждом открытии полки.
+    private var accessMissingTold = false
+
     // Фильтр списка по статусу (msg643): 0..2 — конкретный статус из
     // BookRecord, FILTER_ALL — показывать всё, FILTER_FAV — избранное (msg2555).
     // Выбранный фильтр помним в prefs.
@@ -1381,7 +1385,21 @@ class LibraryActivity(private val act: SectionActivity) {
         // 27 из 47», хотя файлы на месте). В этом случае не проверяем вовсе:
         // убрать запись — значит потерять место чтения, закладки и цитаты.
         if (!AllFiles.granted(act)) {
-            Diag.log(act, "shelf", "нет доступа ко всем файлам — записи без файлов не проверяю")
+            val external = BookStore.externalCount(act)
+            Diag.log(
+                act, "shelf",
+                "нет доступа ко всем файлам — записи без файлов не проверяю (внешних книг на полке $external)"
+            )
+            // 30.09.2026: раньше в этом случае полка просто выглядела короче, и
+            // человек не знал, что часть книг спрятана. Говорим один раз за
+            // запуск и называем путь, где включить (на Android 11+ в обычных
+            // разрешениях приложения этого пункта нет).
+            if (external > 0 && !accessMissingTold) {
+                accessMissingTold = true
+                val msg = plurals(R.plurals.all_files_hidden_books, external)
+                toast(msg)
+                binding.tvTitle.announceForAccessibility(msg)
+            }
             return emptyList()
         }
         val gone = all.filter { BookStore.fileGone(act, it.uri) }
