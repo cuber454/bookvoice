@@ -984,7 +984,31 @@ android {
         // Вторая правка там же: windowGoneWhilePlaying получил проверку «уже другое
         // окно у руля» (как у паузы), иначе закрывающееся прежнее окно сбрасывало host
         // у нового — звук шёл, а окно за чтением не следило.
-        versionCode = 217
+        // 0.5.5 (код 218): обновление библиотек, ПЕРВАЯ группа — то, на чём стоит
+        // окно и текст (решение от 29.09.2026: обновляем по одной группе, чтобы
+        // при поломке сразу было видно виновника). Ядро 1.13.1 → 1.19.1,
+        // appcompat 1.7.0 → 1.8.0, material 1.12.0 → 1.14.0, activity
+        // 1.9.3 → 1.13.0, customview 1.1.0 → 1.2.0. Media3 1.11.1, PDFBox
+        // 2.0.27.0 и okhttp 4.12.0 не трогаем: это следующие группы (сетевой
+        // клиент — отдельно, вход в Google — отдельно), а старая androidx.media
+        // уйдёт совсем, когда уведомление в шторке переедет на Media3.
+        // 0.5.5 (код 219): обновление библиотек, ВТОРАЯ группа — сеть и вход:
+        // сетевой клиент okhttp 4.12.0 → 5.4.0 (им ходят Google Диск, Яндекс,
+        // каталоги и самообновление) и вход в Google 21.3.0 → 21.6.0.
+        // Почему не самое свежее: okhttp 5.5.0 и ядро 1.19 требуют compileSdk 37,
+        // а наш набор сборки (AGP 9.0.1) знает только 36 — им нужен отдельный
+        // шаг: AGP 9.1 + compileSdk 37 (см. AGENTS.md, «Что дальше»).
+        // ВАЖНО про 22.0.0: в play-services-auth 22 старый вход в Google вырезан
+        // совсем — в его classes.jar нет ни одного класса GoogleSignIn*, остался
+        // только identity.SignInClient. Поэтому 22 требует перехода на Credential
+        // Manager: отдельная работа, в эти группы не входит.
+        // 0.5.5 (код 220): обновление библиотек, ТРЕТЬЯ группа — медиа-карточка.
+        // Уведомление в шторке строит сам Media3: MediaStyleNotificationHelper
+        // понимает сессию Media3 напрямую, поэтому мост через MediaSessionCompat
+        // и старая библиотека androidx.media ушли совсем (её строка удалена из
+        // зависимостей). Вид карточки для Сержа не меняется: название книги,
+        // место, «Назад/Пауза/Вперёд/Выход» — их собираем как и раньше.
+        versionCode = 220
         versionName = "0.5.5"    }
 
     signingConfigs {
@@ -1033,22 +1057,34 @@ android {
 }
 
 dependencies {
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("androidx.core:core-ktx:1.13.1")
+    // 30.09.2026: 4.12.0 → 5.4.0. Пятая линия умеет больше, но 5.5.0 требует
+    // compileSdk 37 (по aar-metadata у okhttp-android), поэтому взята последняя
+    // версия под наш 36 — 5.4.0.
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
+    // Ядро 1.19.x требует compileSdk 37 и AGP 9.1 (проверено по aar-metadata
+    // 30.09.2026), поэтому взята последняя версия под наш compileSdk 36 — 1.18.0.
+    implementation("androidx.core:core-ktx:1.18.0")
     // enableEdgeToEdge для edge-to-edge (SDK 36): appcompat тянет activity 1.7.0,
     // где этой функции ещё нет — поднимаем до версии с ней.
-    implementation("androidx.activity:activity:1.9.3")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.activity:activity:1.13.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
+    implementation("com.google.android.material:material:1.14.0")
     // 28.09.2026: вход в Google Диск. Google запрещает Android-приложениям
     // браузерный вход с возвратом по своей схеме, поэтому доступ спрашиваем
     // через их библиотеку для Android (см. GoogleAuthActivity).
-    implementation("com.google.android.gms:play-services-auth:21.3.0")
-    implementation("androidx.media:media:1.7.0")
+    // 30.09.2026: 21.3.0 → 21.6.0. Двадцать вторая версия сюда НЕ подходит: в ней
+    // старый вход в Google (GoogleSignInClient) удалён, нужен Credential Manager.
+    implementation("com.google.android.gms:play-services-auth:21.6.0")
+    // 30.09.2026 (сборка 220): androidx.media убрана совсем. Она держалась ради
+    // двух вещей в медиа-уведомлении — MediaSessionCompat (мост к ключу сессии)
+    // и androidx-стиля MediaStyle; и то и другое заменил сам Media3
+    // (MediaStyleNotificationHelper.MediaStyle понимает сессию Media3 напрямую).
+    // Если библиотека и останется в сборке, то только транзитивно у media3-session
+    // и неиспользованной — R8 её выбросит.
     // ExploreByTouchHelper (ParagraphView, msg6322): предложения внутри абзаца —
     // виртуальные узлы для диктора. Тянется и транзитивно (recyclerview →
     // customview), но зависимость эта явная — держим её в списке.
-    implementation("androidx.customview:customview:1.1.0")
+    implementation("androidx.customview:customview:1.2.0")
     // PDF: извлечение текстового слоя + дерево закладок (для PDF-инструкций).
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     // Media3 ExoPlayer: файлы фраз играет только он (см. FilePlayback). Прежний

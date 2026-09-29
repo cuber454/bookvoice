@@ -14,12 +14,11 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.support.v4.media.session.MediaSessionCompat
 import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
-import androidx.media.app.NotificationCompat.MediaStyle
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaStyleNotificationHelper
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
@@ -28,9 +27,10 @@ import com.google.common.util.concurrent.ListenableFuture
 /**
  * Медиа-сервис читалки. Держит сессию Media3 и работает В ПЕРЕДНЕМ
  * ПЛАНЕ (foreground service + медиа-уведомление), как настоящий плеер.
- * MediaSessionCompat остался тут ровно для одного: им ключ сессии Media3
- * переводится в ключ, который понимает MediaStyle нашего уведомления
- * (см. [compatToken]).
+ * Медиа-карточку собирает сам Media3 (`MediaStyleNotificationHelper`): он
+ * кладёт в уведомление ключ сессии Media3 напрямую, поэтому старая библиотека
+ * `androidx.media` и её `MediaSessionCompat` больше не нужны (30.09.2026,
+ * сборка 220).
  *
  * Почему именно foreground: Android отдаёт медиа-кнопки (Bluetooth-гарнитура,
  * «волшебное касание» TalkBack) тому приложению, которое сейчас «плеер».
@@ -373,23 +373,23 @@ class MediaSessionService : Service() {
             .addAction(playAction)
             .addAction(nextAction)
             .addAction(exitAction)
-            .setStyle(
-                MediaStyle()
-                    .setMediaSession(compatToken())
+        // Стиль медиа-карточки берём у Media3: его MediaStyleNotificationHelper
+        // кладёт в уведомление ключ сессии Media3 напрямую, без моста через
+        // MediaSessionCompat, поэтому старая androidx.media уходит совсем
+        // (30.09.2026, сборка 220). Сессии ещё нет — публикуем карточку без
+        // стиля: она всё равно не медиа, а следующая публикация будет со стилем.
+        val live = session
+        if (live != null) {
+            builder.setStyle(
+                MediaStyleNotificationHelper.MediaStyle(live)
                     .setShowActionsInCompactView(0, 1, 2)
             )
+        }
         // msg4629: касание карточки возвращает в книгу — путь знает движок,
         // он и передал uri (см. ReaderEngine.ensureMediaService).
         if (bookUri != null) builder.setContentIntent(bookOpenIntent())
         return builder.build()
     }
-
-    /** Токен сессии для медиа-уведомления. У Media3 своя (платформенная) сессия,
-     *  поэтому берём её платформенный токен и оборачиваем в совместимый: иначе
-     *  уведомление не опознаётся системой как медиа-карточка, а на Android 13+
-     *  именно из сессии система и строит карточку в шторке. */
-    private fun compatToken(): MediaSessionCompat.Token? =
-        session?.platformToken?.let { MediaSessionCompat.Token.fromToken(it) }
 
     private fun startForegroundCompat(notification: Notification) {
         if (Build.VERSION.SDK_INT >= 29) {
