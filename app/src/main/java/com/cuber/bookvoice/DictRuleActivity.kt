@@ -31,6 +31,12 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
  *  «По буквам» — отдельная кнопка для сокращений: «СВО» → «эс-вэ-о». Проверено
  *  на слух 27.09.2026: через пробел движок сливает буквы в одно слово, через
  *  дефис читает верно.
+ *
+ *  Из книги приходим по действию «Добавить в словарь» (29.09.2026): предложение
+ *  сразу стоит в поле «Что искать» целой строкой — чаще всего правило и нужно на
+ *  всю строку (разделители вида «* * *»). Если строку надо сузить, рядом есть
+ *  «Слова из предложения»: слова отмечаются флажками, а кнопка «Всё предложение»
+ *  возвращает целую строку.
  */
 class DictRuleActivity : RowsActivity() {
 
@@ -45,6 +51,17 @@ class DictRuleActivity : RowsActivity() {
         /** Правят КНИЖНОЕ правило (28.09.2026): такие правила лежат отдельным
          *  файлом, поэтому и читать, и писать их надо оттуда, а не из словаря. */
         const val EXTRA_BOOK = "book_rule"
+
+        /** Метка строки «Кому годится правило». */
+        private const val SCOPE_TAG = "scope"
+
+        /** Ответ списку правил: что именно сохранили (29.09.2026). По нему список
+         *  после возврата встаёт диктором на это правило. Ищем по трём строкам
+         *  самого правила: номера строк после сохранения сдвигаются, а правило
+         *  могло ещё и переехать в другую часть. */
+        const val RESULT_FIND = "saved_find"
+        const val RESULT_REPL = "saved_repl"
+        const val RESULT_BOOK = "saved_book"
     }
 
     private lateinit var binding: ActivitySettingsBinding
@@ -57,6 +74,20 @@ class DictRuleActivity : RowsActivity() {
 
     /** Правят книжное правило: списки и запись — из книжного файла. */
     private var bookRule = false
+
+    /** Кому годится правило: null — всем книгам, иначе имя файла книги. Правится
+     *  строкой «Кому» (29.09.2026, вопрос Сержа: как сделать правило только для
+     *  одной его книги). */
+    private var bindBook: String? = null
+
+    /** Имя книги, которой правило можно ограничить: у книжного правила — его
+     *  книга, у нового — последняя открытая. Пусто — ограничивать нечем, строки
+     *  выбора в окне не будет. */
+    private var bookName: String? = null
+
+    /** Строка «Кому»: после переключения меняем текст на месте, чтобы диктор
+     *  сказал новое значение (пересборка строки его теряет). */
+    private var scopeRow: TextView? = null
 
     private var findField: EditText? = null
     private var replField: EditText? = null
@@ -88,6 +119,11 @@ class DictRuleActivity : RowsActivity() {
         } else if (fromGroup.isNotEmpty()) {
             engines = listOf(fromGroup)
         }
+        // Кому правило годится: у правки — как было, у нового — пока всем книгам.
+        // Имя книги берём у читалки, а если процесс уже перезапускался — из
+        // настроек (туда его кладёт MainActivity при открытии книги).
+        bindBook = rule?.book
+        bookName = rule?.book ?: lastBookName()
         setTitle(getString(if (rule == null) R.string.dict_rule_new else R.string.dict_rule_title))
         binding = ActivitySettingsBinding.inflate(layoutInflater)
         container.addView(
@@ -113,9 +149,17 @@ class DictRuleActivity : RowsActivity() {
 
     private fun buildRows(rule: Dict.Rule?) {
         contentRoot.removeAllViews()
+        scopeRow = null
         addHint(getString(R.string.dict_rule_hint))
 
-        findField = addField(getString(R.string.dict_rule_find), rule?.find.orEmpty(), null)
+        // Из книги приходим с готовым предложением, и «что искать» сразу заполнено
+        // целой строкой (просьба Сержа 29.09.2026: «чтобы целая строка уже стояла в
+        // поле поиска»). Нужно сузить — рядом строка «Слова из предложения», там
+        // слова отмечаются флажками. Тире в начале реплики срезаем: движок получает
+        // текст УЖЕ без него (см. ReaderEngine.dictText), и правило с тире не
+        // нашлось бы никогда.
+        val initialFind = rule?.find ?: sentenceForFind()
+        findField = addField(getString(R.string.dict_rule_find), initialFind, null)
         replField = addField(getString(R.string.dict_rule_repl), rule?.repl.orEmpty(), null)
 
         // Пришли из книги — рядом со словами предложения: отмечаешь нужные
@@ -123,7 +167,7 @@ class DictRuleActivity : RowsActivity() {
         if (sentence.isNotEmpty() && rule == null) {
             addRow(
                 getString(R.string.dict_from_sentence),
-                getString(R.string.dict_from_sentence_hint, sentence),
+                getString(R.string.dict_from_sentence_hint, sentenceForFind()),
                 strong = true,
             ) { pickFromSentence() }
         }
@@ -135,6 +179,7 @@ class DictRuleActivity : RowsActivity() {
         ) { regex = it }
 
         addRow(getString(R.string.dict_rule_engines, enginesText()), null, strong = true) { pickEngines() }
+        addScopeRow()
         addRow(getString(R.string.dict_rule_letters), getString(R.string.dict_rule_letters_hint)) { makeLetters() }
         addRow(getString(R.string.dict_rule_pick), getString(R.string.dict_rule_pick_hint)) { pickPronunciation() }
         addRow(getString(R.string.dict_rule_check), getString(R.string.dict_rule_check_hint)) { check() }
@@ -190,6 +235,43 @@ class DictRuleActivity : RowsActivity() {
         return cb
     }
 
+    // ——— Кому годится правило ———
+
+    /** Строка «Кому годится правило»: всем книгам или только одной. Её нет, когда
+     *  книгу нечем назвать (книга ещё не открывалась): предлагать «только для
+     *  книги» без имени книги — обман. */
+    private fun addScopeRow() {
+        if (bookName == null) return
+        scopeRow = addRow(scopeTitle(), scopeHint(), strong = true, tag = SCOPE_TAG) { toggleScope() }
+    }
+
+    private fun scopeTitle(): String =
+        if (bindBook == null) getString(R.string.dict_scope_all)
+        else getString(R.string.dict_scope_book, bindBook)
+
+    private fun scopeHint(): String =
+        if (bindBook == null) getString(R.string.dict_scope_all_hint, bookName.orEmpty())
+        else getString(R.string.dict_scope_book_hint)
+
+    /** Касание переносит правило между «всем книгам» и «только этой». Пометку
+     *  показываем словами и проговариваем сами: строка остаётся на месте, фокус
+     *  с неё не уходит. */
+    private fun toggleScope() {
+        val name = bookName ?: return
+        bindBook = if (bindBook == null) name else null
+        scopeRow?.let { updateRow(it, scopeTitle(), scopeHint()) }
+        Diag.log(
+            this, "dict",
+            "правило: кому — " + (if (bindBook == null) "все книги" else "только книга «$bindBook»")
+        )
+    }
+
+    /** Имя последней открытой книги: сперва у читалки (процесс жив), иначе из
+     *  настроек — туда его кладёт MainActivity при открытии книги. */
+    private fun lastBookName(): String? =
+        ReaderEngine.currentName?.takeIf { it.isNotBlank() }
+            ?: prefs().getString(MainActivity.KEY_LAST_BOOK_NAME, null)?.takeIf { it.isNotBlank() }
+
     // ——— Слова из предложения («Добавить в словарь» из книги) ———
 
     /** Список слов предложения флажками. Отмечать можно только соседние:
@@ -197,12 +279,15 @@ class DictRuleActivity : RowsActivity() {
      *  слово не найдёт в книге ничего. Про пропуск говорим прямо, иначе
      *  человек будет думать, что починил, а голос не изменится. */
     private fun pickFromSentence() {
-        val words = Dict.words(sentence)
+        val words = Dict.words(sentenceForFind())
         if (words.isEmpty()) {
             toastText(getString(R.string.dict_need_word))
             return
         }
+        // Флажки начинаем с пустого набора: человек отмечает ровно те слова,
+        // которые хочет оставить в правиле (целая строка уже стоит в поле).
         pickedWords.clear()
+        val boxes = ArrayList<CheckBox>(words.size)
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         for ((i, w) in words.withIndex()) {
             val cb = CheckBox(this).apply {
@@ -225,10 +310,11 @@ class DictRuleActivity : RowsActivity() {
                 } else {
                     pickedWords.remove(i)
                 }
-                val text = assembled(words)
+                val text = pickedText(words)
                 findField?.setText(text)
                 speak(text)
             }
+            boxes.add(cb)
             col.addView(cb)
         }
         val scroll = ScrollView(this).apply { addView(col) }
@@ -236,10 +322,38 @@ class DictRuleActivity : RowsActivity() {
             .setTitle(R.string.dict_from_sentence)
             .setView(scroll)
             .setPositiveButton(R.string.dict_save) { _, _ ->
-                findField?.setText(assembled(words))
+                findField?.setText(pickedText(words))
+            }
+            // Вернуть целую строку одним касанием: сузил галочками и передумал —
+            // иначе предложение пришлось бы набирать заново (оно длинное, вслепую
+            // это мучение).
+            .setNeutralButton(R.string.dict_from_sentence_all) { _, _ ->
+                pickedWords.clear()
+                reverting = true
+                boxes.forEach { it.isChecked = false }
+                reverting = false
+                val whole = sentenceForFind()
+                findField?.setText(whole)
+                speak(whole)
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    /** Что писать в «что искать» по отмеченным словам: ничего не отмечено —
+     *  оставляем целую строку. */
+    private fun pickedText(words: List<String>): String =
+        if (pickedWords.isEmpty()) sentenceForFind() else assembled(words)
+
+    /** Предложение для поля «что искать»: без ведущего тире и лишних пробелов.
+     *  Тире срезаем потому, что движок получает текст уже без него
+     *  (см. ReaderEngine.dictText), и правило с тире в книге не нашлось бы. */
+    private fun sentenceForFind(): String {
+        var t = sentence.trim()
+        while (t.isNotEmpty() && (t[0] == '—' || t[0] == '–' || t[0] == '−')) {
+            t = t.substring(1).trimStart()
+        }
+        return t
     }
 
     /** Отмеченные слова идут подряд, без пропусков. */
@@ -408,20 +522,35 @@ class DictRuleActivity : RowsActivity() {
             toastText(getString(R.string.dict_need_find))
             return
         }
+        val bind = bindBook
         val fresh = Dict.Rule(
             find, repl, regexCheck?.isChecked ?: regex, rule?.off ?: false, engines,
-            // Книжное правило остаётся книжным: книгу ему не меняем.
-            book = rule?.book,
+            book = bind,
         )
-        if (bookRule) {
-            if (rule == null) Dict.addBookRule(this, fresh) else Dict.replaceBookRule(this, rule, fresh)
+        // Правило, привязанное к книге, живёт в книжном файле (29.09.2026): там
+        // его видно рядом с прочими правилами книг, и оно уходит вместе с книгой.
+        // Снял привязку у общего правила — оно возвращается в общий словарь.
+        val toBooks = bookRule || bind != null
+        if (toBooks) {
+            if (!bookRule && rule != null) Dict.remove(this, rule)
+            if (rule == null || !bookRule) Dict.addBookRule(this, fresh)
+            else Dict.replaceBookRule(this, rule, fresh)
         } else {
+            if (bookRule && rule != null) Dict.removeBookRule(this, rule)
             if (rule == null) Dict.add(this, fresh) else Dict.replace(this, rule, fresh)
         }
         Diag.log(
             this, "dict",
-            (if (bookRule) "книжное правило сохранено: " else "правило сохранено: ") +
-                "«$find» → «$repl», движки " + (if (engines.isEmpty()) "все" else engines.joinToString(","))
+            (if (toBooks) "книжное правило сохранено: " else "правило сохранено: ") +
+                "«$find» → «$repl», движки " + (if (engines.isEmpty()) "все" else engines.joinToString(",")) +
+                ", кому: " + (bind?.let { "книга «$it»" } ?: "все книги")
+        )
+        setResult(
+            RESULT_OK,
+            Intent()
+                .putExtra(RESULT_FIND, find)
+                .putExtra(RESULT_REPL, repl)
+                .putExtra(RESULT_BOOK, bind.orEmpty()),
         )
         finish()
     }

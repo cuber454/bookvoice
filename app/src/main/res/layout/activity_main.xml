@@ -5,7 +5,9 @@
     android:layout_height="match_parent"
     android:background="?attr/bvBg"
     android:orientation="vertical"
-    android:padding="6dp">
+    android:paddingStart="6dp"
+    android:paddingTop="6dp"
+    android:paddingEnd="6dp">
 
     <!-- Шапка читалки (msg2090): название книги — заголовком окна, под ним автор
          (msg4809/4811), а справа в том же ряду кнопка ⋮ «Ещё» — как в окнах
@@ -498,19 +500,29 @@
          msg5561: у каждой кнопки ряда теперь значок сверху и подпись под ним
          (как в нижней навигации Android) — подписи обрезались при увеличенном
          системном шрифте, а значок читается и без текста. Подписи ужаты до
-         12sp (play 13sp) с автоподбором до 9sp, высоты кнопок не менялись. -->
+         12sp (play 13sp) с автоподбором до 9sp, высоты кнопок не менялись.
+         29.09.2026 (просьба Сержа: «под кнопками „Читать“ ещё есть свободное место —
+         опусти их в самый низ, чтобы больше текста вылазало»): у корня экрана и у
+         самого ряда убрана нижняя пустота (было 6dp у корня + 6dp у ряда + 4dp
+         нижнего отступа у каждой кнопки = 16dp), а у кнопок остались только
+         верхний и боковые отступы. Теперь ряд стоит вплотную к нижней границе
+         рабочей области, а освободившиеся 16dp (примерно половина строки) ушли
+         списку предложений. Ниже рабочей области лежит системная полоса жестов
+         (48dp): она видна как свободное место, но кнопки туда ставить нельзя —
+         система перехватывает там касания. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
-        android:orientation="horizontal"
-        android:paddingBottom="6dp">
+        android:orientation="horizontal">
 
         <Button
             android:id="@+id/btnPrevSentence"
             android:layout_width="0dp"
             android:layout_height="64dp"
-            android:layout_margin="4dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="4dp"
+            android:layout_marginEnd="4dp"
             android:layout_weight="1"
             android:contentDescription="@string/prev_sentence"
             android:ellipsize="end"
@@ -529,7 +541,9 @@
             android:id="@+id/btnPlayPause"
             android:layout_width="0dp"
             android:layout_height="72dp"
-            android:layout_margin="4dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="4dp"
+            android:layout_marginEnd="4dp"
             android:layout_weight="1"
             android:ellipsize="end"
             android:maxLines="1"
@@ -547,7 +561,9 @@
             android:id="@+id/btnNextSentence"
             android:layout_width="0dp"
             android:layout_height="64dp"
-            android:layout_margin="4dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="4dp"
+            android:layout_marginEnd="4dp"
             android:layout_weight="1"
             android:contentDescription="@string/next_sentence"
             android:ellipsize="end"
@@ -572,7 +588,9 @@
             style="?attr/materialButtonOutlinedStyle"
             android:layout_width="0dp"
             android:layout_height="64dp"
-            android:layout_margin="4dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="4dp"
+            android:layout_marginEnd="4dp"
             android:layout_weight="1"
             android:contentDescription="@string/voice_settings"
             android:ellipsize="end"

@@ -13,7 +13,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
+import androidx.core.content.ContextCompat
 
 /**
  * Движок чтения BookVoice (#38, шаг 1).
@@ -341,12 +343,6 @@ internal object ReaderEngine {
         // #57: альтернативный способ озвучки — фразу целиком играет движок
         // (проба, по умолчанию выкл). Наш конвейер заготовок при нём молчит.
         sp.altDirect = prefs.getBoolean(MainActivity.KEY_ALT_VOICE, false)
-        // msg4598/msg5955: бесшовная передача звука встык — галочки больше нет,
-        // механизм работает всегда (он сам откатывается на обычный стык, если
-        // прошивка не приняла прицепку). В prefs у людей остался старый
-        // сохранённый «выкл», поэтому значение берём НЕ из настроек. При
-        // альтернативной озвучке прицеплять нечего — там гасим.
-        sp.gapless = !sp.altDirect
         // msg5604: сколько тишины оставлять на стыке фраз — строка «Пауза между
         // фразами» в настройках (по умолчанию как было: 50 мс + 83 мс).
         sp.pauseKeepMs = prefs.getInt(MainActivity.KEY_PAUSE_KEEP, MainActivity.PAUSE_KEEP_DEFAULT)
@@ -399,6 +395,8 @@ internal object ReaderEngine {
         // новой книгой, а сохраняется место прежней (глава 12, предл. 333).
         currentUri = null
         currentName = null
+        // Книга закрыта — разбор возвращаем к общим знакам реплик (30.09.2026).
+        ReplyMarks.apply(ctx, null)
         // msg2093: с книгой гасим и откат при старте — новое открытие перевооружит.
         startRewindPending = 0
         rewindFloor = null
@@ -1048,6 +1046,16 @@ internal object ReaderEngine {
             t = dictText(chunkText(chapterIdx, sentenceIdx, spokenUnits))
         }
         if (t == null) return
+        // 30.09.2026: в журнал — ДЛЯ КАКОГО предложения собрана фраза и с чего она
+        // начинается. Без этой строки не разобрать жалобу «фраза прозвучала дважды»
+        // и «похожие фразы не в том порядке»: у плеера видно имя файла и текст, а к
+        // какому месту книги он относится — приходилось угадывать по времени.
+        Diag.log(
+            ctx, "sound",
+            "фраза собрана: глава $chapterIdx, предл. $sentenceIdx" +
+                (if (spokenUnits > 1) "…${sentenceIdx + spokenUnits - 1}" else "") +
+                " «${t.replace(Regex("\\s+"), " ").take(40)}»"
+        )
         player?.speak(t)
     }
 
@@ -1207,24 +1215,30 @@ internal object ReaderEngine {
     private fun dictText(text: String?): String? {
         if (text == null || text.isEmpty()) return text
         if (!Dict.enabled(ctx)) return text
-        val reply = prefs.getBoolean(MainActivity.KEY_REPLY_ON, false) &&
-            player?.replyVoicesActive == true && Roles.looksReplica(text)
+        val replyOn = prefs.getBoolean(MainActivity.KEY_REPLY_ON, false)
+        val reply = replyOn && player?.replyVoicesActive == true && Roles.looksReplica(text)
         val engine = if (reply) prefs.getString(MainActivity.KEY_REPLY_ENGINE, null)
         else prefs.getString(MainActivity.KEY_ENGINE, null)
         // Книга нужна словарю, чтобы применить её собственные правила и не трогать
         // правила других книг (28.09.2026).
         val book = currentName
-        val t = text.trimStart()
+        // Знак реплики из озвучки убирает САМ плеер (SpeechPlayer → Roles.stripped):
+        // здесь этого делать нельзя. Роль фразы решается по исходному тексту, и если
+        // срезать знак тут, фраза перестаёт быть репликой — ровно это и случилось в
+        // сборке 209 (30.09.2026): в книгах с дефисом после номера голоса не
+        // переключались.
+        val src = text
+        val t = src.trimStart()
         if (t.isNotEmpty() && (t[0] == '—' || t[0] == '–' || t[0] == '−')) {
-            val cut = text.length - t.length + 1
-            val out = text.substring(0, cut) + Dict.apply(ctx, text.substring(cut), engine, book)
+            val cut = src.length - t.length + 1
+            val out = src.substring(0, cut) + Dict.apply(ctx, src.substring(cut), engine, book)
             return out.ifBlank { null }
         }
         // Пустой результат означает, что фразу убрал словарь (например книжное
         // правило выкинуло строку-источник вроде «1995 (с лекций МГУ)»). Отдаём
         // null — чтение пропустит её и пойдёт дальше, а не замолчит на месте
         // (та же ветка, что у фраз из одних знаков).
-        return trimForeignDash(Dict.apply(ctx, text, engine, book)).ifBlank { null }
+        return trimForeignDash(Dict.apply(ctx, src, engine, book)).ifBlank { null }
     }
 
     /** Срезать тире в начале фразы, которого в книге не было: его могло вставить
@@ -2025,6 +2039,9 @@ internal object ReaderEngine {
     /** После успешного открытия — обновить запись книги в библиотеке. */
     fun registerOpen(doc: BookDocument) {
         val u = currentUri ?: return
+        // Знаки реплик этой книги (30.09.2026): у книги может быть свой набор,
+        // и разбор обязан узнать его до первой прочитанной фразы.
+        ReplyMarks.apply(ctx, currentName)
         val now = System.currentTimeMillis()
         val existing = BookStore.byUri(ctx, u)
         prefs.edit().putString(MainActivity.KEY_URI, u).apply()
@@ -2204,11 +2221,23 @@ internal object ReaderEngine {
             PackageManager.PERMISSION_GRANTED
 
     @Suppress("DEPRECATION")
-    private val callListener = object : PhoneStateListener() {
-        override fun onCallStateChanged(state: Int, phoneNumber: String?) {
-            main.post { handleCallState(state) }
+    private val callListener: Any =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android 12 и новее: PhoneStateListener объявлен устаревшим, слушаем
+            // через TelephonyCallback. Логика та же — состояние уходит в handleCallState.
+            object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                override fun onCallStateChanged(state: Int) {
+                    main.post { handleCallState(state) }
+                }
+            }
+        } else {
+            // Android 11 и старше: только прежний способ.
+            object : PhoneStateListener() {
+                override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                    main.post { handleCallState(state) }
+                }
+            }
         }
-    }
 
     private fun handleCallState(state: Int) {
         when (state) {
@@ -2272,15 +2301,26 @@ internal object ReaderEngine {
         if (phoneListening) return
         val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return
         phoneListening = true
-        @Suppress("DEPRECATION")
-        tm.listen(callListener, PhoneStateListener.LISTEN_CALL_STATE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            tm.registerTelephonyCallback(
+                ContextCompat.getMainExecutor(ctx),
+                callListener as TelephonyCallback,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            tm.listen(callListener as PhoneStateListener, PhoneStateListener.LISTEN_CALL_STATE)
+        }
     }
 
     private fun unregisterPhoneListener() {
         if (!phoneListening) return
         val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-        @Suppress("DEPRECATION")
-        tm?.listen(callListener, PhoneStateListener.LISTEN_NONE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            tm?.unregisterTelephonyCallback(callListener as TelephonyCallback)
+        } else {
+            @Suppress("DEPRECATION")
+            tm?.listen(callListener as PhoneStateListener, PhoneStateListener.LISTEN_NONE)
+        }
         phoneListening = false
         inCall = false
         wasReadingAtCallStart = false

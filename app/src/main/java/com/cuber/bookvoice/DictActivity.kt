@@ -48,6 +48,23 @@ class DictActivity : RowsActivity() {
         ActivityResultContracts.CreateDocument("text/plain")
     ) { uri -> exportTo(uri) }
 
+    /** Правка правила: окно правила сообщает, что именно сохранило, — по этому
+     *  ответу мы после возврата встаём диктором на это правило (29.09.2026,
+     *  просьба Сержа: новое правило уезжает в конец списка, искать его вслепую
+     *  приходится долго). */
+    private val editRule = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        pendingFind = res.data?.getStringExtra(DictRuleActivity.RESULT_FIND)
+        pendingRepl = res.data?.getStringExtra(DictRuleActivity.RESULT_REPL).orEmpty()
+        pendingBook = res.data?.getStringExtra(DictRuleActivity.RESULT_BOOK).orEmpty()
+    }
+
+    /** Что сохранило окно правила: ищем по этим трём строкам — они и есть правило. */
+    private var pendingFind: String? = null
+    private var pendingRepl: String = ""
+    private var pendingBook: String = ""
+
     override fun buildSection(intent: Intent?) {
         setTitle(getString(R.string.dict_title))
         binding = ActivitySettingsBinding.inflate(layoutInflater)
@@ -66,6 +83,11 @@ class DictActivity : RowsActivity() {
     override fun resumeSection(arrival: Boolean) {
         // Возврат из правки правила: список мог измениться — пересобираем.
         buildRows()
+        val find = pendingFind
+        if (find != null) {
+            pendingFind = null
+            focusRule(find, pendingRepl, pendingBook)
+        }
         if (arrival) binding.tvTitle.announceForAccessibility(getString(R.string.dict_title))
     }
 
@@ -129,27 +151,33 @@ class DictActivity : RowsActivity() {
                 .show()
         }
         val onShelf = BookStore.all(this).map { Dict.key(it.name) }.toHashSet()
-        for ((i, r) in rules.withIndex()) {
+        // Тот же порядок, что и в частях словаря: новые правила сверху.
+        for ((i, r) in rules.withIndex().reversed()) {
             val book = r.book.orEmpty()
-            val where = if (Dict.key(book) in onShelf) book else getString(R.string.dict_books_orphan, book)
+            // Правило из книжной части без привязки к книге (его завели вручную в
+            // «Правилах из книг» и не ограничили книгой) работает везде — так и
+            // называем, а не «книги нет на полке».
+            val where = if (book.isBlank()) getString(R.string.dict_books_all)
+            else if (Dict.key(book) in onShelf) book
+            else getString(R.string.dict_books_orphan, book)
             addRuleCheck(i, r, bookRule = true, prefix = where)
         }
     }
 
     private fun buildRoot(rules: List<Dict.Rule>) {
         addHint(getString(R.string.dict_hint))
-        // Подсказка зависит от состояния (28.09.2026): раньше тут стоял неподвижный
-        // текст «пока выключен, правила не применяются вовсе», и после включения
-        // Серж слышал то же самое — галка включена, а строка говорит «выключен».
+        // Включение словаря — первая строка окна и ЕДИНСТВЕННЫЙ его выключатель
+        // (29.09.2026, разбор Сержа «галочка включается в двух местах»: галочка
+        // всегда была одна, а вторая строка в «Голосе» — это вход в это окно).
+        // Подсказка — только счёт правил: «отмечено» или «не отмечено» диктор и так
+        // скажет сам, а прежний текст занимал две строки на экране.
         addCheck(
             getString(R.string.dict_on),
             null,
             Dict.KEY_ON,
             false,
             tag = "on",
-            hintOf = { on ->
-                getString(if (on) R.string.dict_on_hint_on else R.string.dict_on_hint_off)
-            },
+            hintOf = { getString(R.string.dict_on_hint, rules.size) },
         ) { on ->
             Diag.log(this, "dict", "словарь " + (if (on) "включён" else "выключен") + ", правил ${Dict.load(this).size}")
         }
@@ -165,10 +193,12 @@ class DictActivity : RowsActivity() {
         val labels = Dict.installedEngines(this)
         for ((pkg, n) in byEngine) {
             val name = labels[pkg] ?: pkg
+            // Состояние части — счётом, как и у флажка «Отметить всё»: по нему видно,
+            // работает ли часть целиком или правила повыключены по одному.
+            val onCount = rules.count { !it.off && it.engines.contains(pkg) }
             val state = when {
                 !labels.containsKey(pkg) -> getString(R.string.dict_group_no_engine)
-                Dict.groupOn(this, pkg) -> getString(R.string.dict_group_on)
-                else -> getString(R.string.dict_group_off)
+                else -> getString(R.string.dict_group_count, onCount, n)
             }
             addRow(
                 getString(R.string.dict_group_engine, name, n),
@@ -178,8 +208,6 @@ class DictActivity : RowsActivity() {
             ) { openGroup(pkg) }
         }
 
-        val kb = (Dict.file(this).length() + 1023) / 1024
-        addHint(getString(R.string.dict_total, rules.size, kb))
         // Книжные правила — отдельной частью (28.09.2026): они собраны по книгам,
         // лежат своим файлом и уходят вместе с книгой. Владельцу важно видеть их
         // число и уметь снести разом — «мало ли книга исчезла как-то некорректно».
@@ -274,20 +302,12 @@ class DictActivity : RowsActivity() {
             if (g.isEmpty()) r.engines.isEmpty() else r.engines.contains(g)
         }
 
-        // Выключатель части: одно касание снимает с работы всю часть, а галочки
-        // самих правил остаются как были.
-        if (g.isNotEmpty()) {
-            val labels = Dict.installedEngines(this)
-            if (!labels.containsKey(g)) addHint(getString(R.string.dict_group_no_engine_hint))
-            addCheck(
-                getString(R.string.dict_group_switch, labels[g] ?: g),
-                getString(R.string.dict_group_switch_hint),
-                Dict.KEY_GROUP + g,
-                true,
-                tag = "gs",
-            ) { on ->
-                Diag.log(this, "dict", "часть " + (labels[g] ?: g) + ": " + (if (on) "включена" else "выключена"))
-            }
+        // Переключателя части здесь больше нет (29.09.2026, решение Сержа): его
+        // работу делает флажок «Отметить всё» ниже, а два выключателя в одной части
+        // только путали. Часть собирается по признаку движка у самого правила, и
+        // этот отбор никуда не делся.
+        if (g.isNotEmpty() && !Dict.installedEngines(this).containsKey(g)) {
+            addHint(getString(R.string.dict_group_no_engine_hint))
         }
 
         if (picked.isEmpty()) {
@@ -298,9 +318,14 @@ class DictActivity : RowsActivity() {
             // ушла на долгое нажатие. Подсказка одна на всю часть, а не строка под
             // каждым правилом: иначе список читается вдвое дольше.
             addHint(getString(R.string.dict_rule_toggle_hint))
-            addRow(getString(R.string.dict_all_on), null, tag = "all_on") { setAll(g, false) }
-            addRow(getString(R.string.dict_all_off), null, tag = "all_off") { setAll(g, true) }
-            for ((i, r) in picked) addRuleCheck(i, r)
+            // Один флажок «Отметить всё» вместо двух строк «включить все правила
+            // части» и «выключить все правила части» (просьба Сержа 29.09.2026).
+            addAllCheck(g, picked.count { !it.value.off }, picked.size)
+            // Новые правила показываем СВЕРХУ (29.09.2026, просьба Сержа): правило,
+            // которое только что завёл, иначе лежит в самом конце сотни строк.
+            // Номер правила при этом не меняется — он указывает место в словаре,
+            // а не место в списке.
+            for ((i, r) in picked.reversed()) addRuleCheck(i, r)
         }
         addRow(getString(R.string.dict_add), null, strong = true) { openEditor(-1, g) }
     }
@@ -365,11 +390,24 @@ class DictActivity : RowsActivity() {
                             getString(R.string.dict_rule_open),
                         )
                     )
+                    // Удаление — прямо из списка (29.09.2026, вопрос Сержа «как
+                    // удалить правило»): раньше убрать правило можно было только
+                    // внутри самого правила, и найти это вслепую было негде.
+                    info.addAction(
+                        AccessibilityNodeInfo.AccessibilityAction(
+                            ACTION_DELETE_RULE,
+                            getString(R.string.dict_rule_delete_action),
+                        )
+                    )
                 }
 
                 override fun performAccessibilityAction(host: View, action: Int, args: Bundle?): Boolean {
                     if (action == ACTION_OPEN_RULE) {
                         openEditor(index, "", bookRule)
+                        return true
+                    }
+                    if (action == ACTION_DELETE_RULE) {
+                        confirmDeleteRule(host.tag as? Dict.Rule ?: r, bookRule)
                         return true
                     }
                     return super.performAccessibilityAction(host, action, args)
@@ -388,16 +426,67 @@ class DictActivity : RowsActivity() {
         )
     }
 
-    /** Включить или выключить всю часть разом и сказать, сколько поменялось. */
-    private fun setAll(g: String, off: Boolean) {
-        val n = Dict.setGroupOff(this, g, off)
-        Diag.log(this, "dict", "часть «${groupTitle(g)}»: " + (if (off) "выключено" else "включено") + " правил $n")
-        if (n == 0) {
-            toast(getString(R.string.dict_all_none))
+    /** Флажок «Отметить всё» в части словаря: отметил — работают все правила части,
+     *  снял — ни одно (просьба Сержа 29.09.2026: «просто сделай чекбокс отметить
+     *  всё»; до этого тут стояли две строки-действия «включить/выключить все
+     *  правила части», и это было лишним).
+     *
+     *  Состояние флажка в настройках НЕ храним: оно и так видно по самим правилам —
+     *  отмечен, когда включены все, снят, когда выключено хоть одно. Второй строкой
+     *  держим счёт «включено N из M»: по нему слышно, что вышло после касания, и
+     *  видно, что часть отмечена не полностью. */
+    private fun addAllCheck(g: String, onCount: Int, total: Int): CheckBox {
+        val title = getString(R.string.dict_all_mark)
+        val box = CheckBox(this).apply {
+            text = withHint(title, getString(R.string.dict_all_mark_hint, onCount, total))
+            textSize = 17f
+            isChecked = onCount == total
+            isFocusable = true
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            tag = ALL_TAG
+            ViewCompat.setScreenReaderFocusable(this, true)
+            setOnCheckedChangeListener { _, checked ->
+                val n = Dict.setGroupOff(this@DictActivity, g, off = !checked)
+                Diag.log(
+                    this@DictActivity, "dict",
+                    "часть «${groupTitle(g)}»: " + (if (checked) "включено" else "выключено") +
+                        " правил $n (флажок «отметить всё»)"
+                )
+                toast(
+                    getString(
+                        if (checked) R.string.dict_all_on_done else R.string.dict_all_off_done,
+                        n,
+                    )
+                )
+                // Правила перерисовались — их галочки изменились вместе с этим.
+                buildRows()
+                focusAllCheck()
+            }
+        }
+        contentRoot.addView(
+            box,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = dp(2)
+                bottomMargin = dp(2)
+            },
+        )
+        return box
+    }
+
+    /** После пересборки вернуть диктора на флажок «Отметить всё»: он стоял на нём,
+     *  когда его касался, а пересборка строку убивает. Невидимую цель перенос
+     *  фокуса пропускает ([TabNav.a11yFocus]), поэтому один повтор — как в
+     *  [focusRule]. */
+    private fun focusAllCheck(retry: Boolean = true) {
+        val v = contentRoot.findViewWithTag<View>(ALL_TAG) ?: return
+        if (!v.isShown && retry) {
+            v.postDelayed({ focusAllCheck(retry = false) }, 120)
             return
         }
-        toast(getString(if (off) R.string.dict_all_off_done else R.string.dict_all_on_done, n))
-        buildRows()
+        TabNav.a11yFocus(v)
     }
 
     private fun groupTitle(g: String): String = when (g) {
@@ -413,12 +502,53 @@ class DictActivity : RowsActivity() {
     }
 
     private fun openEditor(index: Int, engine: String, book: Boolean = false) {
-        startActivity(
+        editRule.launch(
             Intent(this, DictRuleActivity::class.java)
                 .putExtra(DictRuleActivity.EXTRA_INDEX, index)
                 .putExtra(DictRuleActivity.EXTRA_ENGINE, engine)
                 .putExtra(DictRuleActivity.EXTRA_BOOK, book)
         )
+    }
+
+    /** Встать диктором на сохранённое правило. Ищем строку по самому правилу:
+     *  искатель по номеру не годится — правило могло переехать в другую часть
+     *  (сменили движки) или в книжные правила, и тогда его тут просто нет. */
+    private fun focusRule(find: String, repl: String, book: String, retry: Boolean = true) {
+        for (i in 0 until contentRoot.childCount) {
+            val v = contentRoot.getChildAt(i) ?: continue
+            val r = v.tag as? Dict.Rule ?: continue
+            if (r.find != find || r.repl != repl || r.book.orEmpty() != book) continue
+            if (!v.isShown && retry) {
+                // Список пересобран только что: до первой раскладки строка ещё не
+                // видна, а перенос фокуса невидимую цель пропускает ([TabNav.a11yFocus]).
+                v.postDelayed({ focusRule(find, repl, book, retry = false) }, 120)
+                return
+            }
+            Diag.log(this, "dict", "встаю на сохранённое правило: «$find» → «$repl»")
+            TabNav.a11yFocus(v)
+            return
+        }
+    }
+
+    /** Удалить правило из списка, не заходя в него. Сообщение диалога — само
+     *  правило: на слух «Удалить» одинаково у всех строк, а вслепую надо знать,
+     *  что именно уходит. */
+    private fun confirmDeleteRule(r: Dict.Rule, bookRule: Boolean) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dict_rule_delete_action)
+            .setMessage(ruleText(r, bookRule))
+            .setPositiveButton(R.string.dict_rule_delete) { _, _ ->
+                if (bookRule) Dict.removeBookRule(this, r) else Dict.remove(this, r)
+                Diag.log(
+                    this, "dict",
+                    (if (bookRule) "книжное правило удалено: «" else "правило удалено: «") +
+                        "${r.find}» (замена была «${r.repl}»)"
+                )
+                toast(getString(R.string.dict_rule_deleted))
+                buildRows()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     /** Строка правила для списка. Книжные правила — образцы для поиска, и читать
@@ -434,8 +564,15 @@ class DictActivity : RowsActivity() {
          *  системных, чтобы не столкнуться с чужими. */
         const val ACTION_OPEN_RULE = 0x01000010
 
+        /** Второе наше действие там же: «Удалить правило» (29.09.2026). */
+        const val ACTION_DELETE_RULE = 0x01000011
+
         /** Значение «открытой части» для правил из книг: пакет движка так
          *  выглядеть не может, поэтому восклицательный знак безопасен. */
         const val GROUP_BOOKS = "!books"
+
+        /** Метка флажка «Отметить всё»: по ней окно возвращает на него фокус
+         *  после пересборки списка. */
+        const val ALL_TAG = "all_mark"
     }
 }

@@ -228,7 +228,17 @@ object BookStore {
         val u = Uri.parse(uri)
         return when (u.scheme) {
             "file" -> {
-                val f = u.path?.let { File(it) } ?: return false
+                val path = u.path ?: return false
+                // 30.09.2026, найдено по журналу Сержа: без «Доступа ко всем файлам»
+                // Android прячет от приложения чужие файлы, и File.exists() честно
+                // отвечает «нет» про файл, который лежит на месте. В журнале это
+                // выглядело так: «записей без файлов 27 из 47», хотя 42 из 44 путей
+                // были на диске. Пока доступа нет, внешние пути НЕ считаем
+                // пропавшими: иначе полка молча теряла бы записи с местом чтения,
+                // закладками и цитатами (внутренние файлы приложения видны всегда —
+                // их проверяем как раньше).
+                if (externalPath(path) && !AllFiles.granted(context)) return false
+                val f = File(path)
                 if (f.exists()) false else f.parentFile?.isDirectory == true
             }
             "content" -> try {
@@ -245,6 +255,12 @@ object BookStore {
             else -> false
         }
     }
+
+    /** Путь лежит во внешнем хранилище — там Android прячет чужие файлы без
+     *  «Доступа ко всем файлам» (см. [fileGone]). Внутренние файлы приложения
+     *  (/data/user/0/…) видны всегда. */
+    private fun externalPath(path: String): Boolean =
+        path.startsWith("/storage/") || path.startsWith("/sdcard") || path.startsWith("/mnt/")
 
     @Synchronized
     fun upsert(context: Context, rec: BookRecord) {

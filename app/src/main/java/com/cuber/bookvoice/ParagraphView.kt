@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Rect
 import android.os.Bundle
 import android.os.SystemClock
+import android.text.Spanned
+import android.text.style.URLSpan
 import android.util.AttributeSet
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -72,6 +74,25 @@ class ParagraphView @JvmOverloads constructor(
     private val actDrop = AccessibilityNodeInfoCompat.AccessibilityActionCompat(
         ACTION_ID_DROP, context.getString(R.string.sel_action_drop),
     )
+
+    /** Действие «Открыть ссылку» (29.09.2026, просьба Сержа). Появляется только у
+     *  тех предложений, где есть адрес: диктор читает такое предложение со словом
+     *  «ссылка», а этим пунктом меню её открывают — без точного касания по ней. */
+    private val actLink = AccessibilityNodeInfoCompat.AccessibilityActionCompat(
+        ACTION_ID_LINK, context.getString(R.string.sel_action_link),
+    )
+
+    /** Действие «Считать такие строки репликами» (30.09.2026, просьба Сержа).
+     *  Знаки диктор не читает, а вслепую их не угадать: этим пунктом владелец
+     *  показывает на строку, а приложение само берёт её ведущие знаки в свои
+     *  знаки реплики. */
+    private val actReply = AccessibilityNodeInfoCompat.AccessibilityActionCompat(
+        ACTION_ID_REPLY, context.getString(R.string.sel_action_reply),
+    )
+
+    /** «Считать такие строки репликами» из меню действий диктора: индекс
+     *  предложения (30.09.2026). */
+    var onSentenceReply: ((Int) -> Unit)? = null
 
     /** Как диктор называет строку-разделитель («* * *»). Слово, а не звёздочки:
      *  при обходе текста должно быть слышно, что это граница куска, а не мусор
@@ -147,6 +168,11 @@ class ParagraphView @JvmOverloads constructor(
             val i = virtualViewId
             if (i !in starts.indices) {
                 node.contentDescription = ""
+                // setBoundsInParent объявлен устаревшим, но в виртуальных узлах
+                // ExploreByTouchHelper он и нужен: замена (setBoundsInScreen)
+                // требует координат экрана, а у нас их тут нет. Оставляем как есть
+                // и сторожим: если Google уберёт этот вызов, сломается навигация
+                // диктора по предложениям внутри абзаца — это заметят сразу.
                 node.setBoundsInParent(Rect(0, 0, 1, 1))
                 return
             }
@@ -190,7 +216,14 @@ class ParagraphView @JvmOverloads constructor(
             node.addAction(actRead)
             node.addAction(actMark)
             node.addAction(actDict)
+            node.addAction(actReply)
             node.addAction(actDrop)
+            // Ссылка — только там, где она есть (29.09.2026). Текст узла приходит
+            // из разметки абзаца, а пометки ссылок (URLSpan) в нём уже стоят —
+            // диктор читает их как ссылки, этому пункту меню остаётся их открыть.
+            if (urlsIn(i).isNotEmpty()) node.addAction(actLink)
+            // Устаревший вызов — по той же причине, что и выше: другой подходящей
+            // привязки границ у виртуального узла нет.
             node.setBoundsInParent(boundsOfSentence(i))
         }
 
@@ -250,6 +283,16 @@ class ParagraphView @JvmOverloads constructor(
                     onSentenceDrop?.invoke(i)
                     true
                 }
+                ACTION_ID_REPLY -> {
+                    markHandled(i)
+                    onSentenceReply?.invoke(i)
+                    true
+                }
+                ACTION_ID_LINK -> {
+                    markHandled(i)
+                    urlsIn(i).firstOrNull()?.let { openLink(it) }
+                    true
+                }
                 // Диктор подвёл узел к экрану (29.09.2026). Узел предложения —
                 // виртуальный: платформа сама строку не прокрутит, потому что
                 // «настоящего» представления у предложения нет. Просим читалку
@@ -283,6 +326,14 @@ class ParagraphView @JvmOverloads constructor(
         // когда-нибудь и позовёт ACTION_CLICK сам, его отсекает [handledRecently]
         // — жест и действие на одно предложение считаются одним.
         setOnClickListener {
+            // 29.09.2026: ссылка под пальцем важнее «читать отсюда» — зрячий
+            // человек, ткнув в адрес, ждёт, что откроется адрес. Незрячему тот же
+            // поступок даёт пункт «Открыть ссылку» в меню «Действия».
+            linkAtPoint(downX, downY)?.let { link ->
+                logSparse("ссылка", ++seenLink) { "касание: ${link.url}" }
+                openLink(link)
+                return@setOnClickListener
+            }
             val i = sentenceAtPoint(downX, downY)
             if (i >= 0 && !handledRecently(i)) {
                 logSparse("нажатие", ++seenTap) { "предложение $i (жест)" }
@@ -353,6 +404,14 @@ class ParagraphView @JvmOverloads constructor(
          *  похожие строки по книге и собирает правило, которое их убирает. */
         const val ACTION_ID_DROP = 0x01000004
 
+        /** «Открыть ссылку» (29.09.2026) — пятое: есть только у предложений с
+         *  адресом. */
+        const val ACTION_ID_LINK = 0x01000005
+
+        /** «Считать такие строки репликами» (30.09.2026) — шестое: берёт ведущие
+         *  знаки строки в свои знаки реплики. */
+        const val ACTION_ID_REPLY = 0x01000006
+
         /** Окно, в котором жест и действие диктора считаются одним поступком. */
         const val DOUBLE_MS = 400L
     }
@@ -367,6 +426,36 @@ class ParagraphView @JvmOverloads constructor(
         val line = l.getLineForVertical(ly.toInt())
         val offset = l.getOffsetForHorizontal(line, x - totalPaddingLeft)
         return sentenceAt(offset)
+    }
+
+    // ---------------- Ссылки в тексте (29.09.2026) ----------------
+
+    /** Пометки ссылок внутри предложения [i] — их кладёт [SentenceAdapter]
+     *  (Linkify). Пусто — предложение без адресов. */
+    private fun urlsIn(i: Int): List<URLSpan> {
+        if (i !in starts.indices) return emptyList()
+        val sp = text as? Spanned ?: return emptyList()
+        val from = starts[i].coerceIn(0, sp.length)
+        val to = ends[i].coerceIn(from, sp.length)
+        return sp.getSpans(from, to, URLSpan::class.java).orEmpty().toList()
+    }
+
+    /** Ссылка под точкой касания, если она там есть. */
+    private fun linkAtPoint(x: Float, y: Float): URLSpan? {
+        val sp = text as? Spanned ?: return null
+        val l = layout ?: return null
+        val ly = y - totalPaddingTop
+        if (ly < 0f || ly > l.height.toFloat()) return null
+        val line = l.getLineForVertical(ly.toInt())
+        val offset = l.getOffsetForHorizontal(line, x - totalPaddingLeft).coerceIn(0, sp.length)
+        return sp.getSpans(offset, offset, URLSpan::class.java).firstOrNull()
+    }
+
+    /** Открыть ссылку. Делает это сам URLSpan — он открывает адрес в браузере;
+     *  свою работу не дублируем, но и падать не даём: браузера может не быть. */
+    private fun openLink(link: URLSpan) {
+        Diag.log(context, "a11y", "ссылка: ${link.url}")
+        runCatching { link.onClick(this) }
     }
 
     // Штатная часть подключения ExploreByTouchHelper (так же — в образце Google
@@ -403,6 +492,7 @@ class ParagraphView @JvmOverloads constructor(
     private var seenTouch = 0
     private var seenTap = 0
     private var seenHold = 0
+    private var seenLink = 0
 
     private fun logSparse(tag: String, n: Int, msg: () -> String) {
         if (n > 3 && n % 100 != 0) return

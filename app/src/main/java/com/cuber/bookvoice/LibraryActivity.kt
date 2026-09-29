@@ -20,6 +20,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.IntentCompat
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.cuber.bookvoice.databinding.ActivityLibraryBinding
@@ -117,6 +118,11 @@ class LibraryActivity(private val act: SectionActivity) {
     // повторного планирования, если resume() придёт в это окно ещё раз.
     private var coldAutoOpenPending = false
 
+    // Копирование книги, открытой снаружи (30.09.2026): пока идёт — второй раз
+    // не запускаем; если ждём «Доступ ко всем файлам» — помним, что повторить.
+    private var importBusy = false
+    private var pendingImport: Pair<Uri, String>? = null
+
     // Вид полки (msg646/649): список (полные строки) или сетка (текстовые
     // карточки, без обложек). Помним выбор между запусками.
     private var viewMode = BookAdapter.VIEW_LIST
@@ -161,17 +167,18 @@ class LibraryActivity(private val act: SectionActivity) {
 
     /** Действия строки книги для меню TalkBack, пункт «Действия» (0.4.83, msg7003):
      *  ровно то же, что в меню долгого нажатия ([showBookMenu]), теми же
-     *  функциями — расходиться им нельзя. */
+     *  функциями — расходиться им нельзя. 29.09.2026 порядок тоже общий:
+     *  «Информация о книге» первой. */
     private fun bookRowActions(rec: BookRecord): List<Pair<String, () -> Unit>> {
         val finished = rec.status == BookRecord.STATUS_FINISHED
         return listOf(
+            getString(R.string.library_menu_info) to { showBookInfo(rec) },
             getString(R.string.library_menu_share) to { shareBook(rec) },
             getString(if (rec.favorite) R.string.library_menu_unfav else R.string.library_menu_fav)
                 to { toggleFavorite(rec) },
             getString(R.string.library_menu_rename) to { renameBook(rec) },
             getString(if (finished) R.string.library_menu_unfinish else R.string.library_menu_finish)
                 to { toggleFinished(rec, finished) },
-            getString(R.string.library_menu_info) to { showBookInfo(rec) },
             getString(R.string.library_menu_delete) to { confirmDelete(rec) },
         )
     }
@@ -284,6 +291,14 @@ class LibraryActivity(private val act: SectionActivity) {
      *  onResume Activity; переключение вкладок больше не поднимает окно, и явного
      *  входа «по вкладке» нет (msg1676+) — сюда всегда возвращаются «снизу». */
     fun resume() {
+        // Возврат из системного экрана «Доступ ко всем файлам»: копирование книги
+        // снаружи, которое ждало разрешения, повторяем сразу (30.09.2026). Не дал
+        // доступа — кладём копию в память приложения, чтобы книга всё равно
+        // открылась.
+        pendingImport?.let { (uri, name) ->
+            pendingImport = null
+            if (AllFiles.granted(act)) startImport(uri, name) else startInternalImport(uri, name)
+        }
         // Первый показ полки в этом окне = запуск приложения (возвраты из книги
         // и окон-поверх сюда не считаются). Нужен «Что нового» (#18): окошко
         // живёт только в запуск (msg4125), а не при каждом возврате.
@@ -1361,6 +1376,14 @@ class LibraryActivity(private val act: SectionActivity) {
     private fun dropDeadRecords(): List<BookRecord> {
         val all = BookStore.all(act)
         if (all.isEmpty()) return emptyList()
+        // 30.09.2026: нет «Доступа ко всем файлам» — внешние книги для нас просто
+        // невидимы, и проверка «файла нет» врёт (журнал Сержа: «записей без файлов
+        // 27 из 47», хотя файлы на месте). В этом случае не проверяем вовсе:
+        // убрать запись — значит потерять место чтения, закладки и цитаты.
+        if (!AllFiles.granted(act)) {
+            Diag.log(act, "shelf", "нет доступа ко всем файлам — записи без файлов не проверяю")
+            return emptyList()
+        }
         val gone = all.filter { BookStore.fileGone(act, it.uri) }
         if (gone.isEmpty()) return emptyList()
         if (all.size >= 6 && gone.size * 2 >= all.size) {
@@ -1606,55 +1629,73 @@ class LibraryActivity(private val act: SectionActivity) {
             )
             return
         }
-        // msg4853/4865: ссылка из чужого приложения живёт не вечно. У SAF-документа
-        // можно взять долгое разрешение — тогда книга так и живёт ссылкой. У
-        // проводников вроде MixPlorer разрешение временное (до перезапуска
-        // приложения): книга откроется сейчас, а завтра «в библиотеке» уже нет
-        // файла. Такой файл забираем к себе копией — открываем уже её.
-        if (tryPersist(uri) || uri.scheme == "file") {
+        val tree = treeUri()?.let { Uri.parse(it) }
+        // Книга уже в библиотеке (в папке книг или в памяти приложения) — читаем
+        // её на месте: копировать нечего.
+        if (LibraryImport.inside(act, uri, tree)) {
             addAndOpen(uri, name)
             return
         }
+        // Книга снаружи (чужой проводник, Telegram, письмо). 30.09.2026, просьба
+        // Сержа: «ничего не спрашивать, добавлять автоматически в библиотеку и
+        // читать уже из библиотеки». Чужую ссылку больше не берём даже с долгим
+        // разрешением: она живёт до перезапуска, и книга «пропадала» из полки.
+        // Забираем копию в папку книг.
+        val clean = LibraryImport.cleanName(name)
+        val same = BookStore.all(act).firstOrNull { it.name.equals(clean, ignoreCase = true) }
+        if (same != null && BookStore.openable(act, same.uri)) {
+            toast(getString(R.string.already_in_library))
+            openReader(same)
+            return
+        }
+        startImport(uri, name)
+    }
+
+    /** Копирование снаружи: в папку книг; не вышло и нужен доступ — просим его. */
+    private fun startImport(uri: Uri, name: String) {
+        if (importBusy) return
+        importBusy = true
         toast(getString(R.string.external_copying))
+        val tree = treeUri()?.let { Uri.parse(it) }
         Thread {
-            val copy = copyExternal(uri, name)
+            val res = runCatching { LibraryImport.import(act, uri, tree, name) }
             act.runOnUiThread {
-                if (copy == null) toast(getString(R.string.external_copy_failed))
-                else addAndOpen(copy.first, copy.second)
+                importBusy = false
+                val placed = res.getOrNull()
+                if (placed != null) {
+                    addAndOpen(placed.uri, placed.name)
+                    return@runOnUiThread
+                }
+                val needAccess = res.exceptionOrNull() is LibraryImport.NeedAccess
+                if (needAccess) {
+                    // Папку книг без «Доступа ко всем файлам» не записать: просим
+                    // доступ и повторяем копирование, когда человек вернётся.
+                    pendingImport = uri to name
+                    AllFiles.ask(act, getString(R.string.all_files_copy_explain))
+                } else {
+                    startInternalImport(uri, name)
+                }
             }
         }.start()
     }
 
-    /** Попросить у системы долгое разрешение на ссылку. Не дали (провайдер таких
-     *  разрешений не выдаёт) — false: файл придётся забирать копией. */
-    private fun tryPersist(uri: Uri): Boolean = try {
-        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        true
-    } catch (_: Exception) {
-        false
+    /** Папка книг не приняла файл (или доступа так и нет) — копия в память
+     *  приложения: книга всё равно окажется на полке. */
+    private fun startInternalImport(uri: Uri, name: String) {
+        toast(getString(R.string.external_copy_internal))
+        Thread {
+            val copy = runCatching { LibraryImport.copyInternal(act, uri, name) }.getOrNull()
+            act.runOnUiThread {
+                if (copy == null) toast(getString(R.string.external_copy_failed))
+                else addAndOpen(copy.uri, copy.name)
+            }
+        }.start()
     }
 
-    /** Копия файла, пришедшего снаружи, во внутреннюю папку приложения: возвращает
-     *  ссылку на копию и её имя, либо null. Имя чистим — в чужом имени бывают
-     *  слэши и прочие символы, недопустимые в имени файла. */
-    private fun copyExternal(uri: Uri, name: String): Pair<Uri, String>? = try {
-        val dir = File(act.filesDir, "books").apply { mkdirs() }
-        val clean = name.replace(Regex("""[\\/:*?"<>|]"""), "_").take(120)
-        var file = File(dir, clean)
-        var n = 1
-        while (file.exists()) {
-            file = File(dir, "$n-$clean")
-            n++
-        }
-        contentResolver.openInputStream(uri)?.use { input ->
-            file.outputStream().use { out -> input.copyTo(out) }
-        } ?: throw IllegalStateException("провайдер не дал файл")
-        Diag.log(act, "lib", "файл снаружи забран копией: ${file.name} (${file.length()} Б)")
-        Uri.fromFile(file) to file.name
-    } catch (e: Exception) {
-        Diag.log(act, "lib", "не смог забрать файл снаружи: ${e.message}")
-        null
-    }
+    // 30.09.2026: прежние две функции — «взять долгое разрешение на чужую ссылку»
+    // (tryPersist) и «копия во внутреннюю память» (copyExternal) — убраны. Ссылку
+    // больше не берём вовсе: она живёт до перезапуска, и книга пропадала с полки.
+    // Копированием занимается LibraryImport: сначала папка книг, потом память.
 
     /** Книга снаружи: в библиотеку и в читалку — общий путь для ссылки и копии. */
     private fun addAndOpen(uri: Uri, name: String) {
@@ -1816,7 +1857,8 @@ class LibraryActivity(private val act: SectionActivity) {
         intent.data?.let { return it }
         // getParcelableExtra бросает ClassCastException, если прислали строку
         // вместо ссылки (чужое приложение вправе) — падать из-за этого нельзя.
-        runCatching { intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) }
+        // 30.09.2026: сам вызов устарел, берём совместимый из androidx.core.
+        runCatching { IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java) }
             .getOrNull()?.let { return it }
         val clip = intent.clipData ?: return null
         for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { return it }
@@ -1825,27 +1867,32 @@ class LibraryActivity(private val act: SectionActivity) {
 
     // ---------------- Долгое нажатие на книгу (меню) ----------------
 
-    /** Меню книги: поделиться, избранное, переименовать, статус, информация,
-     *  удалить. Короткий тап — открывает книгу, длинный — это меню. */
+    /** Меню книги: информация, поделиться, избранное, переименовать, статус,
+     *  удалить. Короткий тап — открывает книгу, длинный — это меню.
+     *
+     *  29.09.2026, просьба Сержа: «Информация о книге» стоит первой, а строки с
+     *  названием книги в меню больше нет. Название диктор читает на самой строке
+     *  полки до нажатия, а в меню оно сбивало: пункт «Информация о книге» уезжал
+     *  в середину списка, и до него надо было листать. Название книги никуда не
+     *  пропало — оно первой строкой в самом окне информации. */
     private fun showBookMenu(rec: BookRecord) {
         val finished = rec.status == BookRecord.STATUS_FINISHED
         val opts = arrayOf(
+            getString(R.string.library_menu_info),
             getString(R.string.library_menu_share),
             getString(if (rec.favorite) R.string.library_menu_unfav else R.string.library_menu_fav),
             getString(R.string.library_menu_rename),
             getString(if (finished) R.string.library_menu_unfinish else R.string.library_menu_finish),
-            getString(R.string.library_menu_info),
             getString(R.string.library_menu_delete),
         )
         MaterialAlertDialogBuilder(act)
-            .setTitle(rec.displayTitle)
             .setItems(opts) { _, which ->
                 when (which) {
-                    0 -> shareBook(rec)
-                    1 -> toggleFavorite(rec)
-                    2 -> renameBook(rec)
-                    3 -> toggleFinished(rec, finished)
-                    4 -> showBookInfo(rec)
+                    0 -> showBookInfo(rec)
+                    1 -> shareBook(rec)
+                    2 -> toggleFavorite(rec)
+                    3 -> renameBook(rec)
+                    4 -> toggleFinished(rec, finished)
                     5 -> confirmDelete(rec)
                 }
             }

@@ -4,17 +4,17 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.support.v4.media.session.MediaSessionCompat
 import android.view.KeyEvent
 
 /**
  * Приёмник медиа-кнопок (Bluetooth-гарнитура, проводные наушники,
- * «волшебное касание» TalkBack).
+ * «волшебное касание» TalkBack) и кнопок нашего уведомления.
  *
- * Система шлёт сюда ACTION_MEDIA_BUTTON. [MainActivity] при создании
- * сессии кладёт её в [sessionRef], здесь мы достаём KeyEvent и передаём
- * его в активную сессию через dispatchMediaButtonEvent — она уже сама
- * превращает кнопку в play/pause/next/prev (см. колбэк сессии).
+ * Система и наши кнопки в шторке шлют сюда ACTION_MEDIA_BUTTON. Здесь мы достаём
+ * KeyEvent и отдаём его службе ([MediaSessionService.onMediaButton]) — она решает
+ * по фактическому состоянию движка, что делать: переключить чтение, листать или
+ * пауза. Железные кнопки, кроме того, приходят прямо в колбэк медиа-сессии
+ * (Media3), и от двойного срабатывания спасает засечка в службе.
  */
 class MediaButtonReceiver : BroadcastReceiver() {
 
@@ -26,18 +26,16 @@ class MediaButtonReceiver : BroadcastReceiver() {
             @Suppress("DEPRECATION")
             intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
         }
-        val session = sessionRef
         Diag.log(
             context, "receiver",
             "получено ACTION_MEDIA_BUTTON: ${key?.action?.let { if (it == KeyEvent.ACTION_DOWN) "DOWN" else "UP" } ?: "нет ключа"} " +
-                "keyCode=${key?.keyCode ?: "?"} (${key?.let { keyLabel(it.keyCode) } ?: "?"}), " +
-                "сессия ${if (session != null) "есть" else "НЕТ"}"
+                "keyCode=${key?.keyCode ?: "?"} (${key?.let { keyLabel(it.keyCode) } ?: "?"})"
         )
-        // Кнопка гарнитуры транслируется в сессию — та решает: play/pause,
-        // next/prev. KEYCODE_HEADSETHOOK = центральная кнопка наушников.
-        if (key != null && session != null) {
-            session.controller.dispatchMediaButtonEvent(key)
-        }
+        // Под Media3-сессией транслировать в неё нечего: у неё нет
+        // dispatchMediaButtonEvent, а железные кнопки она получает сама, прямо в
+        // колбэке. Поэтому приёмник раскладывает клавишу через службу — она отдаёт
+        // её движку по тому же правилу, что и раньше (30.09.2026).
+        if (key != null) MediaSessionService.onMediaButton(key)
     }
 
     private fun keyLabel(code: Int): String = when (code) {
@@ -49,11 +47,5 @@ class MediaButtonReceiver : BroadcastReceiver() {
         KeyEvent.KEYCODE_MEDIA_NEXT -> "next"
         KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "prev"
         else -> "код $code"
-    }
-
-    companion object {
-        /** Сессия, которую выставил MainActivity при старте. */
-        @Volatile
-        var sessionRef: MediaSessionCompat? = null
     }
 }

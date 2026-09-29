@@ -21,7 +21,7 @@ import java.util.Locale
 object VoicePick {
 
     /** Русская локаль — для названий языков. */
-    private val RU = Locale("ru")
+    private val RU = Locale.forLanguageTag("ru")
 
     /** Язык, которого движок не назвал (пустая локаль) — в списке идёт как «Другие». */
     const val OTHER_LANG = "und"
@@ -123,7 +123,12 @@ object VoicePick {
     fun langLabel(code: String?): String {
         val c = code?.lowercase(Locale.ROOT).orEmpty()
         if (c.isEmpty() || c == OTHER_LANG) return "Другие"
-        val icu = runCatching { Locale(c).getDisplayLanguage(RU) }.getOrNull()
+        // 30.09.2026: было Locale(c) — этот способ создания языка устарел.
+        // forLanguageTag разбирает код языка; коды у движков приходят как «ru»,
+        // «de», «pt-br», поэтому разбор берём только если он что-то понял.
+        val loc = Locale.forLanguageTag(c)
+        val icu = if (loc.language.isEmpty()) null
+        else runCatching { loc.getDisplayLanguage(RU) }.getOrNull()
         val name = if (!icu.isNullOrBlank() && !icu.equals(c, ignoreCase = true)) {
             icu
         } else {

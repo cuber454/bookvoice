@@ -41,8 +41,10 @@ object Dict {
      *  включит. */
     const val KEY_ON = "dict_on"
 
-    /** Выключатель группы движка: ключ = приставка + имя пакета движка. */
-    const val KEY_GROUP = "dict_group_"
+    // Выключателя части движка здесь больше нет (29.09.2026, просьба Сержа): в части
+    // остался один флажок «Отметить всё», который снимает галочки у самих правил.
+    // Прежний ключ настроек «dict_group_<пакет>» не читается вовсе — иначе часть,
+    // выключенная когда-то давно, осталась бы выключенной без способа вернуть.
 
     private const val FILE_NAME = "dictionary.txt"
     private const val HEADER = "; BookVoice, словарь произношения"
@@ -100,15 +102,6 @@ object Dict {
 
     fun setEnabled(c: Context, on: Boolean) {
         prefs(c).edit().putBoolean(KEY_ON, on).apply()
-    }
-
-    /** Включена ли группа движка. По умолчанию включена — правила для движка
-     *  работают, как только включён сам словарь. */
-    fun groupOn(c: Context, engine: String): Boolean =
-        prefs(c).getBoolean(KEY_GROUP + engine, true)
-
-    fun setGroupOn(c: Context, engine: String, on: Boolean) {
-        prefs(c).edit().putBoolean(KEY_GROUP + engine, on).apply()
     }
 
     // ——— Книжные правила (28.09.2026) ———
@@ -406,11 +399,8 @@ object Dict {
             loadBooks(c).filter { it.appliesTo(book) }
         }
         if (rules.isEmpty() && bookRules.isEmpty()) return text
-        return applyWith(rules, bookRules, text, engine) { r -> groupAllowed(c, r) }
+        return applyWith(rules, bookRules, text, engine)
     }
-
-    private fun groupAllowed(c: Context, r: Rule): Boolean =
-        r.engines.isEmpty() || r.engines.any { groupOn(c, it) }
 
     /** То же, но без чтения настроек — для проверки одного правила в окне. */
     fun applyRule(r: Rule, text: String): String = applyOne(r, text)
@@ -420,7 +410,6 @@ object Dict {
         extra: List<Rule>,
         text: String,
         engine: String?,
-        groupAllowed: (Rule) -> Boolean,
     ): String {
         var out = text
         val idx = indexOf(rules)
@@ -428,7 +417,7 @@ object Dict {
         // буквам строится только по общему словарю (он и кэшируется).
         val candidates = (if (idx.any.isEmpty()) idx.pick(out) else idx.pick(out) + idx.any) + extra
         for (r in candidates) {
-            if (r.off || !r.targets(engine) || !groupAllowed(r)) continue
+            if (r.off || !r.targets(engine)) continue
             val next = applyOne(r, out)
             if (next != out) out = next
         }

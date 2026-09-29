@@ -18,7 +18,14 @@ import java.util.Locale
  * Настройках → «Отправить лог в Telegram».
  */
 object Diag {
-    private const val MAX_BYTES = 250_000L
+    private const val MAX_BYTES = 1_200_000L
+
+    /** Сколько последних строк оставляем при обрезке и сколько строк файла держим.
+     *  29.09.2026: было 2500 строк (250 КБ) — это примерно двадцать минут чтения, и
+     *  журнал за один длинный прогон теста успевал потерять начало: жалобу Сержа
+     *  «затормозил на маленькой скорости» пришлось разбирать по чужим следам.
+     *  Теперь держим 8000 строк: одного прогона теста хватает целиком. */
+    private const val KEEP_LINES = 8000
     private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
     @Volatile private var dir: File? = null
@@ -85,8 +92,8 @@ object Diag {
     private fun trim(f: File) {
         val txt = f.readText(Charsets.UTF_8)
         val lines = txt.lineSequence().filter { it.isNotBlank() }.toMutableList()
-        if (lines.size <= 2500) return
-        val keep = lines.takeLast(2500).joinToString("\n") + "\n"
+        if (lines.size <= KEEP_LINES) return
+        val keep = lines.takeLast(KEEP_LINES).joinToString("\n") + "\n"
         f.writeText(keep, Charsets.UTF_8)
     }
 }

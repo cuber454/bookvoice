@@ -15,14 +15,22 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat.MediaStyle
+import androidx.media3.session.CommandButton
+import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 
 /**
- * Медиа-сервис читалки. Владеет MediaSessionCompat и работает В ПЕРЕДНЕМ
+ * Медиа-сервис читалки. Держит сессию Media3 и работает В ПЕРЕДНЕМ
  * ПЛАНЕ (foreground service + медиа-уведомление), как настоящий плеер.
+ * MediaSessionCompat остался тут ровно для одного: им ключ сессии Media3
+ * переводится в ключ, который понимает MediaStyle нашего уведомления
+ * (см. [compatToken]).
  *
  * Почему именно foreground: Android отдаёт медиа-кнопки (Bluetooth-гарнитура,
  * «волшебное касание» TalkBack) тому приложению, которое сейчас «плеер».
@@ -36,7 +44,20 @@ import androidx.media.app.NotificationCompat.MediaStyle
  */
 class MediaSessionService : Service() {
 
-    private var session: MediaSessionCompat? = null
+    /** Сессия Media3 (29.09.2026, часть 5): система сама спрашивает состояние у
+     *  [ReaderPlayer] и сама раздаёт медиа-команды — вручную публиковать ничего
+     *  не надо. Прежний путь на MediaSessionCompat снесён 30.09.2026: сессия
+     *  проверена на телефоне (журнал 23:26-23:28: карточка, «волшебное касание»,
+     *  состояние), и держать два пути стало незачем. */
+    private var session: MediaSession? = null
+
+    private var player: ReaderPlayer? = null
+
+    /** Засечка последнего «переключи»: одна и та же кнопка может прийти двумя
+     *  путями (наш приёмник и колбэк сессии), а двойное переключение — это
+     *  «пауза, потом сразу играть», то есть на слух «ничего не произошло». */
+    private var toggleAt = 0L
+
     private var bookTitle: String? = null
     private var playing = false
 
@@ -75,84 +96,91 @@ class MediaSessionService : Service() {
         super.onCreate()
         instance = this
         createChannel()
-        session = MediaSessionCompat(this, "BookVoice").apply {
-            setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() {
-                    Diag.log(this@MediaSessionService, "session", "onPlay, listener=${listener != null}")
-                    post { listener?.onMediaPlay() }
-                }
+        createMedia3Session()
+    }
 
-                override fun onPause() {
-                    Diag.log(this@MediaSessionService, "session", "onPause, listener=${listener != null}")
-                    post { listener?.onMediaPause() }
-                }
-
-                override fun onStop() {
-                    Diag.log(this@MediaSessionService, "session", "onStop, listener=${listener != null}")
-                    post { listener?.onMediaPause() }
-                }
-
-                /**
-                 * 0.4.77: «волшебное касание» TalkBack и центральная кнопка
-                 * гарнитуры приходят одной командой «переключи». Кем она станет —
-                 * play или pause — система решает по состоянию, которое мы ей
-                 * опубликовали. Если состояние отстало (чтение идёт, а
-                 * опубликована пауза), команда превращается в «играть», а
-                 * «играть» на уже играющем чтении у нас ничего не делает. На слух
-                 * это ровно жалоба тестеров: «волшебное касание перестало
-                 * ставить паузу».
-                 *
-                 * Поэтому разбираем кнопку сами и переключаем по ФАКТИЧЕСКОМУ
-                 * состоянию движка ([Listener.onMediaToggle]). Своими считаем оба
-                 * события нажатия (DOWN и UP): если одно из них отдать системе,
-                 * она переключит по своему (возможно, устаревшему) состоянию, и
-                 * получится двойное переключение — то есть ничего. Переключаем по
-                 * DOWN — так же, как это делает сама система.
-                 */
-                override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
-                    val key = keyEventOf(mediaButtonIntent)
-                        ?: return super.onMediaButtonEvent(mediaButtonIntent)
+    /**
+     * Сессия на Media3 (29.09.2026, часть 5). Состояние система берёт у
+     * [ReaderPlayer] — публиковать его руками больше не нужно, — а разбор
+     * «переключи» и «Выход» остаются у нас: первое потому, что систему нельзя
+     * пускать решать play/pause по состоянию, которое может отстать (0.4.77),
+     * второе уезжает в системную карточку Android 13+ пользовательской командой
+     * (прежде это было PlaybackStateCompat.CustomAction).
+     */
+    private fun createMedia3Session() {
+        val p = ReaderPlayer(
+            main.looper,
+            titleOf = { bookTitle },
+            playingOf = { playing },
+            onPlay = { post { listener?.onMediaPlay() } },
+            onPause = { post { listener?.onMediaPause() } },
+            onSkip = { delta -> post { listener?.onMediaSkip(delta) } },
+            log = { Diag.log(this, "session", it) },
+        )
+        player = p
+        val exitCommand = SessionCommand(CUSTOM_EXIT, Bundle.EMPTY)
+        session = MediaSession.Builder(this, p)
+            .setCallback(object : MediaSession.Callback {
+                override fun onMediaButtonEvent(
+                    session: MediaSession,
+                    controller: MediaSession.ControllerInfo,
+                    intent: Intent,
+                ): Boolean {
+                    val key = keyEventOf(intent) ?: return false
                     val toggle = key.keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
                         key.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-                    if (!toggle) return super.onMediaButtonEvent(mediaButtonIntent)
+                    if (!toggle) return false
                     if (key.action == KeyEvent.ACTION_DOWN) {
                         Diag.log(
                             this@MediaSessionService, "session",
-                            "переключение с кнопки/касания: решает движок, " +
+                            "переключение с кнопки/касания (медиа-сессия): решает движок, " +
                                 "listener=${listener != null}"
                         )
-                        post { listener?.onMediaToggle() }
+                        post { toggleFromMedia() }
                     }
                     return true
                 }
 
-                override fun onSkipToNext() {
-                    Diag.log(this@MediaSessionService, "session", "onSkipToNext (+1)")
-                    post { listener?.onMediaSkip(1) }
-                }
-
-                override fun onSkipToPrevious() {
-                    Diag.log(this@MediaSessionService, "session", "onSkipToPrevious (-1)")
-                    post { listener?.onMediaSkip(-1) }
-                }
-
-                /** «Выход» пришёл из системной карточки (msg4578): на Android 13+
-                 *  она строит кнопки не из addAction уведомления, а из состояния
-                 *  сессии — см. pushPlaybackState(). */
-                override fun onCustomAction(action: String?, extras: Bundle?) {
-                    if (action != CUSTOM_EXIT) return
-                    Diag.log(this@MediaSessionService, "service", "«выход» из карточки (слот сессии)")
-                    post { listener?.onMediaExit() }
-                    dropCardAndStop()
+                override fun onCustomCommand(
+                    session: MediaSession,
+                    controller: MediaSession.ControllerInfo,
+                    command: SessionCommand,
+                    args: Bundle,
+                ): ListenableFuture<SessionResult> {
+                    if (command.customAction == CUSTOM_EXIT) {
+                        Diag.log(this@MediaSessionService, "service", "«выход» из карточки (медиа-сессия)")
+                        post { listener?.onMediaExit() }
+                        dropCardAndStop()
+                    }
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
             })
-            setMediaButtonReceiver(
-                mediaButtonPendingIntent(0)
+            .setCustomLayout(
+                listOf(
+                    CommandButton.Builder(android.R.drawable.ic_menu_close_clear_cancel)
+                        .setDisplayName("Выход")
+                        .setSessionCommand(exitCommand)
+                        .build()
+                )
             )
-            isActive = true
-            MediaButtonReceiver.sessionRef = this
+            .build()
+        p.setBook(bookUri)
+        applySessionActivity()
+        Diag.log(this, "service", "onCreate: сессия Media3 поднята")
+    }
+
+
+    /** «Переключи» из любого пути: решение принимает движок по своему
+     *  фактическому состоянию. Повтор в пределах [TOGGLE_MS] гасим — одна и та же
+     *  кнопка может прийти и от нашего приёмника, и от колбэка сессии. */
+    private fun toggleFromMedia() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - toggleAt < TOGGLE_MS) {
+            Diag.log(this, "session", "повторное «переключи» через ${now - toggleAt} мс — пропускаю")
+            return
         }
-        Diag.log(this, "service", "onCreate: сессия активна, receiver установлен")
+        toggleAt = now
+        listener?.onMediaToggle()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -186,6 +214,7 @@ class MediaSessionService : Service() {
         intent?.getStringExtra(MainActivity.EXTRA_URI)?.let {
             if (it != bookUri) {
                 bookUri = it
+                player?.setBook(bookUri)
                 applySessionActivity()
                 changed = true
             }
@@ -346,7 +375,7 @@ class MediaSessionService : Service() {
             .addAction(exitAction)
             .setStyle(
                 MediaStyle()
-                    .setMediaSession(session?.sessionToken)
+                    .setMediaSession(compatToken())
                     .setShowActionsInCompactView(0, 1, 2)
             )
         // msg4629: касание карточки возвращает в книгу — путь знает движок,
@@ -354,6 +383,13 @@ class MediaSessionService : Service() {
         if (bookUri != null) builder.setContentIntent(bookOpenIntent())
         return builder.build()
     }
+
+    /** Токен сессии для медиа-уведомления. У Media3 своя (платформенная) сессия,
+     *  поэтому берём её платформенный токен и оборачиваем в совместимый: иначе
+     *  уведомление не опознаётся системой как медиа-карточка, а на Android 13+
+     *  именно из сессии система и строит карточку в шторке. */
+    private fun compatToken(): MediaSessionCompat.Token? =
+        session?.platformToken?.let { MediaSessionCompat.Token.fromToken(it) }
 
     private fun startForegroundCompat(notification: Notification) {
         if (Build.VERSION.SDK_INT >= 29) {
@@ -382,9 +418,9 @@ class MediaSessionService : Service() {
 
     override fun onDestroy() {
         Diag.log(this, "service", "onDestroy")
-        if (MediaButtonReceiver.sessionRef === session) MediaButtonReceiver.sessionRef = null
-        session?.release()
+        runCatching { session?.release() }
         session = null
+        player = null
         // listener НЕ обнуляем (было здесь раньше): он — мост медиа-команд к
         // движку ReaderEngine (ставится в attach). Движок — синглтон процесса,
         // поэтому listener живёт, пока жив процесс. Гонка при переходе между
@@ -410,6 +446,32 @@ class MediaSessionService : Service() {
 
         /** Команда «Выход» из карточки в шторке (msg4073). */
         private const val ACTION_EXIT = "com.cuber.bookvoice.EXIT_READING"
+
+        /** Окно, в котором повторное «переключи» считаем тем же самым нажатием:
+         *  одна кнопка может прийти и от нашего приёмника, и от колбэка сессии. */
+        private const val TOGGLE_MS = 250L
+
+        /** Кнопка из нашего уведомления (её шлёт [MediaButtonReceiver]).
+         *  Под Media3 сессия больше не принимает `dispatchMediaButtonEvent`,
+         *  поэтому раскладываем клавишу здесь — ровно так же, как это делала
+         *  сессия: переключатель решает движок по фактическому состоянию. */
+        fun onMediaButton(key: KeyEvent) {
+            if (key.action != KeyEvent.ACTION_DOWN) return
+            main.post {
+                when (key.keyCode) {
+                    KeyEvent.KEYCODE_HEADSETHOOK,
+                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ->
+                        instance?.toggleFromMedia() ?: listener?.onMediaToggle()
+
+                    KeyEvent.KEYCODE_MEDIA_PLAY -> listener?.onMediaPlay()
+                    KeyEvent.KEYCODE_MEDIA_PAUSE,
+                    KeyEvent.KEYCODE_MEDIA_STOP -> listener?.onMediaPause()
+
+                    KeyEvent.KEYCODE_MEDIA_NEXT -> listener?.onMediaSkip(1)
+                    KeyEvent.KEYCODE_MEDIA_PREVIOUS -> listener?.onMediaSkip(-1)
+                }
+            }
+        }
 
         /** «Выход» как пользовательское действие сессии (msg4578): по этой
          *  строке система узнаёт кнопку в четвёртом слоте карточки Android 13+. */
@@ -473,7 +535,7 @@ class MediaSessionService : Service() {
          *  msg1421): команда идёт через сессию → listener.onMediaPause →
          *  MainActivity.pausePlayback. No-op, если книга не открыта. */
         fun pause() {
-            main.post { instance?.session?.controller?.transportControls?.pause() }
+            main.post { instance?.session?.player?.pause() }
         }
 
         /** Карточка уже в шторке (сервис поднят в foreground). MainActivity
@@ -500,14 +562,11 @@ class MediaSessionService : Service() {
         notifyNow()
     }
 
-    /** Метаданные сессии (название книги) — для системной медиа-карточки. */
+    /** Метаданные сессии (название книги) — для системной медиа-карточки.
+     *  Название Media3 берёт из состояния плеера-переводчика
+     *  ([ReaderPlayer.getState]); отдельно публиковать его нечем. */
     private fun pushMetadata() {
-        session?.setMetadata(
-            android.support.v4.media.MediaMetadataCompat.Builder()
-                .putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_TITLE, bookTitle ?: "BookVoice")
-                .putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_ARTIST, "BookVoice")
-                .build()
-        )
+        player?.refresh()
     }
 
     private fun applyPlaying(p: Boolean) {
@@ -552,37 +611,10 @@ class MediaSessionService : Service() {
         }
     }
 
-    /** Каждый раз заново подтверждаем, что сессия активна и хочет
-     *  медиа-кнопки: некоторые прошивки «гасят» сессию на паузе, и тогда
-     *  следующее нажатие «играть» уходит в никуда. */
+    /** Состояние читалки для системы. Отдельно публиковать его больше не нужно:
+     *  система спрашивает состояние у [ReaderPlayer], а он берёт его у движка
+     *  (playing). Осталась одна строка — сказать плееру, что состояние изменилось. */
     private fun pushPlaybackState() {
-        val s = session ?: return
-        s.isActive = true
-        val actions = PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
-            PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-            PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
-        val state = if (playing) {
-            PlaybackStateCompat.STATE_PLAYING
-        } else {
-            PlaybackStateCompat.STATE_PAUSED
-        }
-        // msg4578: «Выход» — не только четвёртым действием уведомления (см.
-        // buildNotification), но и пользовательским действием СЕССИИ. На Android 13+
-        // системная медиа-карточка берёт кнопки из состояния сессии: первые три
-        // слота — play/предыдущая/следующая, четвёртый и пятый — пользовательские
-        // действия (PlaybackStateCompat.CustomAction). Без этого «Выход» в шторке
-        // не появлялся вовсе (msg4562: на карточке нет кнопки выхода).
-        val exitCustom = PlaybackStateCompat.CustomAction.Builder(
-            CUSTOM_EXIT,
-            "Выход",
-            android.R.drawable.ic_menu_close_clear_cancel,
-        ).build()
-        s.setPlaybackState(
-            PlaybackStateCompat.Builder()
-                .setActions(actions)
-                .addCustomAction(exitCustom)
-                .setState(state, 0L, 1f)
-                .build()
-        )
+        player?.refresh()
     }
 }

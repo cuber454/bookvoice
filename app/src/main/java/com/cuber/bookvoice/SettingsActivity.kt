@@ -36,7 +36,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.File
 
 /** Разделы настроек (0.3.32): главный экран — список групп, внутри — свой короткий список. */
-private enum class Group(@StringRes val titleRes: Int, @StringRes val hintRes: Int) {
+private enum class Group(@param:StringRes val titleRes: Int, @param:StringRes val hintRes: Int) {
     VOICE(R.string.settings_group_voice, R.string.settings_group_voice_hint),
     READING(R.string.settings_group_reading, R.string.settings_group_reading_hint),
     READER(R.string.settings_group_reader, R.string.settings_group_reader_hint),
@@ -638,20 +638,22 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg5254: галочки «Короткие паузы между предложениями» здесь больше нет
         // (Сергей: «давай уберём эту настройку») — склейка коротких фраз и
         // обрезка тишины по краям работают всегда, как раньше по умолчанию.
-        // msg5955: галочки «Бесшовная передача звука» (msg4598) тоже больше нет —
-        // она про тот же стык предложений: механизм включён всегда и сам
-        // откатывается на обычный стык, если прошивка не приняла прицепку.
-        // Выключен он только при альтернативной озвучке — см. ниже.
         // #57: альтернативный способ озвучки — звук целиком отдаём движку.
-        // Стоит там, где раньше была встык, потому что отменяет её: прицеплять
-        // нечего, когда фразу играет сам движок. Тестовая галочка, по
-        // умолчанию выкл; применяется на месте, не дожидаясь перезапуска.
+        // Тестовая галочка, по умолчанию выкл; применяется на месте, не
+        // дожидаясь перезапуска.
         addHint(getString(R.string.alt_voice_hint))
+        // 29.09.2026, просьба Сержа: тихий поток включается ВМЕСТЕ с этой
+        // галочкой и вместе с ней выключается. Зачем: в альтернативном способе
+        // звук играет движок, а не читалка, поэтому система перестаёт видеть
+        // нас играющими и кнопки на наушниках (волшебное касание) уходят
+        // чужому плееру — тихий поток возвращает нас в список играющих.
+        // Галочку переключаем тем же CheckBox, что и руками: он сам запишет
+        // настройку, применит её и напишет строку в журнал. Снять руками можно —
+        // обратно встанет только при следующем включении этого способа.
+        var silentBox: CheckBox? = null
         addCheck(R.string.alt_voice_title, MainActivity.KEY_ALT_VOICE, false) { on ->
             ReaderEngine.player?.altDirect = on
-            // msg5955: бесшовная прицепка живёт ровно там, где звук готовит
-            // читалка, — с альтернативной озвучкой её гасим.
-            ReaderEngine.player?.gapless = !on
+            silentBox?.isChecked = on
         }
         // msg5067: тихий звуковой поток переехал сюда из окна «Не засыпать»
         // (Сергей искал его как звуковую настройку и не нашёл: окно про батарею).
@@ -660,7 +662,7 @@ class SettingsActivity(private val act: SectionActivity) {
         // убрана в msg5955: про стык предложений галочек больше нет.) Ниже по
         // разделу уже другое: прокрутка, она про место, а не про голос.
         addHint(getString(R.string.sleep_silent_hint))
-        addCheck(R.string.sleep_silent_title, MainActivity.KEY_SILENT_KEEPALIVE, false) { on ->
+        silentBox = addCheck(R.string.sleep_silent_title, MainActivity.KEY_SILENT_KEEPALIVE, false) { on ->
             KeepAwake.syncSilence()
             logSilence(on)
         }
@@ -1253,6 +1255,16 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     private fun buildLibraryGroup() {
+        // 30.09.2026: без «Доступа ко всем файлам» часть книг на полке просто не
+        // открывается (Android прячет чужие файлы), и человек об этом не знает —
+        // доступ просили только при записи. Показываем это первой строкой раздела,
+        // пока доступа нет: касание открывает системный экран.
+        if (!AllFiles.granted(act)) {
+            addMenuRow(
+                getString(R.string.all_files_missing_row),
+                getString(R.string.all_files_missing_hint),
+            ) { AllFiles.ask(act, getString(R.string.all_files_explain)) }
+        }
         // Обложки карточек-сетки (23.09.2026): владелец просил и обложки, и
         // галочку, чтобы их выключать. Стоит первой в разделе — новое ищут
         // сверху. Работает только в виде «Сетка»; список остаётся строками,
@@ -1278,34 +1290,22 @@ class SettingsActivity(private val act: SectionActivity) {
         resetTabsRow = addButton(getString(R.string.lib_tabs_reset)) { resetTabs() }
 
         folderRow = addValueButton {
-            if (treeUri() == null) {
-                openFolderPicker()
-            } else {
-                MaterialAlertDialogBuilder(act)
-                    .setTitle(R.string.folder_title)
-                    .setMessage(R.string.folder_title_hint)
-                    .setItems(arrayOf(getString(R.string.folder_change))) { _, _ ->
-                        openFolderPicker()
-                    }
-                    .setNegativeButton(R.string.toc_close, null)
-                    .show()
-            }
+            // 30.09.2026, просьба Сержа: без промежуточного окошка. Касание строки
+            // сразу открывает системный выбор папки — и когда папки ещё нет, и когда
+            // её меняют. Окошко с одной строкой «Сменить папку» и кнопкой «Закрыть»
+            // вслепую только путало: строка списка читается как текст, а не как
+            // кнопка, и казалось, что менять нечем.
+            openFolderPicker()
         }
+        // Пояснение, которое раньше жило в том окошке, теперь строкой под настройкой:
+        // «файлы не копируются» — важное, а сказать его больше негде.
+        addHint(getString(R.string.folder_title_hint))
         // #44: куда скачивать книги из каталога.
         dlFolderRow = addValueButton {
-            if (dlTreeUri() == null) {
-                openDlFolderPicker()
-            } else {
-                MaterialAlertDialogBuilder(act)
-                    .setTitle(R.string.dl_folder_title)
-                    .setMessage(R.string.dl_folder_title_hint)
-                    .setItems(arrayOf(getString(R.string.dl_folder_change))) { _, _ ->
-                        openDlFolderPicker()
-                    }
-                    .setNegativeButton(R.string.toc_close, null)
-                    .show()
-            }
+            // Так же без окошка (см. folderRow выше).
+            openDlFolderPicker()
         }
+        addHint(getString(R.string.dl_folder_title_hint))
         // #45: какой формат качать из каталога по умолчанию.
         dlFormatRow = addValueButton {
             MaterialAlertDialogBuilder(act)
@@ -2235,19 +2235,10 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
-    /** Выбор папки автокопий (SAF-tree, один раз) / смена. */
+    /** Выбор папки автокопий (SAF-tree, один раз) / смена. Без промежуточного
+     *  окошка: касание строки сразу открывает системный выбор (30.09.2026). */
     private fun pickBackupDirAction() {
-        if (BackupStore.dirUri(act) == null) {
-            openBackupDirPicker()
-        } else {
-            MaterialAlertDialogBuilder(act)
-                .setTitle(R.string.backup_dir_title)
-                .setItems(arrayOf(getString(R.string.backup_dir_change))) { _, _ ->
-                    openBackupDirPicker()
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
-        }
+        openBackupDirPicker()
     }
 
     private fun onBackupDirPicked(tree: Uri) {
@@ -2560,17 +2551,11 @@ class SettingsActivity(private val act: SectionActivity) {
      *  разрешения. Но если папка уже есть (своя, папка книг в облаке или папка
      *  копий) — молчим и пользуемся ею, лишний выбор не навязываем. */
     private fun pickSyncDir() {
-        if (SyncStore.folderFor(act) == null) {
-            openSyncDirPicker()
-            return
-        }
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.sync_dir_title)
-            .setItems(arrayOf(getString(R.string.sync_dir_change))) { _, _ ->
-                openSyncDirPicker()
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
+        // Касание строки сразу открывает системный выбор папки (30.09.2026, просьба
+        // Сержа): окошко с одной строкой «Сменить папку» и кнопкой «Закрыть» вслепую
+        // только путало. Если папка уже есть (своя, папка книг в облаке или папка
+        // копий) — выбор по-прежнему не навязываем, но и не прячем за окном.
+        openSyncDirPicker()
     }
 
     private fun openSyncDirPicker() {

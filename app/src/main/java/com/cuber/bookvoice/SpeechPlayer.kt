@@ -3,9 +3,6 @@ package com.cuber.bookvoice
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioAttributes
-import android.media.AudioManager
-import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -24,8 +21,9 @@ import java.io.File
  * кнопка не доходила до приложения ни разу.
  *
  * Как теперь. Движок TTS только СИНТЕЗИРУЕТ предложение в wav-файл, а файл
- * проигрывает наш MediaPlayer. Раз звук физически играет из нашего процесса,
- * система видит BookVoice как настоящий плеер и отдаёт кнопки нам.
+ * проигрывает наш плеер (Media3 ExoPlayer, см. [FilePlayback]). Раз звук
+ * физически играет из нашего процесса, система видит BookVoice как настоящий
+ * плеер и отдаёт кнопки нам.
  *
  * Чтобы между предложениями не было пауз на синтез, фразы готовятся заранее:
  * пока играет текущая, читалка подсказывает через [onNeedNext] текст следующей,
@@ -58,19 +56,43 @@ class SpeechPlayer(context: Context) {
             // бы заново без упреждения и чтение спотыкалось бы на каждой.
             dropStaleRate()
             // 29.09.2026: и сам звучащий файл подтягиваем на ходу — иначе новая
-            // скорость слышна только с начала следующей фразы (см.
-            // [retunePlaying]). Реплике книжный ползунок не указ: у неё своя
-            // скорость, и своя заготовка.
+            // скорость слышна только с начала следующей фразы. У ExoPlayer темп
+            // меняется его собственными параметрами, с сохранением высоты голоса.
+            //
+            // Файл звучит уже на скорости [exoPlayingRate] (его так записал
+            // движок), поэтому плееру задаём отношение к новому ползунку: иначе
+            // скорость применилась бы дважды — и движком, и плеером. Реплике
+            // книжный ползунок не указ: у неё своя скорость.
             if (playingFile?.let { roleOfFile(it) } != Pending.Role.REPLY) {
-                retunePlaying(value, playingRate)
+                runCatching {
+                    filePlayer.setSpeed((value / exoPlayingRate).coerceIn(0.25f, 4f))
+                }
             }
         }
 
-    /** Высота голоса (тон). Норма = 1.0. Применяется к следующему синтезу. */
+    /** Высота голоса (тон). Норма = 1.0. Движку задаётся для СЛЕДУЮЩЕГО синтеза,
+     *  а уже звучащую фразу доводит плеер ([exoSyncSpeed]) — иначе новая высота
+     *  слышна только с начала следующей фразы.
+     *
+     *  29.09.2026 (Серж: «кручу тон — срабатывает не мгновенно, а с задержкой
+     *  большущей»): пока ползунок не выбрасывал заготовки, прежним тоном доигрывало
+     *  ВСЁ, что стоит впереди (три-четыре фразы, до полусотни секунд звука), и ещё
+     *  звучащая фраза. Теперь заготовки выбрасываются, а звучащая дотягивается. */
     var pitch: Float = 1f
         set(value) {
-            field = value
-            tts?.setPitch(value)
+            val v = value.coerceIn(0.25f, 4f)
+            if (field == v) return
+            field = v
+            tts?.setPitch(v)
+            // Заготовки сделаны прежним тоном — играть их нельзя (та же причина,
+            // что у смены скорости, поэтому и чистка та же).
+            dropStaleRate()
+            // Реплике книжный ползунок не указ: у неё своя высота.
+            if (playingFile?.let { roleOfFile(it) } != Pending.Role.REPLY) {
+                runCatching {
+                    filePlayer.setPitch((v / exoPlayingPitch).coerceIn(0.25f, 4f))
+                }
+            }
         }
 
     /** Короткие паузы между предложениями (msg4402, просьба тестера
@@ -83,42 +105,14 @@ class SpeechPlayer(context: Context) {
      *  портит, поэтому не выключается — галочку убрали (msg5254).
      *  msg5254: галочка «Короткие паузы между предложениями» убрана из настроек
      *  Сергеем — склейка и обрезка работают всегда, как было по умолчанию. */
-    /** Бесшовная передача звука встык (msg4598, ТЕСТОВАЯ настройка).
-     *
-     *  Зачем. Замер по журналу Сергея (msg4594): между «фраза доиграла» и
-     *  «играю свой звук» следующей фразы проходит 86–177 мс, к ним добавляется
-     *  ~190 мс запаздывания самого MediaPlayer (длительность фразы ровно на
-     *  столько больше, чем размер файла / 48 000 байт/с) — на слух это пауза
-     *  около 0,3 с на КАЖДОМ стыке предложений.
-     *
-     *  Что делает. Пока звучит текущая фраза, следующая готовая заготовка
-     *  прицепляется к играющему плееру платформенным
-     *  [MediaPlayer.setNextMediaPlayer]: систему не нужно просить «начни
-     *  следующий файл» в момент окончания — она сама продолжает звук тем же
-     *  аудиотрактом. Наш перезапуск и его задержки из стыка уходят.
-     *
-     *  По умолчанию ВЫКЛ: пока это тестовая настройка, обычное поведение
-     *  остаётся прежним, и Сергей сравнивает оба варианта на слух одной
-     *  галочкой. */
-    var gapless: Boolean = false
-        set(value) {
-            if (field == value) return
-            field = value
-            // msg4611: галочку снимают на ходу, а заготовка уже прицеплена к
-            // играющему плееру. Если оставить её, платформа начнёт звук сама на
-            // ближайшем стыке, а старый путь ту же фразу посчитает ещё не
-            // сыгранной и запустит второй раз. Отпускаем прицепку заранее.
-            if (!value) unhookChain()
-        }
-
     /** #57: альтернативный способ озвучки — фразу целиком отдаём движку
      *  ([fallbackDirect] как основной путь, проба для сравнения на слух,
      *  msg5401/5409). Обычно у нас наоборот: движок только готовит файл, а
      *  играет наш плеер.
      *
-     *  Что при этом выключается: наши заготовки ([requestPrefetch]), передача
-     *  встык ([gapless]) и свой MediaPlayer — их работу движок делает сам.
-     *  Сторож молчания продолжает работать, но своей веткой ([armDirectWatch]):
+     *  Что при этом выключается: наши заготовки ([requestPrefetch]) — их
+     *  работу движок делает сам. Сторож молчания продолжает работать, но своей
+     *  веткой ([armDirectWatch]):
      *  он надзирает за прямой речью, а не за синтезом в файл, поэтому лестница
      *  мер «переспрос → перезапуск движка» здесь не взводится.
      *
@@ -155,30 +149,6 @@ class SpeechPlayer(context: Context) {
     private var playingFile: File? = null
     private var playingRate: Float = 1f
 
-    /** Следующая фраза, прицепленная к играющему плееру встык (msg4598). */
-    private var chainedPlayer: MediaPlayer? = null
-    private var chainedText: String? = null
-    private var chainedFile: File? = null
-
-    /** Скорость, которой сделан прицепленный файл: если её успели сменить,
-     *  возвращать заготовку в очередь нельзя (см. [unhookChain]). */
-    private var chainedRate: Float = 1f
-
-    /** Прицепка готовится: файл отдан MediaPlayer, ответа ещё нет. В счёт
-     *  заготовок входит наравне с готовой прицепкой (см. [requestPrefetch]) —
-     *  иначе на время подготовки очередь заказала бы ту же фразу второй раз. */
-    private var chainInFlight = false
-
-    /** Поколение прицепок: запоздавший ответ MediaPlayer после stop() не должен
-     *  ничего прицеплять к уже отпущенному плееру. */
-    private var chainSeq = 0L
-
-    /** Текст, который вот-вот попросит движок после перехода встык (msg4598).
-     *  Отличает «движок сдвинулся, фраза уже звучит» от жеста «повторить»:
-     *  повтор приходит тем же путём (startSpeakingCurrent → speak), но это
-     *  осознанная просьба сыграть фразу заново. */
-    private var gaplessHopText: String? = null
-
     /** Сколько раз за сессию журналируем пустой звук от движка (не спамить). */
     private var emptySoundLogged = 0
 
@@ -208,7 +178,8 @@ class SpeechPlayer(context: Context) {
             val v = value.coerceIn(0f, 2f)
             val wasLoud = field > 1f
             field = v
-            runCatching { media?.setVolume(v.coerceAtMost(1f), v.coerceAtMost(1f)) }
+            // Звучит ExoPlayer — громкость у него своя.
+            runCatching { filePlayer.setVolume(v) }
             if (wasLoud != (v > 1f)) {
                 // Подстройка перешла через 100%: уже готовые фразы сделаны по
                 // прежнему правилу — не играем их, иначе смена слышна не сразу.
@@ -254,23 +225,61 @@ class SpeechPlayer(context: Context) {
             return merged.toList().sortedBy { it.second.lowercase() }
         }
 
-    // ---------- Пайплайн «синтез в файл → играет MediaPlayer» ----------
+    // ---------- Пайплайн «синтез в файл → играет плеер» ----------
 
     private val synthDir = File(appContext.cacheDir, "tts_speech").apply {
         if (!exists()) mkdirs()
     }
-    private val audioSessionId =
-        (appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager).generateAudioSessionId()
 
-    private val audioAttrs = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_MEDIA)
-        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-        .build()
+    // ---------------- Файлы играет ExoPlayer (28.09.2026) ----------------
 
-    private var media: MediaPlayer? = null
-    /** Счётчик поколений проигрывания: защита от запоздавших callback'ов
-     *  MediaPlayer после stop()/release(). */
-    private var playGen = 0L
+    /** Плеер Media3 (см. [FilePlayback]). Поднимается лениво. */
+    private val filePlayer: FilePlayback by lazy { FilePlayback(appContext) }
+
+    /** Сколько заготовок отдано ExoPlayer ВПЕРЁД от звучащей фразы, и счётчик
+     *  заявок для него: по ним понимаем, есть ли что играть дальше. */
+    private var exoAhead = 0
+    private var exoSeq = 0L
+
+    /** ЗЕРКАЛО того, что уже отдано ExoPlayer и ещё не доиграло, в порядке
+     *  звучания (первая — та, что звучит сейчас). Нужно затем, чтобы при вопросе
+     *  чтения «играй вот эту фразу» понимать: она уже стоит впереди (тогда просто
+     *  ждём) или её в списке нет (тогда выбрасываем хвост и дописываем её).
+     *  Без него приходилось перезапускать список, и всё, что впереди, гибло —
+     *  это и была потеря текста в сборке 187. */
+    private val exoPending = ArrayDeque<Prepared>()
+
+    /** Темп ФАЙЛА, который звучит сейчас. Движок пишет файл уже на нужной
+     *  скорости ([Prepared.rate]), поэтому плееру остаётся только довести темп до
+     *  нынешнего ползунка: играть такой файл на самой скорости — значит применить
+     *  её дважды. Жалоба Сержа «словил очередную глюк после кручения скорости»
+     *  (29.09.2026) — про это: в списке рядом лежали файлы, сделанные на 0.9, 1.2
+     *  и 1.8, а плеер тянул их все на 1.2. */
+    private var exoPlayingRate = 1f
+
+    /** Тон ФАЙЛА, который звучит сейчас: движок записал его на этой высоте голоса,
+     *  и плееру задаётся отношение «нужный тон / тон файла» ([exoSyncSpeed]).
+     *  29.09.2026: без этого смена тона слышна только со следующей фразы. */
+    private var exoPlayingPitch = 1f
+
+    /** Тон, на котором записан файл — по имени файла (движок пишет файл уже с
+     *  нужной высотой голоса, см. [pitch]). Набор подчищаем, когда разрастается:
+     *  имена короткие, но за долгое чтение их набирается много. */
+    private val filePitches = HashMap<String, Float>()
+
+    private fun rememberFilePitch(name: String, pitch: Float) {
+        if (filePitches.size > 400) filePitches.clear()
+        filePitches[name] = pitch
+    }
+
+    private fun filePitchOf(f: java.io.File): Float = filePitches[f.name] ?: 1f
+
+    /** Какая высота голоса нужна этой роли: у реплик своя. */
+    private fun pitchFor(role: Pending.Role): Float =
+        if (role == Pending.Role.REPLY) replyPitch else pitch
+
+    /** Сторож «звук не начался»: молчание лечим прямой речью. */
+    private var exoStartToken = 0
 
     /** Последний текст, который попросили говорить. */
     private var currentText: String? = null
@@ -307,6 +316,10 @@ class SpeechPlayer(context: Context) {
      *  движку не нужно синтезировать её второй раз (см. [pauseKeepingPhrase]). */
     private var keptPhrase: Prepared? = null
 
+    /** С какого места продолжать сохранённую паузой фразу: у ExoPlayer позиция
+     *  точная, и повторять начало фразы незачем. */
+    private var keptPositionMs = 0L
+
     /** Очередь уже синтезированных фраз — готовы к мгновенному старту, в том
      *  порядке, в каком прозвучат (msg4472). Раньше здесь лежала ровно одна
      *  заготовка: её хватало на паузу между фразами, но не на заминку движка,
@@ -325,6 +338,11 @@ class SpeechPlayer(context: Context) {
          *  Сержа 195 отказов против 2 удачных прицепок, и это слышалось
          *  паузами на каждой реплике). */
         val role: Pending.Role = Pending.Role.MAIN,
+        /** Номер заявки, по которой сделан файл (30.09.2026). Нужен, чтобы
+         *  отдавать фразы плееру в порядке ЗАКАЗА, а не в порядке готовности:
+         *  книга и реплики синтезируются разными движками, и медленная реплика
+         *  иначе приезжает после следующей книжной фразы (см. [exoTopUp]). */
+        val req: Long = 0L,
     )
 
     private val readyQueue = ArrayDeque<Prepared>()
@@ -391,7 +409,6 @@ class SpeechPlayer(context: Context) {
      *  взведение надзора за следующей заявкой гасило надзор за предыдущей:
      *  одна из фраз оставалась без сторожа вовсе. */
     private val synthWatchTokens = HashMap<String, Long>()
-    private var playWatchToken = 0L
     private var directWatchToken = 0L
 
     /** Перезапусков движка подряд из-за молчания (сбрасывается удачной речью). */
@@ -761,6 +778,14 @@ class SpeechPlayer(context: Context) {
      *  конца сеанса реплики читает основной голос: тишина хуже, чем один голос. */
     private var replyBroken = false
 
+    /** Сколько раз ПОДРЯД движок реплик молчал (29.09.2026). Первый промах —
+     *  ждём ещё раз, второй — отказываемся от ролей до конца сеанса: одна
+     *  потерянная заявка сетевого голоса не должна лишать книгу ролей. */
+    private var replyMisses = 0
+
+    /** Когда снова пробовать поднять отказавший движок реплик ([maybeReviveReplyEngine]). */
+    private var replyRetryAt = 0L
+
     private var mainPhrases = 0
     private var replyPhrases = 0
     private var replyFalls = 0
@@ -804,8 +829,12 @@ class SpeechPlayer(context: Context) {
     /** Выбросить заготовки, сделанные прежним репликовым голосом. Текущий звук
      *  не трогаем: он уже играет, и обрывать его незачем. */
     private fun dropStaleReply() {
-        dropChain()
         clearPrefetch()
+        // 29.09.2026: в новом пути заготовки лежат не только в очереди, но и в
+        // списке плеера — без этой чистки прежним голосом (или прежней громкостью
+        // выше 100%, которая домножается в самом звуке) доигрывало бы всё, что уже
+        // отдано плееру. Звучащую фразу не трогаем.
+        exoDropTail()
         keptPhrase?.let { runCatching { it.file.delete() } }
         keptPhrase = null
     }
@@ -825,7 +854,9 @@ class SpeechPlayer(context: Context) {
      *  реплике движок уже готов, и ждать его не приходится вовсе. Ничего не
      *  делает, если реплики выключены или движок уже поднят. */
     fun prepareReplyEngine() {
-        if (!replyOn || replyBroken) return
+        // Свой экземпляр нужен только для ДРУГОГО движка: у одного и того же движка
+        // роли читает он сам, взяв голос реплик на время фразы (29.09.2026).
+        if (!replyOn || !replyNeedsOwnInstance() || replyBroken) return
         replyInstance()
     }
 
@@ -833,7 +864,8 @@ class SpeechPlayer(context: Context) {
      *  не отказал. В отличие от [replyEngineReady] верно и пока движок
      *  поднимается — по этому признаку читалка решает, делить ли фразу на
      *  голоса (см. ReaderEngine.chunkSpan). */
-    val replyVoicesActive: Boolean get() = replyOn && !replyBroken
+    val replyVoicesActive: Boolean get() =
+        replyOn && (!replyNeedsOwnInstance() || !replyBroken)
 
     // ---- Ожидание репликового движка (27.09.2026) ----
     //
@@ -925,9 +957,11 @@ class SpeechPlayer(context: Context) {
         if (gen != replyGen) return
         replyStarting = false
         val t = replyTts
-        val ok = status == TextToSpeech.SUCCESS && t != null
-        replyReady = ok
-        if (!ok || t == null) {
+        // 30.09.2026: было `if (!ok || t == null)`, где ok уже включал t != null —
+        // компилятор честно ругался «условие всегда ложно». Пишем проверку так,
+        // чтобы после неё t был точно не null (иначе дальше его не разыменовать).
+        if (status != TextToSpeech.SUCCESS || t == null) {
+            replyReady = false
             replyBroken = true
             Diag.log(
                 appContext, "tts",
@@ -936,6 +970,7 @@ class SpeechPlayer(context: Context) {
             )
             return
         }
+        replyReady = true
         t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
                 // В альтернативном способе эта весть продлевает надзор за прямой
@@ -1008,6 +1043,69 @@ class SpeechPlayer(context: Context) {
         }
     }
 
+    /** Взять ОСНОВНОЙ экземпляр в долг под реплику (29.09.2026).
+     *
+     *  Так делают и другие читалки: когда оба голоса живут в одном движке, второго
+     *  экземпляра не заводят — ставят голос перед заказом фразы. Движок запоминает
+     *  голос вместе с заявкой, поэтому сразу после заказа мы возвращаем книжный
+     *  голос ([restoreMainParams]) и книжные фразы не страдают.
+     *
+     *  Почему это лучше второго экземпляра: два экземпляра ОДНОГО движка теряют
+     *  заявки (журнал 20:10: движок реплик молчал, роли пропали до конца книги),
+     *  и держать его «разогретым» приходилось костылями. */
+    private fun borrowMainForReply(t: TextToSpeech) {
+        runCatching {
+            val name = replyVoiceName
+            if (name != null) {
+                val v = t.voices?.firstOrNull { it.name == name }
+                if (v != null) {
+                    t.voice = v
+                    replyVoiceApplied = name
+                } else if (replyVoiceWarned != name) {
+                    replyVoiceWarned = name
+                    Diag.log(
+                        appContext, "tts",
+                        "движок не знает голос реплик $name (голосов у него ${t.voices?.size ?: 0}) — " +
+                            "реплики звучат его голосом"
+                    )
+                }
+            }
+            t.setSpeechRate(replySpeed)
+            t.setPitch(replyPitch)
+        }
+    }
+
+    /** Вернуть основному экземпляру книжные голос, скорость и тон. */
+    private fun restoreMainParams(t: TextToSpeech) {
+        runCatching {
+            val name = selectedVoiceName
+            if (name != null) {
+                val v = t.voices?.firstOrNull { it.name == name }
+                if (v != null) t.voice = v
+            }
+            t.setSpeechRate(speed)
+            t.setPitch(pitch)
+        }
+    }
+
+    /** Нужен ли репликам СВОЙ экземпляр движка. Не нужен, когда реплики выбраны в
+     *  том же движке, что книга: второй экземпляр одного движка только теряет
+     *  заявки (29.09.2026, см. [borrowMainForReply]). */
+    private fun replyNeedsOwnInstance(): Boolean = replyEnginePackage != enginePackage
+
+    /** Отказавший движок реплик пробуем поднять снова — по делу, а не таймером:
+     *  встретилась очередная реплика, значит он опять нужен. Не чаще раза в
+     *  [REPLY_RETRY_MS], иначе на каждом отказавшем движке мы бы его пересобирали. */
+    private fun maybeReviveReplyEngine() {
+        val now = SystemClock.elapsedRealtime()
+        if (now < replyRetryAt || replyStarting) return
+        replyRetryAt = now + REPLY_RETRY_MS
+        replyBroken = false
+        replyMisses = 0
+        Diag.log(appContext, "tts", "движок реплик: пробую поднять снова")
+        replyInstance()
+    }
+
     /** Скорость, которой синтезируется фраза этой роли: у реплик своя. По ней же
      *  проверяется, не устарела ли готовая заготовка. */
     private fun rateFor(role: Pending.Role): Float = if (role == Pending.Role.REPLY) replySpeed else speed
@@ -1041,10 +1139,7 @@ class SpeechPlayer(context: Context) {
 
         // #57: альтернативный способ — наш конвейер не участвует вовсе.
         // Фразу целиком отдаём движку (он и синтезирует, и играет), поэтому
-        // здесь же отпускаем всё своё: играющий плеер, прицепку встык и
-        // заготовки. Ветка стоит до логики встыка намеренно: хоп «движок
-        // сдвинулся, звук уже играет» — это про наш MediaPlayer, которого в
-        // этом режиме нет.
+        // здесь же отпускаем всё своё: играющий плеер и заготовки.
         if (directMode) {
             releaseMedia()
             clearPrefetch()
@@ -1057,98 +1152,9 @@ class SpeechPlayer(context: Context) {
             return
         }
 
-        // Переход встык (msg4598): движок сдвинулся на следующую фразу, а звук
-        // её уже играет — его начал не мы, а платформа в момент окончания
-        // предыдущей (см. onPhraseCompleted). Здесь нельзя ни releaseMedia()
-        // (оборвал бы звук на середине), ни playFile (сыграл бы фразу второй раз).
-        // Метка ставится ровно перед вызовом onDone, поэтому под неё попадает
-        // только продолжение движка, а не жест «повторить предложение».
-        // Проверку на играющий media здесь не ставим: фраза могла оказаться
-        // пустой (движок изредка отдаёт файл из одного заголовка) и доиграть
-        // раньше, чем движок попросит её же, — тогда без метки мы синтезировали
-        // бы её второй раз и услышали повтор.
-        val hop = gaplessHopText
-        if (gapless && hop != null && text == hop) {
-            gaplessHopText = null
-            requestPrefetch() // место в очереди освободилось — просим следующую
-            return
-        }
-        if (gapless && hop != null) {
-            // msg4643: движок попросил фразу, а прицеплена была другая — так
-            // выглядит рассинхрон заготовки. Сторож в [chainNext] такое не
-            // пропускает, поэтому строка редкая и её видно в журнале: по ней
-            // понятно, что сверка не сработала и фразу пришлось играть заново.
-            Diag.log(
-                appContext, "sound",
-                "встык: фраза не совпала с прицепленной (${hop.length} → ${text.length} знаков) — играю заново"
-            )
-        }
-        gaplessHopText = null
-        releaseMedia()
-
-        // Пауза сохранила звук ровно этой фразы — продолжаем с него, синтез не
-        // нужен (см. [pauseKeepingPhrase]). Скорость сверяем: пауза могла
-        // пережить её смену.
-        takeKeptPhrase(text)?.let { kept ->
-            playFile(kept.file, kept.rate)
-            return
-        }
-
-        // Готовая заранее заготовка этой же фразы — играем без задержки.
-        // ВАЖНО: забираем файл из очереди, НЕ вызывая clearPrefetch() — она
-        // удаляет файлы, и playFile падает с ENOENT (каждая вторая фраза уходила
-        // в запасной путь движкового произнесения). Файл удалит сам playFile по
-        // завершении. Очередь читаем с головы: заготовки копятся в том порядке,
-        // в каком прозвучат, и голова — как раз следующая фраза.
-        val head = readyQueue.firstOrNull()
-        if (head != null && head.text == text) {
-            if (head.rate == rateFor(head.role)) {
-                readyQueue.removeFirst()
-                awaitingPlayText = null
-                playFile(head.file, head.rate)
-                return
-            }
-            // Заготовка сделана до смены скорости. Играть её прежним темпом
-            // нельзя — выбрасываем и собираем фразу заново текущей скоростью.
-            Diag.log(
-                appContext, "sound",
-                "заготовка сделана на скорости ${RateSteps.label(head.rate)}, " +
-                    "сейчас ${RateSteps.label(speed)} — синтезирую фразу заново"
-            )
-            readyQueue.removeFirst()
-            head.file.delete()
-        }
-
-        // Синтез этого текста уже идёт впрок — просто ждём его и сыграем.
-        if (prefetchInFlight.contains(text)) {
-            awaitingPlayText = text
-            // 29.09.2026: заявка уже в пути, но звука нет вовсе — это и есть та
-            // пауза, которую слышно. Сторожа перевзводим (см. [synthFuseFor]): он
-            // мог отсчитывать срок ещё с упреждающего заказа, и тогда ждать
-            // пришлось бы полный сетевой срок, ничего не слыша.
-            if (media == null) armSynthWatch(text)
-            return
-        }
-
-        // Старые заготовки не совпадают — выбрасываем и синтезируем заново.
-        // 29.09.2026: пишем в журнал, ЧТО было в очереди и ЧТО просит чтение.
-        // Без текстов по журналу не понять, кто разошёлся: раньше здесь была
-        // молчаливая потеря заготовки, а с медленным сетевым синтезатором каждая
-        // такая потеря — это ещё три секунды синтеза и слышимая пауза.
-        readyQueue.firstOrNull()?.let { head ->
-            if (misalignLogged < 8) {
-                misalignLogged++
-                Diag.log(
-                    appContext, "sound",
-                    "заготовка не та: чтение просит «${text.take(40)}» (${text.length} знаков), " +
-                        "в очереди «${head.text.take(40)}» (${head.text.length} знаков) — " +
-                        "выбрасываю ${readyQueue.size} заготовок"
-                )
-            }
-        }
-        clearPrefetch()
-        awaitingPlayText = text
-        synthToFile(text)
+        // Файловый путь: своя логика очереди, список плеера НЕ перезапускаем
+        // (см. [speakExo]).
+        speakExo(text)
     }
 
     /** Остановить озвучку: тишина сразу, onDone не вызывается. */
@@ -1182,7 +1188,6 @@ class SpeechPlayer(context: Context) {
         // Сторож молчания (msg4077): тишина попрошена — надзор снимаем, чтобы
         // он не «оживил» чтение, которое владелец только что остановил.
         forgetAllSynthWatches()
-        playWatchToken++
         directWatchToken++
         retryAfterRestart = null
         clearPrefetch()
@@ -1208,8 +1213,15 @@ class SpeechPlayer(context: Context) {
 
     fun selectVoice(name: String) {
         selectedVoiceName = name
+        // 29.09.2026 (журнал 18:11): сразу после смены голоса движок перестраивается,
+        // и первая заявка по старую сторону часто пропадает. Держим это в уме, пока
+        // он не отзовётся (см. [onSynthWatchdog]).
+        voiceSwitched = true
         applySpeedAndVoice()
     }
+
+    /** Голос сменили только что, движок ещё не отзывался после этого. */
+    private var voiceSwitched = false
 
     private fun applySpeedAndVoice() {
         val t = tts ?: return
@@ -1331,14 +1343,22 @@ class SpeechPlayer(context: Context) {
     /** Срок, через который сторож спросит движок, почему молчит синтез.
      *
      *  Отдельный случай — СЛЫШИМАЯ тишина (29.09.2026). Фразу, которую ждёт
-     *  чтение ([awaitingPlayText]), а звука нет вовсе (пустой [media]), стерегём
-     *  коротко. Жалоба Сержа: «смущает паузы, когда он замолчал тогда на 5
-     *  секунд». В журнале 08:48 так и вышло: заявку на фразу движок потерял, а
+     *  чтение ([awaitingPlayText]), а звука нет вовсе (ничего не играет),
+     *  стерегём коротко. Жалоба Сержа: «смущает паузы, когда он замолчал тогда
+     *  на 5 секунд». В журнале 08:48 так и вышло: заявку на фразу движок потерял, а
      *  следующий шаг лестницы наступал только через полный сетевой срок, и
      *  тишина складывалась в 6,5 с. Пока играет предыдущая фраза, ждать можно и
      *  подольше — этой паузы не слышно. */
     private fun synthFuseFor(text: String, shortFuse: Boolean, started: Boolean): Long = when {
-        media == null && text == awaitingPlayText -> SYNTH_SILENT_MS
+        // 29.09.2026 (журнал 18:52, «на маленькой скорости останавливался»): срок
+        // для жданной фразы берём не голыми 2,5 с, а не меньше ПОЛОВИНЫ срока по
+        // длине фразы. На маленькой скорости фраза длинная (при 0,5 та же фраза
+        // звучит вдвое дольше), и движок собирает её дольше: 2,5 с истекали, мы
+        // переспрашивали фразу у занятого движка, и он от этого только тормозил —
+        // на слух это те самые остановки. Короткая фраза по-прежнему стережётся
+        // коротко: половинный срок у неё меньше 2,5 с.
+        !soundPlaying() && text == awaitingPlayText ->
+            maxOf(SYNTH_SILENT_MS, synthFuseMs(text) / 2)
         shortFuse -> reaskFuseMs()
         netSynth && !started -> SYNTH_NET_QUEUE_MS
         else -> synthFuseMs(text)
@@ -1369,13 +1389,31 @@ class SpeechPlayer(context: Context) {
         }
         if (stuck.isEmpty()) return
         if (stuck.values.any { it.role == Pending.Role.REPLY }) {
-            // Молчит движок реплик — перезапускать его на каждой реплике значит
+            // 29.09.2026 (журнал 20:10, жалоба Сержа «включено чтение по ролям, а
+            // читает одним голосом»): здесь мы СРАЗУ отказывались от ролей до конца
+            // сеанса — из-за одной потерянной заявки у сетевого голоса реплик.
+            // Хуже того, фразу мы тут же заказывали основным голосом, и она звучала
+            // ещё раз (та самая «фраза два раза»). Теперь даём движку реплик второй
+            // срок: заявку НЕ выбрасываем, просто ждём ещё столько же. Отказываемся
+            // от ролей только на втором промахе подряд, и тогда уже перечитываем
+            // фразу основным голосом — иначе текст пропадёт.
+            if (replyMisses < REPLY_MISS_LIMIT) {
+                replyMisses++
+                Diag.log(
+                    appContext, "tts",
+                    "движок реплик молчит — жду его ещё раз, роли не бросаю " +
+                        "(${text.take(30)}…)",
+                )
+                armSynthWatch(text, shortFuse = false)
+                return
+            }
+            // Молчит и второй раз — перезапускать его на каждой реплике значит
             // гадать. Возвращаемся к основному голосу и говорим об этом в журнале.
             replyBroken = true
             replyFalls++
             Diag.log(
                 appContext, "tts",
-                "движок реплик молчит — читаю реплики основным голосом"
+                "движок реплик молчит дважды — читаю реплики основным голосом"
             )
             stuck.forEach { (id, p) ->
                 p.cancelled = true
@@ -1386,7 +1424,7 @@ class SpeechPlayer(context: Context) {
             synthToFile(text)
             return
         }
-        if (media != null) {
+        if (soundPlaying()) {
             // Играет предыдущая фраза: движок сейчас не трогаем, иначе оборвём звук.
             // Ждём полный срок: с коротким запалом этот надзор просто крутился бы
             // вхолостую каждую секунду, пока звучит фраза.
@@ -1413,6 +1451,24 @@ class SpeechPlayer(context: Context) {
         // 1.1 с после начала синтеза. Перезапуск движка — тяжёлая мера (заново
         // init, голос, скорость), берегём её для второго обрыва подряд.
         if (synthMissesOf(text) == 0 && ready) {
+            // 29.09.2026 (журнал 18:11, «огрехи при переходе с сетевого голоса на
+            // обычный»): сразу после смены голоса движок перестраивается, и первая
+            // заявка часто пропадает. Переспрос в этот момент только тянет время:
+            // в журнале он не помог, а помог перезапуск — на круг вышло восемь
+            // секунд тишины и повтор фразы. Поэтому первую потерю сразу после
+            // смены голоса лечим перезапуском, не дожидаясь второго обрыва.
+            // Только для голоса, который сам не заявил себя сетевым: сетевому
+            // перезапуск вредит (заявка в пути выбрасывается).
+            if (voiceSwitched && !netSynth) {
+                voiceSwitched = false
+                Diag.log(
+                    appContext, "tts",
+                    "после смены голоса движок молчит $waited с — сразу перезапускаю его",
+                )
+                if (wanted) retryAfterRestart = text
+                start(enginePackage)
+                return
+            }
             synthMisses[text] = 1
             // 29.09.2026: заявок в работе несколько, и сторож срабатывает у каждой
             // своей. Переспрашиваем только ту фразу, которую чтение ждёт: у
@@ -1534,110 +1590,6 @@ class SpeechPlayer(context: Context) {
     private var rateMeasures = 0
     private var rescueText: String? = null
     private var rescueTries = 0
-
-    /** Взвести надзор за подготовкой файла: локальный wav готовится доли секунды. */
-    private fun armPlayWatch(text: String?) {
-        val token = ++playWatchToken
-        main.postDelayed({ if (token == playWatchToken) onPlayWatchdog(text) }, PLAY_STALL_MS)
-    }
-
-    private fun onPlayWatchdog(text: String?) {
-        Diag.log(appContext, "sound", "свой звук не подготовился за ${PLAY_STALL_MS / 1000} с — говорю напрямую")
-        releaseMedia()
-        fallbackDirect(text)
-    }
-
-    // ---------- Надзор за нашим плеером: звук идёт или стоит (23.09.2026) ----------
-
-    /** Токен надзора: растёт, когда надзор больше не нужен (фраза закрыта, плеер
-     *  отпущен, началась другая). */
-    private var posWatchToken = 0L
-
-    /** За каким плеером следим и что играем: по смене плеера надзор взводится
-     *  заново (в т.ч. после перехода встык, когда играющим становится
-     *  прицепленный плеер). */
-    private var posWatchPlayer: MediaPlayer? = null
-    private var posWatchFile: File? = null
-    private var posWatchGen = 0L
-
-    /** Последняя виденная позиция и когда она была такой. */
-    private var posLast = -1
-    private var posLastAt = 0L
-
-    /** Видели ли мы хоть раз, что позиция РАСТЁТ. Пока не видели — судить
-     *  нельзя: на отдельной прошивке `currentPosition` может всегда отдавать
-     *  ноль, и тогда мы бы обрывали каждую фразу на ровном месте. */
-    private var posSawProgress = false
-    private var posWarnedNoProgress = false
-
-    /** Чей конец фразы уже обработан: плеер живёт ровно одну фразу, поэтому
-     *  хватает одной ссылки. Нужен, чтобы поздний `onCompletion` от платформы не
-     *  прошёл второй раз по уже закрытой фразе (иначе чтение перескочит
-     *  предложение). */
-    private var completedPlayer: MediaPlayer? = null
-
-    /** Взять играющий плеер под надзор: раз в [POSITION_CHECK_MS] сверяем
-     *  позицию. Файл отдан, звука нет — увидим это сами, не спрашивая движок:
-     *  он как раз и бывает тем, кто молчит. */
-    private fun armPositionWatch(mp: MediaPlayer, f: File?, gen: Long) {
-        if (f == null) return
-        val token = ++posWatchToken
-        posWatchPlayer = mp
-        posWatchFile = f
-        posWatchGen = gen
-        posLast = -1
-        posLastAt = SystemClock.elapsedRealtime()
-        posSawProgress = false
-        posWarnedNoProgress = false
-        main.postDelayed({ if (token == posWatchToken) checkPosition(token) }, POSITION_CHECK_MS)
-    }
-
-    /** Снять надзор: фраза закрылась, плеер отпущен или звук больше не наш. */
-    private fun dropPositionWatch() {
-        posWatchToken++
-        posWatchPlayer = null
-        posWatchFile = null
-    }
-
-    private fun checkPosition(token: Long) {
-        if (token != posWatchToken) return
-        val mp = posWatchPlayer ?: return
-        // Плеер уже не тот, что мы сторожим: фраза сменилась, чтение встало или
-        // звук перешёл встык к следующему плееру (за него взведён свой надзор).
-        if (media !== mp) return
-        val pos = runCatching { mp.currentPosition }.getOrDefault(-1)
-        val now = SystemClock.elapsedRealtime()
-        if (pos > posLast) {
-            posLast = pos
-            posLastAt = now
-            posSawProgress = true
-        } else if (!posSawProgress) {
-            // Позиция не растёт с самого начала: либо файл только-только отдан
-            // (ждать нечего, время идёт), либо прошивка врёт про позицию. Второй
-            // случай в журнале виден строкой ниже — по ней и разберёмся, если
-            // такая прошивка найдётся.
-            if (!posWarnedNoProgress && now - posLastAt >= POSITION_STALL_MS) {
-                posWarnedNoProgress = true
-                Diag.log(
-                    appContext, "sound",
-                    "позиция плеера не растёт с начала фразы (${pos}) — по времени не сужу",
-                )
-            }
-        } else if (now - posLastAt >= POSITION_STALL_MS) {
-            val dur = runCatching { mp.duration }.getOrDefault(-1)
-            val still = (now - posLastAt) / 1000
-            Diag.log(
-                appContext, "sound",
-                "позиция плеера стоит $still с ($pos из $dur) — звука нет, " +
-                    "считаю фразу доигранной и иду дальше",
-            )
-            val f = posWatchFile
-            dropPositionWatch()
-            if (f != null) onPhraseCompleted(mp, f, posWatchGen)
-            return
-        }
-        main.postDelayed({ if (token == posWatchToken) checkPosition(token) }, POSITION_CHECK_MS)
-    }
 
     /** Взвести надзор за прямой речью движка: `speak()` мог отчитаться успехом и
      *  потом промолчать — тогда `onDone` не придёт и чтение встанет.
@@ -1786,14 +1738,14 @@ class SpeechPlayer(context: Context) {
         val params = android.os.Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, vol)
         }
-        var r = runCatching { t.speak(text, TextToSpeech.QUEUE_ADD, params, id.toString()) }
+        var r = runCatching { t.speak(Roles.stripped(text), TextToSpeech.QUEUE_ADD, params, id.toString()) }
             .getOrDefault(TextToSpeech.ERROR)
         if (r != TextToSpeech.SUCCESS && role == Pending.Role.REPLY) {
             // Второй движок отказался — фразу читает основной, порядок не рвём.
             val main = tts ?: return false
             Diag.log(appContext, "tts", "движок реплик отказался говорить — читаю фразу основным голосом")
             pending[id] = Pending(Pending.Kind.DIRECT, text, null, role = Pending.Role.MAIN)
-            r = runCatching { main.speak(text, TextToSpeech.QUEUE_ADD, null, id.toString()) }
+            r = runCatching { main.speak(Roles.stripped(text), TextToSpeech.QUEUE_ADD, null, id.toString()) }
                 .getOrDefault(TextToSpeech.ERROR)
         }
         if (r != TextToSpeech.SUCCESS) {
@@ -1976,20 +1928,47 @@ class SpeechPlayer(context: Context) {
         // Не поднялся (или отказал) — читает основной: чтение не ждёт. Исключение
         // (27.09.2026): движок ЕЩЁ ПОДНИМАЕТСЯ — тогда не отдаём реплику чужому
         // голосу, а ждём его и повторяем заказ (см. [waitForReply]).
-        val wantReply = replyOn && !replyBroken && Roles.looksReplica(text)
-        if (wantReply && waitForReply(text)) return
+        // 29.09.2026: движок реплик отказал — пробуем поднять его заново, но не
+        // таймером, а по делу: встретилась очередная реплика, значит он снова нужен.
+        // И только если репликам вообще нужен СВОЙ экземпляр (движки разные).
+        val ownInstance = replyNeedsOwnInstance()
+        if (replyOn && ownInstance && replyBroken && Roles.looksReplica(text)) {
+            maybeReviveReplyEngine()
+        }
+        val looksLikeReply = replyOn && Roles.looksReplica(text)
+        val wantReply = looksLikeReply && (!ownInstance || !replyBroken)
+        if (wantReply && ownInstance && waitForReply(text)) return
         // Пока ждали, движок мог отказать (не поднялся за отведённый срок) —
         // тогда фразу читает основной голос и второй экземпляр не поднимаем.
-        val replyRole = wantReply && !replyBroken
+        val replyRole = wantReply && (!ownInstance || !replyBroken)
         forgetReplyWait()
-        val t = (if (replyRole) replyInstance() else null) ?: tts ?: return
-        val role = if (replyRole && t === replyTts) Pending.Role.REPLY else Pending.Role.MAIN
-        if (role == Pending.Role.REPLY) applyReplyParams(t)
+        // 29.09.2026: если реплики выбраны в ТОМ ЖЕ движке, что книга, — второго
+        // экземпляра не заводим вовсе. Два экземпляра одного движка (так было и у
+        // Сержа: книга и реплики в MultiTTS, отличаются только голоса) — известное
+        // слабое место: движок теряет заявки, и роли пропадают. Ставим голос реплик
+        // на основном экземпляре и СРАЗУ возвращаем книжный: движок запоминает
+        // голос в момент заказа фразы, поэтому книжные фразы от этого не страдают
+        // (см. [borrowMainForReply]).
+        val sameEngine = replyRole && !ownInstance
+        val t = (if (replyRole && ownInstance) replyInstance() else null) ?: tts ?: return
+        val role = if (replyRole && (sameEngine || t === replyTts)) {
+            Pending.Role.REPLY
+        } else {
+            Pending.Role.MAIN
+        }
+        val borrowed = role == Pending.Role.REPLY && sameEngine
+        if (role == Pending.Role.REPLY) {
+            if (borrowed) borrowMainForReply(t) else applyReplyParams(t)
+        }
         val file = File(synthDir, "s_${reqSeq}.wav")
         val id = reqSeq++
         // Скорость запоминаем ту, которой файл заказан: у реплик она своя, и
         // сверять её надо со своей, иначе заготовки пересобирались бы по кругу.
         val rate = rateFor(role)
+        // Тон запоминаем по имени файла: движок пишет файл уже с этой высотой
+        // голоса, и по этому числу плеер доводит тон, если ползунок сдвинули
+        // (см. [exoSyncSpeed]).
+        rememberFilePitch(file.name, pitchFor(role))
         pending[id] = Pending(Pending.Kind.FILE, text, file, rate, role)
         if (role == Pending.Role.REPLY) {
             replyPhrases++
@@ -2000,8 +1979,12 @@ class SpeechPlayer(context: Context) {
         }
         armSynthWatch(text)
         val r = runCatching {
-            t.synthesizeToFile(text, null, file, id.toString())
+            t.synthesizeToFile(Roles.stripped(text), null, file, id.toString())
         }.getOrDefault(TextToSpeech.ERROR)
+        // Голос реплик мы брали у основного экземпляра в долг — возвращаем сразу:
+        // движок уже запомнил его для этой фразы, а следующая книжная должна
+        // звучать книжным голосом.
+        if (borrowed) restoreMainParams(t)
         if (r != TextToSpeech.SUCCESS) {
             pending.remove(id)?.let { it.file?.delete() }
             if (role == Pending.Role.REPLY) {
@@ -2064,6 +2047,12 @@ class SpeechPlayer(context: Context) {
                 // поводы пометить его медленным незачем (см. [slowHits]).
                 slowHits = 0
                 netFileFails = 0 // файлы приходят — прямой режим не нужен
+                voiceSwitched = false // движок отозвался после смены голоса
+                // Движок реплик отозвался — прошлые промахи больше не считаем
+                // (29.09.2026: иначе редкие промахи складывались бы в отказ от ролей).
+                if (p.role == Pending.Role.REPLY) {
+                    replyMisses = 0
+                }
                 rescueText = null // файл пришёл — спасать фразу больше не нужно
                 rescueTries = 0
                 // msg4416: движок иногда отдаёт файл из одного заголовка (44 байта,
@@ -2097,7 +2086,15 @@ class SpeechPlayer(context: Context) {
                     // Скорость сменили, пока фраза синтезировалась: файл сделан
                     // прежним темпом. Не играем его — заказываем заново текущим
                     // (задержка тут только у той фразы, что была в работе).
-                    awaitingPlayText = null
+                    //
+                    // 29.09.2026 (журнал 19:03, «была остановка, я крутил
+                    // скорость»): здесь СНИМАЛИ awaitingPlayText — и это оказалось
+                    // страшнее задержки. Пока ползунок едет, [dropStaleRate] чистит
+                    // список заявок, и следующие доспевшие файлы перестают узнаваться:
+                    // «осиротевший синтез» молча удалялся, играть было нечего, и
+                    // чтение замолкало НАВСЕГДА (в журнале после 19:03:54 нет ни
+                    // «играю фразу», ни «фраза доиграла», хотя файлы приходили).
+                    // Фразу оставляем жданной: тогда переспрос доедет до [playFile].
                     prefetchInFlight.remove(p.text)
                     f.delete()
                     Diag.log(
@@ -2114,12 +2111,15 @@ class SpeechPlayer(context: Context) {
                     // Упреждающий синтез завершился, пока его ещё не просили.
                     // msg4077: засечка в лог — без неё по логу не видно, доспела
                     // заготовка или синтез молча повис.
-                    if (readyQueue.size >= prefetchDepth) {
+                    if (readyQueue.size >= prefetchDepth + maxInFlight) {
                         // Очередь переполнена (прыжок назад или смена позиции) —
-                        // лишнее не копим.
+                        // лишнее не копим. Запас на [maxInFlight] нужен с 30.09.2026:
+                        // фраза, заказанная позже ещё не готовой, теперь ЖДЁТ в
+                        // очереди своей очереди (см. [exoTopUp]), и жёсткий предел
+                        // выбрасывал бы нужные файлы.
                         f.delete()
                     } else {
-                        readyQueue.addLast(Prepared(p.text, f, p.rate, p.role))
+                        addReadyInOrder(Prepared(p.text, f, p.rate, p.role, req = id))
                         Diag.log(
                             appContext, "sound",
                             "заготовка готова: ${f.name} (${f.length()} байт), в очереди ${readyQueue.size}/$prefetchDepth"
@@ -2129,14 +2129,28 @@ class SpeechPlayer(context: Context) {
                         // Кроме упреждающей подготовки ([prewarm]): там нужна
                         // ровно одна фраза — та, с которой начнётся чтение.
                         if (prewarmOnly) prewarmOnly = false else requestPrefetch()
-                        // msg4598: прицепляем её встык, если звук уже идёт. Без
-                        // этого стык бесшовным становился бы только у тех фраз,
-                        // чья следующая была готова к моменту старта.
-                        media?.let { m -> chainNext(m, playGen) }
+                        // msg4598: сразу отдаём её в список плеера, если звук уже
+                        // идёт. Без этого стык бесшовным становился бы только у
+                        // тех фраз, чья следующая была готова к моменту старта.
+                        exoTopUp()
                     }
                 } else {
                     // Осиротевший синтез (устаревшая заготовка) — просто удаляем.
-                    f.delete()
+                    //
+                    // 29.09.2026 (журнал 19:03): но если при этом НИЧЕГО не звучит, а
+                    // файл сделан на нынешней скорости — играем его. Иначе получается
+                    // вечная тишина: заявку сняла чистка на смене скорости, файл
+                    // пришёл и молча удалился, а новых заявок никто не делает.
+                    // Лучше сыграть фразу не по чину, чем замолчать насовсем.
+                    if (!soundPlaying() && p.rate == rateFor(p.role)) {
+                        Diag.log(
+                            appContext, "sound",
+                            "файл пришёл без заявки (${f.name}), звука нет — играю его"
+                        )
+                        playFile(f, p.rate)
+                    } else {
+                        f.delete()
+                    }
                 }
             }
         }
@@ -2198,7 +2212,7 @@ class SpeechPlayer(context: Context) {
         Diag.log(appContext, "tts", "страховка: движок говорит напрямую (media-кнопки на это время не наши)")
         val id = reqSeq++
         pending[id] = Pending(Pending.Kind.DIRECT, text, null)
-        val r = runCatching { t.speak(text, TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
+        val r = runCatching { t.speak(Roles.stripped(text), TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
             .getOrDefault(TextToSpeech.ERROR)
         if (r != TextToSpeech.SUCCESS) {
             pending.remove(id)
@@ -2260,7 +2274,7 @@ class SpeechPlayer(context: Context) {
         flushDirectQueue("спасаю фразу заново")
         val id = reqSeq++
         pending[id] = Pending(Pending.Kind.DIRECT, text, null)
-        val r = runCatching { t.speak(text, TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
+        val r = runCatching { t.speak(Roles.stripped(text), TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
             .getOrDefault(TextToSpeech.ERROR)
         if (r != TextToSpeech.SUCCESS) {
             pending.remove(id)
@@ -2564,264 +2578,392 @@ class SpeechPlayer(context: Context) {
      *  скриптом и глазами). */
     private fun fmtDb(v: Double): String = String.format(java.util.Locale.US, "%.1f", v)
 
+    // ---------------- Файлы играет ExoPlayer ----------------
+
+    /** Играет ли сейчас наш звук — по состоянию ExoPlayer. Все сторожа
+     *  спрашивают здесь. */
+    private fun soundPlaying(): Boolean = exoFilePlayingSafe()
+
+    // Сторож замершей позиции: пока позиция НИ РАЗУ не росла — не судим (на
+    // части прошивок currentPosition всегда ноль, и мы бы рвали фразы на ровном
+    // месте); увидели рост, а потом позиция встала на три проверки подряд —
+    // фразу считаем потерянной и говорим её напрямую движком, иначе чтение
+    // замолчит навсегда.
+    private var exoPosToken = 0
+    private var exoPosLast = -1L
+    private var exoPosSawProgress = false
+    private var exoPosStuckHits = 0
+    private val exoPosCheck = object : Runnable {
+        override fun run() {
+            if (!exoFilePlayingSafe()) return
+            val pos = runCatching { filePlayer.positionMs }.getOrDefault(-1L)
+            if (pos > exoPosLast) {
+                exoPosSawProgress = true
+                exoPosStuckHits = 0
+            } else if (exoPosSawProgress) {
+                if (++exoPosStuckHits >= EXO_POS_STUCK_HITS) {
+                    exoPosStuckHits = 0
+                    Diag.log(
+                        appContext, "sound",
+                        "exo: позиция стоит ${EXO_POS_STUCK_HITS * EXO_POS_STEP_MS / 1000} с — " +
+                            "фраза потерялась, говорю напрямую",
+                    )
+                    fallbackDirect(currentText)
+                    return
+                }
+            }
+            exoPosLast = pos
+            main.postDelayed(this, EXO_POS_STEP_MS)
+        }
+    }
+
+    /** Взвести сторож позиции заново — на каждой новой фразе: у неё своя позиция. */
+    private fun armExoPositionWatch() {
+        val token = ++exoPosToken
+        exoPosLast = -1L
+        exoPosSawProgress = false
+        exoPosStuckHits = 0
+        main.removeCallbacks(exoPosCheck)
+        main.postDelayed(exoPosCheck, EXO_POS_STEP_MS)
+        // Токен нужен только чтобы старый экземпляр проверки не ожил после
+        // остановки: releaseMedia его увеличивает.
+        if (token < 0) exoPosToken = 0
+    }
+
+    /** Снять сторож позиции (звук погашен или пошёл напрямую). */
+    private fun dropExoPositionWatch() {
+        exoPosToken++
+        exoPosStuckHits = 0
+        exoPosSawProgress = false
+        exoPosLast = -1L
+        main.removeCallbacks(exoPosCheck)
+    }
+
+    /** Начать играть фразу новым плеером. [positionMs] — продолжение паузы с
+     *  середины файла: у ExoPlayer позиция точная, переигрывать начало не нужно. */
+    private fun exoPlay(text: String, f: File, rate: Float, positionMs: Long = 0L) {
+        // 29.09.2026 (потеря текста в 187): если звук УЖЕ идёт, список не
+        // перезапускаем — фразу ДОПИСЫВАЕМ за звучащей. Перезапуск выбрасывал всё,
+        // что стояло впереди, и плеер прыгал через несколько фраз.
+        if (positionMs == 0L && exoFilePlayingSafe() && playingText != null && exoPending.isNotEmpty()) {
+            exoAppend(text, f, rate)
+            return
+        }
+        playingText = text
+        playingFile = f
+        playingRate = rate
+        exoAhead = 0
+        exoPending.clear()
+        exoPending.addLast(Prepared(text, f, rate, roleOfFile(f)))
+        filePlayer.setListener(exoListener)
+        exoSyncSpeed(exoPending.last())
+        filePlayer.setVolume(volumeFor(f))
+        filePlayer.play(
+            listOf(FilePlayback.Item(id = ++exoSeq, text = text, file = f)),
+            startIndex = 0,
+            startPositionMs = positionMs,
+        )
+        armExoStartWatch(text)
+        exoTopUp()
+    }
+
+    /** Фраза от читалки в новом пути. Правила: звучит сейчас — не трогаем; уже
+     *  стоит впереди в списке — ждём её (список НЕ перезапускаем, иначе гибнет всё,
+     *  что впереди, — это и была потеря текста в 187); в списке нет — выбрасываем
+     *  хвост и дописываем эту фразу за звучащей. */
+    private fun speakExo(text: String) {
+        // 29.09.2026: слушателя ставим ЗДЕСЬ, при каждом обращении чтения. В 190
+        // его ставили только в exoPlay (когда список начинается заново), а если
+        // фраза уже лежала в списке (подготовили заранее) — плеер пускали без
+        // слушателя, и «фраза доиграла» до чтения не доходила: чтение вставало.
+        filePlayer.setListener(exoListener)
+        // 1) эта фраза звучит прямо сейчас
+        if (playingText == text && exoFilePlayingSafe()) {
+            Diag.log(appContext, "sound", "exo: эта фраза уже звучит — очередь не трогаю")
+            requestPrefetch()
+            exoTopUp()
+            return
+        }
+        // 2) она уже впереди в списке плеера — просто ждём
+        if (exoPending.any { it.text == text }) {
+            Diag.log(appContext, "sound", "exo: фраза уже впереди в списке — жду её")
+            // 29.09.2026: после паузы или после подготовки первой фразы плеер
+            // стоит молча — «продолжить» должно его просто пустить (жалоба Сержа:
+            // «ставлю на паузу, нажимаю воспроизвести, а он молчит»).
+            if (!exoFilePlayingSafe()) {
+                runCatching { filePlayer.resume() }
+                Diag.log(appContext, "sound", "exo: пускаю список (был на паузе)")
+            }
+            requestPrefetch()
+            exoTopUp()
+            return
+        }
+        // 3) её в списке нет: хвост вон (звучащую не трогаем), эту — за звучащей
+        exoDropTail()
+        // 3а) пауза сохранила звук ровно этой фразы — продолжаем с того места
+        takeKeptPhrase(text)?.let { kept ->
+            exoPlay(kept.text, kept.file, kept.rate, keptPositionMs)
+            return
+        }
+        // 3б) фраза в очереди, но не первая: всё перед ней чтение уже прошло
+        // (прыжок вперёд) — выбрасываем и играем её. Без этого мы бы заказали её
+        // заново и услышали в другой раз (30.09.2026).
+        val deeper = readyQueue.indexOfFirst { it.text == text && it.rate == rateFor(it.role) }
+        if (deeper > 0) {
+            repeat(deeper) { runCatching { readyQueue.removeFirst().file.delete() } }
+        }
+        val head = readyQueue.firstOrNull()
+        if (head != null && head.text == text && head.rate == rateFor(head.role)) {
+            readyQueue.removeFirst()
+            awaitingPlayText = null
+            exoPlay(text, head.file, head.rate)
+            requestPrefetch()
+            return
+        }
+        if (prefetchInFlight.contains(text)) {
+            // Заявка уже в пути: ждём её, файл придёт в synthFinished.
+            awaitingPlayText = text
+            return
+        }
+        awaitingPlayText = text
+        synthToFile(text)
+    }
+
+    /** Дописать одну фразу в конец списка плеера (с записью в зеркало). */
+    private fun exoAppend(text: String, f: File, rate: Float) {
+        // 29.09.2026, жалоба Сержа «одна фраза прочиталась три раза» (журнал
+        // 17:40:57): на старте чтения читалка успевала ответить на заказ дважды
+        // по-разному — сначала одной фразой, потом другой, — сверка конвейера
+        // выбрасывала хвост и заказывала заново, а копии УЖЕ дописанных в плеер
+        // фраз оставались в списке и звучали подряд. Сверку это не лечит (её
+        // причину убрали отдельно), но услышать одну фразу дважды мы не должны
+        // ни при каком раскладе: ту же фразу второй раз в список не берём.
+        val same = exoPending.firstOrNull { it.text == text }
+        if (same != null && same.rate == rate) {
+            runCatching { f.delete() }
+            Diag.log(appContext, "sound", "exo: такая фраза уже есть в списке — лишнюю не беру (${f.name})")
+            return
+        }
+        if (same != null) {
+            // Та же фраза, но сделанная на прежней скорости (или прежним голосом):
+            // она устарела — выбрасываем хвост списка и берём свежую.
+            Diag.log(
+                appContext, "sound",
+                "exo: фраза в списке сделана на скорости ${same.rate}, а нужна $rate — беру свежую"
+            )
+            exoDropTail()
+        }
+        if (text == playingText) {
+            runCatching { f.delete() }
+            Diag.log(appContext, "sound", "exo: эта фраза уже звучит — лишнюю не беру (${f.name})")
+            return
+        }
+        exoPending.addLast(Prepared(text, f, rate, roleOfFile(f)))
+        filePlayer.append(listOf(FilePlayback.Item(id = ++exoSeq, text = text, file = f)))
+        Diag.log(appContext, "sound", "exo: дописал фразу (${f.name}), впереди ${exoPending.size - 1}")
+    }
+
+    /** Файл [p] уже сделан движком на скорости [Prepared.rate] — плееру задаём
+     *  только отношение «нужная скорость / темп файла». Обычно это ровно 1.0:
+     *  файл свежий. Не 1.0 бывает, когда ползунок двинули на ходу (тогда звучащий
+     *  файл дотягивается до нового темпа) или
+     *  когда в списке лежит заготовка прежней скорости. */
+    private fun exoSyncSpeed(p: Prepared) {
+        val fileRate = if (p.rate > 0f) p.rate else 1f
+        exoPlayingRate = fileRate
+        val want = rateFor(p.role)
+        val ratio = (want / fileRate).coerceIn(0.25f, 4f)
+        runCatching { filePlayer.setSpeed(ratio) }
+        // Тон доводим так же, как темп: файл записан движком на [pitchFor] своего
+        // времени, а звучать должен на нынешнем ползунке (29.09.2026).
+        val madeAt = filePitchOf(p.file)
+        exoPlayingPitch = if (madeAt > 0f) madeAt else 1f
+        val pitchRatio = (pitchFor(p.role) / exoPlayingPitch).coerceIn(0.25f, 4f)
+        runCatching { filePlayer.setPitch(pitchRatio) }
+    }
+
+    /** Выбросить из списка всё, что ещё не звучало (звучащую фразу не трогаем) —
+     *  так уходят неверные заготовки, не обрывая речь. */
+    private fun exoDropTail() {
+        if (exoPending.size <= 1) return
+        val keep = exoPending.first()
+        while (exoPending.size > 1) {
+            val dropped = exoPending.removeLast()
+            runCatching { dropped.file.delete() }
+        }
+        exoAhead = 0
+        runCatching { filePlayer.dropAhead(0) }
+        Diag.log(appContext, "sound", "exo: хвост выброшен, оставил «${keep.file.name}»")
+    }
+
+    /** Дописать в список заготовки из [readyQueue] — это замена прицепке встык:
+     *  у ExoPlayer очередь настоящая, и впереди может стоять сколько угодно фраз. */
+    private fun exoTopUp() {
+        var appended = 0
+        // 30.09.2026, жалоба Сержа «были похожие фразы, и одна прочиталась дважды»
+        // (журнал 15:17:02): книгу читает один движок, реплики — второй, и заявки
+        // они выполняют с разной скоростью. Фразы уходили в плеер в порядке
+        // ГОТОВНОСТИ: соседние «такая ты сладкая!» (книга, готова быстро) и
+        // «- Я бы тебя съел...» (реплика, готовилась дольше) вставали в списке
+        // наоборот, и слушатель слышал их переставленными. Хуже: пауза сохраняла
+        // звучащую (реплика), а чтение уже стояло на следующей фразе — после
+        // «продолжить» та же фраза звучала ВТОРОЙ раз.
+        // Теперь фразу, заказанную позже той, что ещё в работе, держим в очереди:
+        // порядок заказа = порядок звучания (см. [Prepared.req]).
+        val earliest = earliestInFlight()
+        // Одна фраза звучит, [prefetchDepth] - 1 держим впереди — считаем по
+        // зеркалу: очередь заготовок к этому моменту уже опустела, фразы ушли в плеер.
+        while (exoPending.size - 1 < prefetchDepth - 1 && readyQueue.isNotEmpty()) {
+            val head = readyQueue.first()
+            if (earliest != null && head.req != 0L && head.req > earliest) {
+                if (heldForOrderLogged != head.req) {
+                    heldForOrderLogged = head.req
+                    Diag.log(
+                        appContext, "sound",
+                        "exo: держу фразу (${head.file.name}) «${FilePlayback.brief(head.text)}» — " +
+                            "раньше неё заказана другая, жду её"
+                    )
+                }
+                break
+            }
+            readyQueue.removeFirst()
+            exoAppend(head.text, head.file, head.rate)
+            appended++
+        }
+        if (appended > 0) {
+            Diag.log(appContext, "sound", "exo: дописал заготовок $appended (впереди ${exoPending.size - 1})")
+        }
+    }
+
+    /** Положить готовую фразу в очередь НА СВОЁ место — по номеру заявки.
+     *
+     *  30.09.2026, журнал 215 (15:30:18-15:30:25): простого «держу фразу» оказалось
+     *  мало. Книжную фразу (s_5, предл. 1175) движок отдал раньше, чем реплику
+     *  (s_4, предл. 1174), её придержали — а когда реплика доспела, она встала в
+     *  КОНЕЦ очереди, то есть ПОСЛЕ придержанной. На слух вышло: сначала «Мы сейчас
+     *  ме-е-едленно…» (1175), потом «- Нет.» (1174), а затем чтение, дойдя до 1175,
+     *  заказало эту фразу заново и она прозвучала ВТОРОЙ раз (s_9). Порядок в
+     *  очереди теперь держится по номеру заявки, а не по времени готовности. */
+    private fun addReadyInOrder(p: Prepared) {
+        if (p.req == 0L) {
+            readyQueue.addLast(p)
+            return
+        }
+        val at = readyQueue.indexOfFirst { it.req != 0L && it.req > p.req }
+        if (at < 0) readyQueue.addLast(p) else readyQueue.add(at, p)
+    }
+
+    /** О какой фразе уже сказали «держу» — чтобы не повторять строку в журнале. */
+    private var heldForOrderLogged = 0L
+
+    /** Самая ранняя заявка, которая ещё в работе (файл не пришёл). Если такой
+     *  нет — отдавать плееру можно всё. */
+    private fun earliestInFlight(): Long? =
+        pending.entries.filter { it.value.kind == Pending.Kind.FILE }.minOfOrNull { it.key }
+
+    /** Сторож «звук не начался»: молчание лечим прямой речью. */
+    private fun armExoStartWatch(text: String) {
+        val token = ++exoStartToken
+        main.postDelayed({
+            if (token != exoStartToken) return@postDelayed
+            if (!exoFilePlayingSafe()) {
+                Diag.log(appContext, "sound", "exo: звук не начался — говорю фразу напрямую")
+                fallbackDirect(text)
+            }
+        }, PLAY_STALL_MS)
+    }
+
+    private fun exoFilePlayingSafe(): Boolean = runCatching { filePlayer.isPlaying }.getOrDefault(false)
+
+    /** Что сообщает плеер: «фраза доиграла» двигает чтение, ошибка уходит в
+     *  прямую речь. */
+    private val exoListener = object : FilePlayback.Listener {
+        override fun onPhraseStart(index: Int, item: FilePlayback.Item) {
+            exoStartToken++ // звук пошёл — сторож старта больше не нужен
+            playingText = item.text
+            playingFile = item.file
+            // Громкость у реплик своя: файл мог прийти от второго движка.
+            filePlayer.setVolume(volumeFor(item.file))
+            // Темп у каждой фразы свой: файл сделан на [Prepared.rate], а звучать
+            // должен на нынешней скорости ползунка (см. [exoSyncSpeed]). Заодно
+            // запоминаем темп САМОГО ФАЙЛА: пауза по нему проверяет, годится ли
+            // сохранённый звук для продолжения (см. [pauseKeepingPhrase]).
+            //
+            // 29.09.2026 (журнал 21:49, жалоба Сержа «фраза повторилась»): раньше
+            // playingRate выставлялся только в [exoPlay], то есть у фраз, которыми
+            // список НАЧИНАЛИ. Фразы, доигранные из очереди, оставляли чужой темп —
+            // и пауза, сравнив его с нужным, решала, что сохранённый звук «прежней
+            // скорости», выбрасывала файл. Продолжение синтезировалось заново и
+            // звучало С НАЧАЛА: на слух это тот самый повтор.
+            exoPending.firstOrNull { it.file.name == item.file.name }?.let { p ->
+                playingRate = p.rate
+                exoSyncSpeed(p)
+            }
+            // Фраза новая — позиция у неё своя: сторож взводим заново.
+            armExoPositionWatch()
+        }
+
+        override fun onPhraseEnd(index: Int, item: FilePlayback.Item) {
+            if (exoAhead > 0) exoAhead--
+            // Фраза ушла из зеркала: она больше не «впереди».
+            if (exoPending.isNotEmpty() && exoPending.first().text == item.text) exoPending.removeFirst()
+            dropExoPositionWatch() // фраза кончилась — сторожить её позицию больше нечего
+            Diag.log(
+                appContext, "sound",
+                "фраза доиграла: ${item.file.name} «${FilePlayback.brief(item.text)}»",
+            )
+            runCatching { item.file.delete() }
+            playingText = null
+            playingFile = null
+            rescueText = null
+            rescueTries = 0
+            retriesInRow = 0
+            // Порядок как в прежнем пути: сперва наполняем очередь, потом двигаем
+            // чтение — иначе оно попросит фразу, которой ещё нет.
+            requestPrefetch()
+            exoTopUp()
+            onDone?.invoke()
+        }
+
+        override fun onAllEnded() {
+            Diag.log(appContext, "sound", "exo: список кончился — жду следующую фразу")
+            // 29.09.2026: подстраховка от вечного молчания. Если «фраза доиграла»
+            // по списку не пришла (в 190 так и вышло — слушателя забыли поставить),
+            // здесь сами считаем фразу законченной: двигаем чтение и заказываем
+            // заготовки. Молчание навсегда недопустимо.
+            if (playingText != null) {
+                Diag.log(appContext, "sound", "exo: конца фразы не дождались — двигаю чтение сам")
+                playingText = null
+                playingFile = null
+                exoPending.clear()
+                exoAhead = 0
+                requestPrefetch()
+                exoTopUp()
+                onDone?.invoke()
+            }
+        }
+
+        override fun onError(item: FilePlayback.Item?, message: String) {
+            item?.file?.delete()
+            Diag.log(appContext, "sound", "exo: своё не заиграло ($message) — говорю напрямую")
+            fallbackDirect(item?.text ?: currentText)
+        }
+    }
+
     /** Сыграть готовый файл. [rate] — скорость, которой он сделан: её храним
      *  вместе с играющим файлом, чтобы пауза не выдала прежний темп за текущий
      *  (см. [pauseKeepingPhrase]). */
     private fun playFile(f: File, rate: Float = speed) {
-        val gen = ++playGen
-        val text = currentText
-        val mp = MediaPlayer()
-        try {
-            mp.setAudioAttributes(audioAttrs)
-            mp.setAudioSessionId(audioSessionId)
-            mp.setDataSource(f.absolutePath)
-            mp.setOnPreparedListener {
-                playWatchToken++ // файл готов — сторож подготовки больше не нужен
-                if (gen != playGen || media !== null) {
-                    // Успели остановить, пока файл готовился, — не играем.
-                    runCatching { it.release() }
-                    f.delete()
-                    return@setOnPreparedListener
-                }
-                media = it
-                playingText = text
-                playingFile = f
-                playingRate = rate
-                val vol = volumeFor(f)
-                it.setVolume(vol, vol)
-                it.start()
-                // 29.09.2026: пауза с продолжением и прицепка встык поднимают
-                // плеер заново — темп, выбранный человеком на ходу, возвращаем
-                // (см. [retunePlaying]). Для свежего файла это пустая работа:
-                // его скорость и есть текущая.
-                retunePlaying(
-                    if (roleOfFile(f) == Pending.Role.REPLY) replySpeed else speed,
-                    rate,
-                )
-                retriesInRow = 0 // звук пошёл — движок и плеер живы
-                Diag.log(appContext, "sound", "играю свой звук: ${f.name} (${f.length()} байт)")
-                // 23.09.2026: взяли звук под надзор — «играю» или «позиция стоит».
-                // С этого момента видно то, чего не видит движок: файл отдан, а
-                // звука нет (в т.ч. когда файл доиграл, а onCompletion потерялся —
-                // раньше это было молчание навсегда).
-                armPositionWatch(it, f, gen)
-                // msg4598: следующую заготовку прицепляем СРАЗУ, до requestPrefetch —
-                // она уходит из очереди и обязана считаться занятой в её глубине.
-                chainNext(it, gen)
-                // Предложение начало звучать — готовим следующее заранее.
-                requestPrefetch()
-            }
-            mp.setOnCompletionListener { onPhraseCompleted(it, f, gen) }
-            mp.setOnErrorListener { p, what, extra ->
-                playWatchToken++
-                runCatching { p.release() }
-                if (media === p) {
-                    media = null
-                    playingText = null
-                    playingFile = null
-                }
-                f.delete()
-                if (gen != playGen) return@setOnErrorListener true
-                dropChain() // прицепленная фраза относится к упавшему плееру — её отпускаем
-                Diag.log(appContext, "sound", "свой звук не заиграл (what=$what extra=$extra) — говорю напрямую")
-                fallbackDirect(text)
-                true
-            }
-            // msg4077: засечка «файл отдан плееру» — по логу видно, где встало:
-            // синтез не доспел или плеер не подготовил файл.
-            Diag.log(appContext, "sound", "готовлю свой звук: ${f.name} (${f.length()} байт)")
-            armPlayWatch(text)
-            mp.prepareAsync()
-        } catch (e: Exception) {
-            playWatchToken++
-            runCatching { mp.release() }
-            f.delete()
-            if (gen == playGen) {
-                Diag.log(appContext, "sound", "исключение при старте своего звука: ${e.message}")
-                fallbackDirect(text)
-            }
-        }
-    }
-
-    /** Фраза доиграла — конец звука или переход встык (msg4598).
-     *
-     *  Обычный путь: отпускаем плеер, удаляем файл и говорим движку «дальше»
-     *  ([onDone] у него отложен). Если к плееру была прицеплена следующая
-     *  заготовка, платформа уже начала её сама — тогда эстафета передаётся без
-     *  нашей задержки: текущим становится прицепленный плеер, а движку мы
-     *  сообщаем о сдвиге на фразу так же, как в обычном пути. */
-    private fun onPhraseCompleted(mp: MediaPlayer, f: File, gen: Long) {
-        // Фразу могли уже закрыть надзором за позицией, а платформенный
-        // onCompletion способен прийти вдогонку. Второй проход по той же фразе
-        // дёрнул бы onDone ещё раз, и чтение перескочило бы предложение —
-        // поэтому каждый плеер закрываем ровно один раз (плеер живёт одну фразу).
-        if (mp === completedPlayer) return
-        completedPlayer = mp
-        // msg4402 (диагностика пауз): конец фразы. Разница отметок «фраза
-        // доиграла» → следующее «играю свой звук» — это и есть пауза между
-        // предложениями; по ней видно, помогла ли обрезка. В режиме встык вместо
-        // «играю свой звук» идёт «встык сработал» — звук не перезапускался.
-        Diag.log(appContext, "sound", "фраза доиграла: ${f.name}")
-        val next = chainedPlayer
-        if (gapless && next != null && media === mp && gen == playGen) {
-            val nextText = chainedText
-            val nextFile = chainedFile
-            val nextRate = chainedRate
-            chainedPlayer = null
-            chainedText = null
-            chainedFile = null
-            runCatching { mp.release() }
-            f.delete()
-            media = next
-            playingText = nextText
-            playingFile = nextFile
-            playingRate = nextRate
-            playWatchToken++ // сторож надзора за «подготовкой» к этому звуку не относится
-            Diag.log(appContext, "sound", "встык сработал: ${nextFile?.name ?: "?"}")
-            // Играющим стал прицепленный плеер — надзор за позицией переезжает
-            // на него: старый уже отпущен, и следить за ним нечего.
-            armPositionWatch(next, nextFile, gen)
-            // Движок сдвинется на эту же фразу (onDone отложен в главный поток):
-            // его speak() узнает текст по метке и не станет играть его заново.
-            gaplessHopText = nextText
-            onDone?.invoke()
-            // Тянем следующую заготовку в цепочку, пока звучит эта. requestPrefetch
-            // здесь не зовём: движок ещё не сдвинул позицию, и он ответил бы про
-            // фразу, которая уже звучит, — заготовку попросит его же speak().
-            chainNext(next, gen)
-            return
-        }
-        runCatching { mp.release() }
-        if (media === mp) {
-            media = null
-            playingText = null
-            playingFile = null
-        }
-        f.delete()
-        onDone?.invoke()
-    }
-
-    /** Прицепить следующую готовую заготовку к играющему плееру (msg4598).
-     *
-     *  Платформа начинает прицепленный файл сама в момент окончания текущего —
-     *  тем же аудиотрактом, без нашей задержки на запуск. Берём только голову
-     *  очереди: заготовки лежат в том порядке, в каком прозвучат. */
-    private fun chainNext(cur: MediaPlayer, gen: Long) {
-        if (!gapless || chainedPlayer != null || chainInFlight) return
-        if (gen != playGen) return
-        val head = readyQueue.firstOrNull() ?: return
-        if (head.text == playingText) return
-        // 24.09.2026: заготовка прежней скорости в цепочку не годится — стык
-        // прозвучал бы старым темпом. Выбрасываем и заказываем следующую: на
-        // подходе эта фраза всё равно была бы собрана заново, но тогда стык
-        // откатился бы на перезапуск и это было бы слышно паузой.
-        if (head.rate != rateFor(head.role)) {
-            readyQueue.removeFirst()
-            head.file.delete()
-            Diag.log(appContext, "sound", "встык: заготовка прежней скорости — заказываю заново")
-            requestPrefetch()
-            return
-        }
-        // msg4643 (тестер: «пропускаются куски текста»): прицепляем заготовку
-        // только если читалка ПРЯМО СЕЙЧАС называет её следующей фразой.
-        // Тексты для очереди и для живого чтения считает один и тот же код, но
-        // если позиция успела уехать (или заготовка заказана на другой глубине),
-        // голова очереди оказывается НЕ следующей фразой: платформа заиграет
-        // чужой кусок, а движок на следующем шаге оборвёт его ради правильного —
-        // на слух это и есть пропуск. Не уверены — не прицепляем вовсе: обычный
-        // стык ничего не перебивает, он просто на 0,3 с длиннее.
-        // msg5596 (журнал Сергея): сразу после перехода встык читалка ещё не
-        // сдвинула позицию — её «следующая» (сдвиг 1) это ровно та фраза, что
-        // уже звучит в цепочке. Сверялись с ней и всегда отказывали: в журнале
-        // «встык пропущен» после КАЖДОГО перехода, а следующая фраза
-        // прицеплялась только позже, когда доспеет новая заготовка. На медленном
-        // движке (сетевые голоса Google) заготовка может не успеть — стык
-        // откатывается на перезапуск, и это слышно паузой. Узнали в ответе ту,
-        // что звучит, — спрашиваем следующую за ней.
-        var wanted = onNeedNext?.invoke(1)
-        if (wanted != null && wanted == playingText) wanted = onNeedNext?.invoke(2)
-        if (wanted == null || wanted != head.text) {
-            Diag.log(
-                appContext, "sound",
-                "встык пропущен: заготовка не от следующей фразы " +
-                    "(в очереди ${head.text.length} знаков, ждём ${wanted?.length ?: 0})"
-            )
-            return
-        }
-        val text = head.text
-        val file = head.file
-        // Заготовка уходит из очереди в цепочку сразу: и очередь, и счётчик
-        // глубины в requestPrefetch обязаны видеть её занятой.
-        readyQueue.removeFirst()
-        chainInFlight = true
-        val seq = ++chainSeq
-        val mp = MediaPlayer()
-        try {
-            mp.setAudioAttributes(audioAttrs)
-            mp.setAudioSessionId(audioSessionId)
-            mp.setDataSource(file.absolutePath)
-            mp.setOnPreparedListener { next ->
-                if (seq != chainSeq || gen != playGen || media !== cur) {
-                    // Прицепку отменили (остановка, смена фразы), пока файл готовился.
-                    chainInFlight = false
-                    runCatching { next.release() }
-                    file.delete()
-                    return@setOnPreparedListener
-                }
-                val ok = runCatching { cur.setNextMediaPlayer(next) }.isSuccess
-                if (!ok) {
-                    // Прошивка перехода не приняла — играем стык как раньше.
-                    chainInFlight = false
-                    runCatching { next.release() }
-                    file.delete()
-                    Diag.log(appContext, "sound", "встык не принят — стык как раньше: ${file.name}")
-                    return@setOnPreparedListener
-                }
-                chainInFlight = false
-                chainedPlayer = next
-                chainedText = text
-                chainedFile = file
-                chainedRate = head.rate
-                next.setVolume(volumeFor(file), volumeFor(file))
-                next.setOnCompletionListener { onPhraseCompleted(next, file, gen) }
-                Diag.log(appContext, "sound", "встык прицеплено: ${file.name} (${file.length()} байт)")
-            }
-            mp.setOnErrorListener { p, _, _ ->
-                chainInFlight = false
-                runCatching { p.release() }
-                file.delete()
-                Diag.log(appContext, "sound", "встык не подготовился: ${file.name}")
-                true
-            }
-            mp.prepareAsync()
-        } catch (e: Exception) {
-            chainInFlight = false
-            runCatching { mp.release() }
-            file.delete()
-            Diag.log(appContext, "sound", "встык не подготовился: ${e.message}")
-        }
-    }
-
-    /** Отпустить прицепленную заготовку, не играя её (остановка, ошибка плеера,
-     *  смена фразы). Файл удаляем: очередь заготовок наполнится сама. */
-    private fun dropChain() {
-        chainSeq++ // запоздавший ответ готовящейся прицепки больше не наш
-        chainInFlight = false
-        chainedPlayer?.let { runCatching { it.release() } }
-        chainedPlayer = null
-        chainedText = null
-        chainedFile?.delete()
-        chainedFile = null
-        chainedRate = 1f
+        val t = currentText ?: return
+        exoPlay(t, f, rate)
     }
 
     /** Выбросить всё, что заготовлено впрок (msg5604). Зовётся, когда на ходу
      *  сменили голос или движок: заготовки сделаны ПРЕЖНИМ голосом, и пока они
-     *  не отыграют (до трёх в очереди и одна прицепленная), новый голос не
-     *  слышен вовсе. Заодно снимаем метку «синтез идёт»: файл, который доспеет
-     *  после смены, уже осиротеет и будет удалён — он тоже прежним голосом.
-     *  Текущий звук не трогаем: его перечитает читалка ([ReaderEngine]
-     *  restartAfterSwitch). */
+     *  не отыграют (до трёх в очереди), новый голос не слышен вовсе. Заодно
+     *  снимаем метку «синтез идёт»: файл, который доспеет после смены, уже
+     *  осиротеет и будет удалён — он тоже прежним голосом. Текущий звук не
+     *  трогаем: его перечитает читалка ([ReaderEngine] restartAfterSwitch). */
     fun dropPrepared() {
         prefetchInFlight.clear()
         awaitingPlayText = null
@@ -2829,30 +2971,24 @@ class SpeechPlayer(context: Context) {
         // Голос сменился — сохранённый паузой звук сделан прежним.
         keptPhrase?.let { runCatching { it.file.delete() } }
         keptPhrase = null
-        // Метку перехода тоже снимаем: если смена голоса пришлась ровно на
-        // момент перехода встык, следующий speak() должен фразу СЫГРАТЬ (новым
-        // голосом), а не решить «она и так звучит».
-        gaplessHopText = null
         clearPrefetch()
-        dropChain()
+        // 29.09.2026 (журнал 18:04, «смена голоса на ходу»): в новом пути заготовки
+        // лежат в списке плеера, и без этой чистки после смены голоса продолжали
+        // звучать файлы ПРЕЖНЕГО голоса — Серж описал это как «переключаю, а он
+        // читает старым». Список чистим целиком, вместе со звучащей фразой: её
+        // чтение перечитает уже новым голосом ([restartAfterSwitch]).
+        exoClearAll()
     }
 
-    /** Снять прицепку, вернув заготовку в очередь (галочка встык снята на ходу,
-     *  msg4611). Файл ещё не звучал — он пригодится следующей фразе, поэтому
-     *  его не удаляем, а кладём обратно в голову очереди. */
-    private fun unhookChain() {
-        chainSeq++
-        chainInFlight = false
-        val p = chainedPlayer ?: return
-        val text = chainedText
-        val file = chainedFile
-        chainedPlayer = null
-        chainedText = null
-        chainedFile = null
-        runCatching { p.release() }
-        if (text != null && file != null && file.exists() && chainedRate == rateFor(roleOfFile(file)))
-            readyQueue.addFirst(Prepared(text, file, chainedRate, roleOfFile(file)))
-        else file?.delete()
+    /** Погасить список плеера целиком: ничего не остаётся ни звучать, ни ждать. */
+    private fun exoClearAll() {
+        exoPending.clear()
+        exoAhead = 0
+        playingText = null
+        playingFile = null
+        dropExoPositionWatch()
+        exoStartToken++
+        runCatching { filePlayer.stop() }
     }
 
     /** Чей голос сделал этот файл: репликовый или книжный. Файлы реплик мы и
@@ -2874,7 +3010,7 @@ class SpeechPlayer(context: Context) {
         }
         val id = reqSeq++
         pending[id] = Pending(Pending.Kind.DIRECT, text, null)
-        val r = runCatching { t.speak(text, TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
+        val r = runCatching { t.speak(Roles.stripped(text), TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
             .getOrDefault(TextToSpeech.ERROR)
         if (r != TextToSpeech.SUCCESS) {
             pending.remove(id)
@@ -2886,87 +3022,16 @@ class SpeechPlayer(context: Context) {
 
     /** Отменить текущее проигрывание. onDone НЕ вызывается. */
     private fun releaseMedia() {
-        playGen++
-        dropChain() // прицепленная фраза играет тем же трактом — её тоже отпускаем
-        // Надзор за позицией снимаем вместе со звуком: сторожить нечего, а его
-        // таймер иначе дождался бы чужого плеера.
-        dropPositionWatch()
         playingText = null
         playingFile = null
-        gaplessHopText = null
-        media?.let { m ->
-            runCatching { m.stop() }
-            runCatching { m.release() }
-        }
-        media = null
-    }
-
-    /** Где конвейер разошёлся с читалкой (msg4685, вариант B), или null, если
-     *  расхождений нет.
-     *
-     *  Читалка — единственный источник правды о том, какая фраза идёт следующей;
-     *  мы спрашиваем её тем же [onNeedNext], каким заказываем заготовки. Список
-     *  фраз ВПЕРЕДИ — по порядку звучания: прицепленная встык, потом очередь.
-     *  Каждая обязана совпасть с ответом читалки на своём месте. Не совпала —
-     *  конвейер разъехался: заготовки заказаны «на фразу вперёд», а стык между
-     *  ними пустой. Так и выглядит журнал тестера (msg4635): прицеплена фраза 11,
-     *  а движок просит 10 — платформа играет чужой кусок, движок через 0,6 с
-     *  обрывает его ради правильного, на слух это пропуск текста.
-     *
-     *  Проверка консервативна: читалка ответила null (конец книги, движок гасят) —
-     *  сверять нечем, расхождения не объявляем. */
-    /** Сколько раз уже написали в журнал, чем именно разошёлся конвейер (26.09.2026).
-     *  По числам расхождение не разобрать: нужно видеть тексты. */
-    private var misalignLogged = 0
-
-    private fun firstMisalignedAhead(): Int? {
-        val ask = onNeedNext ?: return null
-        // Прицепка готовится: её фраза уже ушла из очереди, а текста в полях
-        // ещё нет — список впереди стоящих был бы неполным, и сверка «нашла» бы
-        // расхождение там, где его нет. Пропускаем круг: следующая проверка
-        // (после прицепки или её отмены) снова увидит весь конвейер.
-        if (chainInFlight) return null
-        val chainedNow = chainedPlayer != null && chainedText != null
-        val ahead = ArrayList<String>(readyQueue.size + 1)
-        if (chainedNow) ahead.add(chainedText!!)
-        for (p in readyQueue) ahead.add(p.text)
-        // 29.09.2026: заявки, которые ещё в работе, тоже впереди — и тоже по
-        // порядку звучания (набор упорядоченный). Без них сверка видела бы дыру
-        // там, где её нет, и выбрасывала бы всю очередь на каждом круге.
-        ahead.addAll(prefetchInFlight)
-        for (i in ahead.indices) {
-            val word = ask(i + 1) ?: return null
-            if (word != ahead[i]) {
-                // 26.09.2026: в журнале Сержа это повторялось девяносто раз за
-                // минуту и каждый раз выбрасывало заготовку — то есть работало
-                // против бесшовного стыка. Чтобы понять причину, нужны тексты,
-                // а не только номер позиции.
-                if (misalignLogged < 8) {
-                    misalignLogged++
-                    Diag.log(
-                        appContext, "sound",
-                        "расхождение на позиции ${i + 1}: читалка ждёт «${word.take(40)}» " +
-                            "(${word.length} знаков), в очереди «${ahead[i].take(40)}» " +
-                            "(${ahead[i].length} знаков)"
-                    )
-                }
-                return i
-            }
-        }
-        return null
-    }
-
-    /** Выбросить из конвейера всё от позиции [from] и дальше: файлы удаляем,
-     *  очередь укорачиваем. Впереди стоящее и совпавшее с читалкой (до [from])
-     *  не трогаем — оно ещё пригодится. */
-    private fun dropAheadFrom(from: Int) {
-        val chainedNow = chainedPlayer != null && chainedText != null
-        if (chainedNow && from <= 0) dropChain()
-        val keep = if (chainedNow) (from - 1).coerceAtLeast(0) else from.coerceAtLeast(0)
-        while (readyQueue.size > keep) {
-            val p = readyQueue.removeLast()
-            runCatching { p.file.delete() }
-        }
+        // У ExoPlayer отпускаем его список целиком.
+        exoStartToken++
+        exoAhead = 0
+        // 29.09.2026: зеркало тоже чистим. Иначе после паузы оно врало, что
+        // фразы «ещё впереди в списке», и «продолжить» молчало (жалоба Сержа).
+        exoPending.clear()
+        dropExoPositionWatch()
+        runCatching { filePlayer.stop() }
     }
 
     /** Пока играет текущее — спросить читалку, какие фразы будут следующими, и
@@ -2984,19 +3049,13 @@ class SpeechPlayer(context: Context) {
     private fun requestPrefetch() {
         if (directMode) return // заготовки не нужны: движок читает сам
         if (awaitingPlayText != null) return // текущая фраза ещё не сыграна
-        // msg4685: сверяем конвейер с читалкой ДО заказа. Разъехавшийся хвост
-        // выбрасываем — тогда offset ниже снова считает от верного места, и
-        // очередь зарастает правильно (иначе дыра пережила бы все заготовки).
-        firstMisalignedAhead()?.let { bad ->
-            Diag.log(
-                appContext, "sound",
-                "конвейер разошёлся с чтением на позиции ${bad + 1} — выбрасываю хвост и заказываю заново"
-            )
-            dropAheadFrom(bad)
-        }
-        // msg4598: прицепленная встык фраза уже не в очереди, но она впереди —
-        // считаем её наравне с остальными, иначе заказали бы её же второй раз.
-        val chained = if (chainedPlayer != null || chainInFlight) 1 else 0
+        // 29.09.2026 (журнал 17:53): у ExoPlayer фразы из очереди заготовок уезжают
+        // в список плеера ([exoTopUp]) и в очереди больше не числятся. В позицию
+        // заказа их тоже надо считать: иначе читалку спрашивают про уже заказанные
+        // фразы, она называет то, что в списке уже стоит, и каждый круг в журнале
+        // «exo: такая фраза уже есть в списке — лишнюю не беру». Само чтение от
+        // этого не рвётся, но очередь наполняется наполовину и бессмысленно.
+        val inPlayer = (exoPending.size - 1).coerceAtLeast(0)
         var issued = 0
         // 29.09.2026, НАЙДЕНО ПО ЖУРНАЛУ 10:24 («программа не отвечает» на смене
         // скорости): в условии стояло число заявок, снятое ДО цикла (`inFlight`),
@@ -3004,14 +3063,14 @@ class SpeechPlayer(context: Context) {
         // (смена скорости их чистит — [dropStaleRate]), условие «0 + 0 + 0 < 3»
         // выполнялось ВЕЧНО, и цикл заказывал синтез фразы за фразой, пока читалка
         // не откажется называть следующую: в журнале это «позиция 126 из 3», то
-        // есть 126 заявок в одном вызове. Дальше [firstMisalignedAhead] обходил все
+        // есть 126 заявок в одном вызове. Дальше сверка конвейера обходила все
         // 126 заявок, и на КАЖДУЮ читалка считала фразу от текущего места (с
         // применением словаря) — квадратичная работа на главном потоке, движок
         // захлёбывался сотней заявок, окно переставало отвечать. Теперь условие
         // считает ЖИВЫЕ числа: заявок ровно столько, сколько не хватает до глубины.
-        while (readyQueue.size + prefetchInFlight.size + chained < prefetchDepth) {
+        while (readyQueue.size + prefetchInFlight.size + inPlayer < prefetchDepth) {
             if (issued >= prefetchDepth) break // страховка: больше глубины не заказываем
-            val offset = readyQueue.size + prefetchInFlight.size + chained + 1
+            val offset = inPlayer + readyQueue.size + prefetchInFlight.size + 1
             // 29.09.2026: в журнал — почему очередь НЕ растёт. Жалоба Сержа: с
             // сетевым синтезатором паузы стали меньше, но остались; в журнале
             // видно, что каждая заготовка встаёт «в очереди 1/3», то есть цепочка
@@ -3054,7 +3113,6 @@ class SpeechPlayer(context: Context) {
     /** Полностью обнулить состояние пайплайна (без остановки TTS). */
     private fun resetPipeline() {
         forgetAllSynthWatches()
-        playWatchToken++
         directWatchToken++
         awaitingPlayText = null
         prefetchInFlight.clear()
@@ -3113,7 +3171,7 @@ class SpeechPlayer(context: Context) {
         if (directMode || text.isBlank()) return
         val t = tts
         if (t == null || !ready) return
-        if (currentText != null || awaitingPlayText != null || media != null) return
+        if (currentText != null || awaitingPlayText != null || soundPlaying()) return
         if (prefetchInFlight.contains(text)) return
         // Роль этой фразы знаем так же, как её узнает synthToFile: реплика —
         // значит своя скорость, и «уже готово» надо сверять с ней же.
@@ -3148,9 +3206,13 @@ class SpeechPlayer(context: Context) {
         val text = playingText
         val file = playingFile
         val rate = playingRate
+        // У ExoPlayer позиция точная — запоминаем её, чтобы продолжение пошло с
+        // середины фразы, а не с её начала.
+        val pos = runCatching { filePlayer.positionMs }.getOrDefault(0L)
         stop()
         if (text != null && file != null && file.exists() && rate == rateFor(roleOfFile(file))) {
             keptPhrase = Prepared(text, file, rate, roleOfFile(file))
+            keptPositionMs = pos
             Diag.log(
                 appContext, "sound",
                 "пауза: звук фразы сохранён (${file.name}, ${file.length()} байт) — продолжение зазвучит сразу"
@@ -3188,44 +3250,16 @@ class SpeechPlayer(context: Context) {
         prefetchInFlight.clear()
         prewarmOnly = false
         clearPrefetch()
-        dropChain()
+        // 29.09.2026 (журнал 18:02, «покрутил всё»): в новом пути заготовки уезжают
+        // в СПИСОК ПЛЕЕРА, и чистка очереди их не задевала. После смены скорости
+        // там оставались файлы прежней скорости — они и звучали, а свежий файл на
+        // тот же текст отбрасывался как «такая фраза уже есть в списке» (в журнале
+        // это рядом: «синтез готов ... скорость 2.4» и «лишнюю не беру»). Хвост
+        // списка убираем; звучащую фразу не трогаем — она дотягивается отношением
+        // в [exoSyncSpeed].
+        exoDropTail()
         keptPhrase?.let { runCatching { it.file.delete() } }
         keptPhrase = null
-    }
-
-    /** Подтянуть темп УЖЕ ЗВУЧАЩЕГО файла под новый ползунок скорости (29.09.2026).
-     *
-     *  Зачем. Фраза играет готовым файлом, и пока он звучит, ползунок его не
-     *  касается: раньше новая скорость была слышна только с начала следующей
-     *  фразы. У Сержа это «почему когда регулируешь скорость оно срабатывает не
-     *  сразу»: в журнале 08:48 ползунок двинули на 16-й секунде, а звучавшая
-     *  фраза (963 КБ, десять секунд) доигрывала прежним темпом до 20,7-й — новая
-     *  скорость пошла только со следующей фразы. Переделать готовый файл нельзя,
-     *  но можно играть его быстрее или медленнее: MediaPlayer тянет время, не
-     *  меняя высоту голоса (setPlaybackParams).
-     *
-     *  Тянем на КАЖДОМ шаге ползунка, а не на отпускании бегунка: TalkBack меняет
-     *  значение свайпами, и «отпускания» у него нет вовсе — ждать было бы нечего.
-     *
-     *  Коэффициент считаем от скорости, которой файл СДЕЛАН ([madeAt]): она уже
-     *  звучит как единица для уха, поэтому повторные шаги дают верный темп, а не
-     *  накопленную ошибку. Границы 0,5…2,0 — дальше плеер вправе отказать, и
-     *  тогда фраза просто доиграет как есть. [wanted] — нужный темп: у реплик он
-     *  свой ([replySpeed]). */
-    private fun retunePlaying(wanted: Float, madeAt: Float) {
-        val mp = media ?: return
-        val ratio = (wanted / madeAt).coerceIn(0.5f, 2.0f)
-        if (kotlin.math.abs(ratio - 1f) < 0.01f) return
-        val ok = runCatching { mp.playbackParams = mp.playbackParams.setSpeed(ratio) }.isSuccess
-        Diag.log(
-            appContext, "sound",
-            if (ok) {
-                "скорость на ходу: звучащий файл играю в " +
-                    String.format(java.util.Locale.US, "%.2f", ratio) + " от его темпа"
-            } else {
-                "скорость на ходу: плеер не принял новый темп — фраза доиграет как есть"
-            },
-        )
     }
 
     fun shutdown() {
@@ -3322,20 +3356,26 @@ class SpeechPlayer(context: Context) {
          *  промах случается у любого движка. */
         private const val DIRECT_MODE_HITS = 2
 
-        /** Сколько ждём MediaPlayer на подготовку локального wav-файла.
+        /** Сколько сроков ожидания даём движку реплик, прежде чем бросить роли до
+         *  конца сеанса (29.09.2026): один промах — это просто медленный сетевой
+         *  голос, из-за него роли терять нельзя. */
+        private const val REPLY_MISS_LIMIT = 1
+
+        /** Через сколько пробуем поднять отказавший движок реплик заново
+         *  (29.09.2026). Таймера нет: попытка идёт по делу, на очередной реплике. */
+        private const val REPLY_RETRY_MS = 60_000L
+
+        /** Сколько ждём, что звук начнётся, прежде чем сказать фразу напрямую.
          *  23.09.2026: было 12 с. Файл лежит на диске и готовится десятые доли
-         *  секунды; если за пять секунд не подготовился — он не подготовится,
-         *  и выгоднее сразу перейти к прямой речи, чем держать тишину. */
+         *  секунды; если за пять секунд не заиграл — не заиграет, и выгоднее
+         *  сразу перейти к прямой речи, чем держать тишину. */
         private const val PLAY_STALL_MS = 5_000L
 
-        /** Как часто сверяем позицию играющего плеера (23.09.2026). */
-        private const val POSITION_CHECK_MS = 2_000L
-
-        /** Сколько позиция должна стоять на месте, чтобы считать, что звука нет.
-         *  Позиция у локального файла идёт по времени, а не по громкости, и файл
-         *  уже подготовлен: стоять четыре секунды на живой речи ей не с чего.
-         *  23.09.2026: было 6 с — укорочено вместе с остальными сроками. */
-        private const val POSITION_STALL_MS = 4_000L
+        /** Сторож замершей позиции у ExoPlayer: как часто проверяем и сколько
+         *  проверок подряд должны увидеть одинаковую позицию, чтобы счесть фразу
+         *  потерянной (2 с × 3 = 6 с). */
+        private const val EXO_POS_STEP_MS = 2_000L
+        private const val EXO_POS_STUCK_HITS = 3
 
         /** Прямая речь: срок на СТАРТ. Движок подаёт сигнал «начал говорить» за
          *  доли секунды — наши замеры: синтез 13-секундной фразы 0,95 с, проба

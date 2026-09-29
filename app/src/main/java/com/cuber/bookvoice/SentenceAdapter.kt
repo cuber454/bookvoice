@@ -4,6 +4,7 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
 import android.text.style.LeadingMarginSpan
+import android.text.util.Linkify
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -40,6 +41,8 @@ class SentenceAdapter(
     private val onSentenceDict: (Int, Int) -> Unit = { _, _ -> },
     /** «Убрать такие строки» из меню действий диктора (28.09.2026). */
     private val onSentenceDrop: (Int, Int) -> Unit = { _, _ -> },
+    /** «Считать такие строки репликами» из меню действий диктора (30.09.2026). */
+    private val onSentenceReply: (Int, Int) -> Unit = { _, _ -> },
     /** Диктор подвёл предложение к экрану (ACTION_SHOW_ON_SCREEN, 29.09.2026):
      *  узел предложения виртуальный, строка сама не поедет — прокрутку
      *  заказывает читалка. */
@@ -301,6 +304,7 @@ class SentenceAdapter(
                 v.onSentenceLongClick = { i -> onSentenceLongClick(row.chapter, row.first + i) }
                 v.onSentenceDict = { i -> onSentenceDict(row.chapter, row.first + i) }
                 v.onSentenceDrop = { i -> onSentenceDrop(row.chapter, row.first + i) }
+                v.onSentenceReply = { i -> onSentenceReply(row.chapter, row.first + i) }
                 v.onSentenceShow = { i -> onSentenceShow(row.chapter, row.first + i) }
             }
         }
@@ -336,6 +340,14 @@ class SentenceAdapter(
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
             )
         }
+        // 29.09.2026 (просьба Сержа): адреса в тексте становятся ссылками —
+        // «http://…», «www.…» и просто имена сайтов вроде «flibusta.net».
+        // Разметку ставит Linkify: он кладёт URLSpan, а это ровно то, что нужно, —
+        // диктор читает такой кусок как ССЫЛКУ (URLSpan платформенный, он переживает
+        // передачу узла в TalkBack, в отличие от своей пометки), а касание по нему
+        // открывает браузер (см. [ParagraphView.openLinkAt]). Рисуется тоже как
+        // ссылка: подчёркнуто и цветом.
+        runCatching { Linkify.addLinks(text, Linkify.WEB_URLS) }
         return text
     }
 

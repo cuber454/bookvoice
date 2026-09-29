@@ -22,8 +22,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.OpenableColumns
-import android.telephony.PhoneStateListener
-import android.telephony.TelephonyManager
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
@@ -199,6 +197,19 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (granted) startOwnRecognition() else startDialogRecognition()
     }
 
+    /** Системное окно распознавания речи (прежний путь и запасной). 30.09.2026:
+    *  старый `startActivityForResult` устарел, ответ приходит сюда. */
+    private val askVoiceRecognition = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != RESULT_OK) return@registerForActivityResult
+        val data = result.data ?: return@registerForActivityResult
+        applyVoiceWord(
+            data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()?.takeIf { it.isNotBlank() }
+        )
+    }
+
     // msg4308: список — вся книга одной лентой. Позиция в ленте (row) — не то же
     // самое, что предложение в главе, поэтому на входе переводим её обратно в
     // «главу + предложение» (placeOf), а в движок уже уходит привычное место.
@@ -210,6 +221,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         onSentenceLongClick = { ch, s -> onSentenceLongPressed(ch, s) },
         onSentenceDict = { ch, s -> openDictForSentence(ch, s) },
         onSentenceDrop = { ch, s -> dropSimilarLines(ch, s) },
+        onSentenceReply = { ch, s -> makeReplyFromSentence(ch, s) },
         onSentenceShow = { ch, s -> showSentenceForA11y(ch, s) },
     )
 
@@ -298,7 +310,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         set(v) { ReaderEngine.currentUri = v }
     private var currentName: String?
         get() = ReaderEngine.currentName
-        set(v) { ReaderEngine.currentName = v }
+        set(v) {
+            ReaderEngine.currentName = v
+            // Имя книги помним и в настройках (29.09.2026): словарю оно нужно,
+            // чтобы предложить «правило только для этой книги» даже после того,
+            // как процесс читалки закрылся (сам ReaderEngine имя не хранит).
+            prefs.edit().putString(KEY_LAST_BOOK_NAME, v).apply()
+        }
 
     /** Почему последняя книга не открылась, словами — для журнала (28.09.2026).
      *  Раньше и «файл не прочитан», и «разбор упал» давали одну фразу про формат,
@@ -1905,8 +1923,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun moveBySentence(delta: Int) {
         val bk = book ?: return
-        var ch = chapterIdx
-        var s = sentenceIdx + delta
+        // Назад — считаем от прошлой цели, пока нажатия идут подряд (см. [backBase]),
+        // вперёд — всегда от нынешнего места чтения.
+        val base = if (delta < 0) backBase(bk) else chapterIdx to sentenceIdx
+        var ch = base.first
+        var s = base.second + delta
         if (s < 0) {
             if (ch <= 0) return
             ch--
@@ -1917,6 +1938,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             s = 0
         }
         goTo(ch, s)
+        if (delta < 0) rememberBackStep(ch, s)
         startAfterStep()
     }
 
@@ -1938,8 +1960,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  повторила бы то же место как результат перемотки). */
     private fun moveBySentences(delta: Int, count: Int) {
         val bk = book ?: return
-        var ch = chapterIdx
-        var s = sentenceIdx
+        val base = if (delta < 0) backBase(bk) else chapterIdx to sentenceIdx
+        var ch = base.first
+        var s = base.second
         var left = count
         while (left > 0) {
             var nextCh = ch
@@ -1959,6 +1982,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
         if (left == count) return
         goTo(ch, s)
+        if (delta < 0) rememberBackStep(ch, s)
         startAfterStep()
     }
 
@@ -2231,7 +2255,50 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         e.apply()
     }
 
-    private fun goTo(ch: Int, s: Int) = ReaderEngine.goTo(ch, s)
+    private fun goTo(ch: Int, s: Int) {
+        // Любой переход сбрасывает память «шага назад» (см. [backStepAt]): цель
+        // помним только для нажатий, идущих подряд одно за другим.
+        forgetBackStep()
+        ReaderEngine.goTo(ch, s)
+    }
+
+    // ---------------- Шаг назад, который идёт назад (29.09.2026) ----------------
+    //
+    // Жалоба Сержа: «жму «Пред.» несколько раз, а читается то же предложение
+    // сначала». Так и было: шаг вставал на предложение назад, чтение продолжалось
+    // и через секунду-две уходило на фразу вперёд, а следующее нажатие снова
+    // считало «назад» от нового места — то есть возвращало в то же предложение.
+    // Теперь цель шага назад запоминается, и пока нажатия идут подряд (до
+    // [backStepMs]), каждый следующий шаг считается от прошлой цели: 1570 → 1569
+    // → 1568 → 1567. Любой другой переход (тап по тексту, оглавление, ползунок,
+    // закладка) память сбрасывает — там человек сам выбрал место.
+
+    /** Куда встал последний шаг назад: глава и предложение. */
+    private var backStepAt = -1 to -1
+
+    /** Когда он был сделан (часы устройства; 0 — памяти нет). */
+    private var backStepTime = 0L
+
+    /** Сколько держим память шага назад: этого хватает, чтобы нажать несколько раз. */
+    private val backStepMs = 20_000L
+
+    /** Откуда считать шаг назад: от прошлой цели, если нажатия идут подряд. */
+    private fun backBase(bk: BookDocument): Pair<Int, Int> {
+        val fresh = backStepTime != 0L && SystemClock.uptimeMillis() - backStepTime < backStepMs
+        val ch = backStepAt.first
+        val s = backStepAt.second
+        val ok = fresh && ch in bk.chapters.indices && s in bk.chapters[ch].sentences.indices
+        return if (ok) ch to s else chapterIdx to sentenceIdx
+    }
+
+    private fun rememberBackStep(ch: Int, s: Int) {
+        backStepAt = ch to s
+        backStepTime = SystemClock.uptimeMillis()
+    }
+
+    private fun forgetBackStep() {
+        backStepTime = 0L
+    }
 
     /** Двойной тап по предложению (при чтении TalkBack'ом — активация строки).
      *  Всегда переводит читаемую позицию на это предложение; если чтение ещё
@@ -2467,9 +2534,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // «Настроек», не переоткрывая книгу.
         val alt = prefs.getBoolean(KEY_ALT_VOICE, false)
         ReaderEngine.player?.altDirect = alt
-        // msg5955: бесшовная передача — уже не галочка, а поведение: включена
-        // всегда, кроме альтернативной озвучки (там прицеплять нечего).
-        ReaderEngine.player?.gapless = !alt
         // msg5604: строка «Пауза между фразами» — подхватываем так же, на возврате
         // из «Настроек» (движок уже играющие фразы не переигрывает, значение
         // работает для следующих заготовок).
@@ -3034,7 +3098,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             putExtra(RecognizerIntent.EXTRA_PROMPT, getString(R.string.search_voice_prompt))
         }
         try {
-            startActivityForResult(intent, REQ_VOICE_SEARCH)
+            askVoiceRecognition.launch(intent)
         } catch (_: ActivityNotFoundException) {
             toast(getString(R.string.search_voice_unavailable))
         }
@@ -3056,14 +3120,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         runSearch(word)
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQ_VOICE_SEARCH || resultCode != RESULT_OK || data == null) return
-        applyVoiceWord(
-            data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                ?.firstOrNull()?.takeIf { it.isNotBlank() }
-        )
-    }
+    // 30.09.2026: прежний onActivityResult для системного окна распознавания убран
+    // вместе с устаревшим startActivityForResult — ответ приходит в askVoiceRecognition.
 
     // ---------------- Закладки ----------------
 
@@ -3894,6 +3952,56 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         return t.replace(Regex("\\s+"), " ").trim()
     }
 
+    /**
+     * «Считать такие строки репликами» (30.09.2026, просьба Сержа): знаки диктор
+     * не читает, а вслепую их не угадать — берём ведущие знаки показанной строки и
+     * кладём в свои знаки реплики. Если строка и так реплика (длинное тире или
+     * «номер с тире»), говорим об этом, а не плодим лишние знаки.
+     */
+    private fun makeReplyFromSentence(ch: Int, s: Int) {
+        val text = sentenceTextAt(ch, s)
+        if (text.isEmpty()) {
+            toast(getString(R.string.dict_need_find))
+            return
+        }
+        if (Roles.looksReplica(text)) {
+            toast(
+                getString(
+                    if (Roles.numberDash(text)) R.string.reply_from_sentence_number
+                    else R.string.reply_from_sentence_dash
+                )
+            )
+            return
+        }
+        val mark = Roles.leadingMark(text)
+        if (mark.isEmpty()) {
+            toast(getString(R.string.reply_from_sentence_none))
+            return
+        }
+        val book = currentName
+        if (book.isNullOrBlank()) {
+            toast(getString(R.string.reply_from_sentence_nobook))
+            return
+        }
+        val cur = ReplyMarks.of(this, book)
+        if (cur.list.any { it.equals(mark, ignoreCase = true) }) {
+            toast(getString(R.string.reply_from_sentence_has))
+            return
+        }
+        val m = ReplyMarks.addMark(this, book, mark)
+        Diag.log(
+            this, "roles",
+            "знак реплики из книги: «$mark» (${Roles.markName(mark)}), книга «$book», " +
+                "набор: ${m.list.joinToString(" ")}",
+        )
+        toast(
+            getString(
+                R.string.reply_from_sentence_added,
+                m.list.joinToString(", ") { Roles.markName(it) },
+            )
+        )
+    }
+
     // ---------- Умные замены: «убрать такие строки» (28.09.2026) ----------
 
     /**
@@ -4432,10 +4540,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         /** msg1245: интент несёт КОНКРЕТНОЕ место (цитата из QuotesActivity) —
          *  открыть там, а не с сохранённого места записи. */
         internal const val EXTRA_EXPLICIT_PLACE = "explicit_place"
-        /** Запрос системного голосового ввода (поиск по книге). */
-        internal const val REQ_VOICE_SEARCH = 2001
 
         internal const val KEY_URI = "uri"
+
+        /** Имя последней открытой книги (29.09.2026). Нужно словарю: по нему
+         *  предлагается «правило только для этой книги», а `ReaderEngine` имя
+         *  книги между запусками не держит. */
+        internal const val KEY_LAST_BOOK_NAME = "last_book_name"
         internal const val KEY_CHAPTER = "chapter"
         internal const val KEY_SENTENCE = "sentence"
         internal const val KEY_SPEED = "speed"
@@ -4549,10 +4660,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Портянка (msg4372, вариант А): во время чтения отпущенная прокрутка
         // перекидывает голос на верхнюю строку — он читает дальше с неё.
         internal const val KEY_SCROLL_FOLLOW = "scroll_follows_reading"
-        // msg4598 → msg5955: бесшовная передача звука встык. Была тестовой
-        // галочкой (ключ "gapless_handoff"); галочку убрали — механизм работает
-        // всегда, выключается только при альтернативной озвучке. В prefs у
-        // людей остался старый «выкл», поэтому значение больше не читаем.
 
         /** #57: альтернативный способ озвучки — фразу целиком отдаём движку
          *  (проба для сравнения на слух, msg5401/5409). По умолчанию выключено. */

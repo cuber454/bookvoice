@@ -2196,7 +2196,7 @@ class CatalogActivity(private val act: SectionActivity) {
 
     /** Короткая вибрация — подтверждение долгого нажатия / выбора формата. */
     private fun vibrate(ms: Long) {
-        val v = act.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
+        val v = act.getSystemService(Vibrator::class.java) ?: return
         if (!v.hasVibrator()) return
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

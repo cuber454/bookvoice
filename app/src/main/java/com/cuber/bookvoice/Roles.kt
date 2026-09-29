@@ -12,6 +12,8 @@ package com.cuber.bookvoice
  *  тире. В русской книге так помечают прямую речь, а наш разбор уже режет текст
  *  по предложениям и хранит признак «предложение начинает абзац». Обычный дефис
  *  в начале строки репликой НЕ считаем: это чаще пункт списка или линейка.
+ *  Исключение — дефис после номера («#8.1. - Зачем…»): так размечены сборники
+ *  анекдотов, см. [NUMBER_THEN_DASH].
  *
  *  Чего здесь сознательно нет: приписывания реплик героям по смыслу. «— ответил
  *  он» героя не даёт, и придумывать его нельзя — ошибка была бы слышна, а
@@ -20,14 +22,142 @@ package com.cuber.bookvoice
  */
 object Roles {
 
-    /** Тире, которыми в книгах помечают реплику. Дефис-минус сюда не входит. */
+    /** Тире, которыми в книгах помечают реплику. Дефис-минус сюда не входит: он
+     *  годится только после номера — см. [NUMBER_THEN_DASH]. */
     private val DASHES = charArrayOf('—', '–', '−')
+
+    /** Реплика после номера: «#8.1. - Зачем на милицейской…», «12) — сказал он».
+     *
+     *  Зачем (30.09.2026, жалоба Сержа «по ролям не читает, второй движок не
+     *  поднимается»): в сборнике анекдотов диалог помечен ДЕФИСОМ после номера
+     *  («#8.1. - Зачем…»), длинного тире в книге нет вовсе. Прежнее правило
+     *  требовало длинное тире в самом начале фразы, поэтому в той книге нашлось
+     *  «реплик 0 из 3302» — и второй голос не получил ни одной фразы.
+     *
+     *  Номер — только цифры с точками или дефисами, дальше необязательная точка
+     *  или скобка, пробел и тире (длинное или дефис), после которого пробел. Так
+     *  «5-6 человек» и «по-моему» репликой не станут, а дефис в начале строки без
+     *  номера по-прежнему репликой НЕ считается: это чаще пункт списка. */
+    private val NUMBER_THEN_DASH = Regex("^#?\\d+(?:[.,\\-]\\d+)*[.)]?\\s+[-–—−]\\s")
+
+    /** Свои знаки реплики и правило «после номера» (30.09.2026). Разбор зовётся из
+     *  чтения на каждой фразе и о настройках ничего не знает, поэтому действующий
+     *  набор лежит здесь двумя полями: их ставит [ReplyMarks] при открытии книги и
+     *  при каждой правке настроек. */
+    @Volatile
+    var ownMarks: List<String> = emptyList()
+
+    @Volatile
+    var afterNumber: Boolean = true
+
+    fun setMarks(marks: List<String>, numberAfter: Boolean) {
+        ownMarks = marks
+        afterNumber = numberAfter
+    }
+
+    /** Совпала ли фраза с правилом «номер, пробел, тире, пробел». Нужно окну
+     *  настроек: по этому признаку владельцу говорят, что правило уже работает. */
+    fun numberDash(text: String): Boolean = NUMBER_THEN_DASH.containsMatchIn(text.trimStart())
+
+    /** Текст БЕЗ знака реплики — то, что уходит движку (30.09.2026). Роль фразы
+     *  при этом решается по ИСХОДНОМУ тексту: знак нужен разбору, а не движку, и
+     *  срезать его раньше нельзя — иначе фраза перестаёт быть репликой (на этом
+     *  и споткнулась сборка 209: роли пропали именно в книгах с дефисом после
+     *  номера). */
+    fun stripped(text: String): String {
+        val r = markRange(text) ?: return text
+        return runCatching { text.removeRange(r) }.getOrDefault(text)
+    }
+
+    /** Границы знака, которым помечена реплика, — его срезаем перед озвучкой,
+     *  чтобы движок не читал «звёздочка» или «минус» посреди фразы (30.09.2026).
+     *  Длинное тире в начале сюда НЕ попадает: его движок читает как паузу, так
+     *  было и раньше. null — срезать нечего. */
+    fun markRange(text: String): IntRange? {
+        val head = text.trimStart()
+        if (head.isEmpty()) return null
+        val lead = text.length - head.length
+        for (m in ownMarks) {
+            if (m.isEmpty() || head.length < m.length) continue
+            if (m == "—" || m == "–" || m == "−") continue
+            if (!head.regionMatches(0, m, 0, m.length, ignoreCase = true)) continue
+            val dashesOnly = m.all { it == '-' || it == '—' || it == '–' || it == '−' }
+            if (dashesOnly && head.length > m.length && !head[m.length].isWhitespace()) continue
+            return lead until (lead + m.length)
+        }
+        val hit = NUMBER_THEN_DASH.find(head) ?: return null
+        // Совпадение кончается пробелом после тире: срезаем тире вместе с ним,
+        // номер оставляем — он часть текста книги.
+        val dash = hit.range.last - 1
+        if (dash < 0) return null
+        return (lead + dash) until (lead + hit.range.last + 1)
+    }
+
+    /** Ведущие знаки фразы: всё до первой буквы или цифры («#8.1. - Зачем» → «#»,
+     *  «— Зачем» → «—»). Пусто — фраза начинается словом. Так действие «считать
+     *  такие строки репликами» берёт знак из самой книги, а не спрашивает его
+     *  у владельца: знаки диктор не читает. */
+    fun leadingMark(text: String): String {
+        val s = text.trimStart()
+        var i = 0
+        while (i < s.length && !s[i].isLetterOrDigit() && !s[i].isWhitespace()) i++
+        return s.substring(0, i)
+    }
+
+    /** Как назвать знак словами: вслепую «*» или ««» ничего не значат, а название
+     *  звучит понятно. Незнакомый одиночный знак называем просто знаком. */
+    fun markName(mark: String): String = when (mark) {
+        "—" -> "длинное тире"
+        "–" -> "среднее тире"
+        "−" -> "минус"
+        "-" -> "дефис"
+        "#" -> "решётка"
+        "*" -> "звёздочка"
+        "•", "·" -> "маркер-точка"
+        "«" -> "кавычка открывающая"
+        "»" -> "кавычка закрывающая"
+        "\"" -> "кавычка"
+        "…" -> "многоточие"
+        "..." -> "три точки"
+        "(" -> "скобка открывающая"
+        ")" -> "скобка закрывающая"
+        else -> if (mark.length == 1) "другой знак" else mark
+    }
+
+    /** Чем начинаются фразы: знак → сколько фраз. Для окна «Как узнавать
+     *  реплики» — владелец выбирает знак из того, что в книге действительно есть. */
+    data class Head(val mark: String, val count: Int)
+
+    fun heads(sentences: List<Sentence>, limit: Int = 8): List<Head> {
+        val count = HashMap<String, Int>()
+        for (s in sentences) {
+            val mark = leadingMark(s.text)
+            if (mark.isEmpty()) continue
+            count[mark] = (count[mark] ?: 0) + 1
+        }
+        return count.entries.sortedByDescending { it.value }.take(limit)
+            .map { Head(it.key, it.value) }
+    }
 
     /** Реплика ли эта фраза. */
     fun looksReplica(text: String): Boolean {
         val s = text.trimStart()
         if (s.isEmpty()) return false
-        return DASHES.contains(s[0])
+        if (DASHES.contains(s[0])) return true
+        if (afterNumber && NUMBER_THEN_DASH.containsMatchIn(s)) return true
+        for (m in ownMarks) {
+            if (m.isEmpty() || s.length < m.length) continue
+            if (!s.regionMatches(0, m, 0, m.length, ignoreCase = true)) continue
+            // Знак из одних тире/дефисов внутри слова репликой не делает:
+            // «5-6 человек» и «по-моему» остаются обычным текстом.
+            if (m.all { it == '-' || it == '—' || it == '–' || it == '−' } &&
+                s.length > m.length && !s[m.length].isWhitespace()
+            ) {
+                continue
+            }
+            return true
+        }
+        return false
     }
 
     /** Разделитель ли эта строка: «* * *», «— — —», «...», «• • •». Такие строки

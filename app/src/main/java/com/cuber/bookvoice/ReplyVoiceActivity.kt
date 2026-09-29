@@ -3,6 +3,9 @@ package com.cuber.bookvoice
 import android.content.Intent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
@@ -36,6 +39,10 @@ class ReplyVoiceActivity : RowsActivity() {
         /** Имя файла настроек чтения — то же, что у читалки и у строк настроек
          *  (RowsActivity держит его у себя приватно). */
         private const val PREFS_READER = "reader"
+
+        /** Части окна (30.09.2026): знаки реплик и список начал фраз. */
+        private const val SECTION_HOW = "how"
+        private const val SECTION_HEADS = "heads"
     }
 
     private lateinit var binding: ActivitySettingsBinding
@@ -69,11 +76,20 @@ class ReplyVoiceActivity : RowsActivity() {
     override fun resumeSection(arrival: Boolean) {
         // Возврат из списков: состояние могло смениться, строки пересобираем.
         buildRows()
-        if (arrival) binding.tvTitle.announceForAccessibility(getString(R.string.reply_window_title))
+        if (arrival) binding.tvTitle.announceForAccessibility(binding.tvTitle.text)
     }
 
-    /** «Назад» обрабатывает база: окно закрывается, под ним — то, откуда пришли. */
-    override fun onSectionBackKey(): Boolean = false
+    /** «Назад» внутри части возвращает на шаг назад, а не закрывает окно: из
+     *  списка начал фраз — в знаки реплик, из знаков — в список ролей. */
+    override fun onSectionBackKey(): Boolean {
+        if (section != null) {
+            section = if (section == SECTION_HEADS) SECTION_HOW else null
+            buildRows()
+            binding.tvTitle.announceForAccessibility(binding.tvTitle.text)
+            return true
+        }
+        return false
+    }
 
     override fun disposeSection() {
         probe?.shutdown()
@@ -84,7 +100,30 @@ class ReplyVoiceActivity : RowsActivity() {
 
     private fun buildRows() {
         contentRoot.removeAllViews()
+        when (section) {
+            SECTION_HOW -> {
+                binding.tvTitle.text = getString(R.string.reply_marks_title)
+                buildHow()
+            }
+            SECTION_HEADS -> {
+                binding.tvTitle.text = getString(R.string.reply_heads_title)
+                buildHeads()
+            }
+            else -> {
+                binding.tvTitle.text = getString(R.string.reply_window_title)
+                buildMain()
+            }
+        }
+    }
 
+    /** Открыть часть окна: заголовок окна — имя части, диктор его объявляет. */
+    private fun openSection(id: String) {
+        section = id
+        buildRows()
+        binding.tvTitle.announceForAccessibility(binding.tvTitle.text)
+    }
+
+    private fun buildMain() {
         // Ползунки реплик живут в своём контейнере: стоят они внизу набора, но
         // собраны отдельно — так их видно и править можно, не пересобирая окно
         // (пересборка убила бы View под фокусом диктора, см. RowsActivity.updateRow).
@@ -122,6 +161,16 @@ class ReplyVoiceActivity : RowsActivity() {
         // Предупреждение — сразу под переключателем: его читают до того, как
         // включат.
         addHint(getString(R.string.voice_reply_hint))
+
+        // Как приложение понимает, что фраза — реплика (30.09.2026). Отдельной
+        // частью окна, а не строками здесь: настроек разметки три, и на одном
+        // экране с голосом и ползунками получилась бы свалка.
+        addRow(
+            getString(R.string.reply_marks_row),
+            marksStateLine(),
+            strong = true,
+            tag = "marks",
+        ) { openSection(SECTION_HOW) }
 
         // 26.09.2026: в альтернативном способе озвучки фразу целиком читает
         // движок, наш конвейер файлов не участвует, а репликам без него не
@@ -172,6 +221,198 @@ class ReplyVoiceActivity : RowsActivity() {
     /** Отдать настройку живому плееру книги, если она открыта. */
     private fun applyToLive(block: (SpeechPlayer) -> Unit) {
         MainActivity.active?.player?.let(block)
+    }
+
+    // ---------------- Как узнавать реплики (30.09.2026) ----------------
+
+    /** Открытая часть окна: null — сам список ролей, [SECTION_HOW] — знаки
+     *  реплик, [SECTION_HEADS] — чем начинаются фразы в этой главе. */
+    private var section: String? = null
+
+    /** Имя открытой книги: у неё может быть свой набор знаков. */
+    private fun bookName(): String? = ReaderEngine.currentName
+
+    /** Строка состояния для входа: чем реплики узнаются сейчас и где этот набор. */
+    private fun marksStateLine(): String {
+        val m = ReplyMarks.of(this, bookName())
+        val where = getString(
+            if (m.fromBook) R.string.reply_marks_for_book else R.string.reply_marks_common
+        )
+        return getString(R.string.reply_marks_state, m.words(), where)
+    }
+
+    /** Фразы открытой главы: по ним считаем реплики и начала фраз. */
+    private fun chapterSentences(): List<Sentence>? =
+        ReaderEngine.bookOrNull()?.chapters?.getOrNull(ReaderEngine.chapterIdx)?.sentences
+
+    /** Часть «Как узнавать реплики»: галочка про номер, свои знаки, начала фраз,
+     *  счёт реплик по главе и «запомнить для этой книги». */
+    private fun buildHow() {
+        val book = bookName()
+        // Разбор обязан смотреть теми же знаками, что видит владелец в этом окне.
+        ReplyMarks.apply(this, book)
+        val marks = ReplyMarks.of(this, book)
+
+        addHint(getString(R.string.reply_marks_hint))
+
+        localCheck(
+            getString(R.string.reply_marks_number),
+            getString(R.string.reply_marks_number_hint),
+            marks.number,
+            "num",
+        ) { on ->
+            ReplyMarks.save(this, book, marks.list, on)
+            Diag.log(this, "roles", "знаки реплики: после номера ${if (on) "да" else "нет"}")
+            buildRows()
+        }
+
+        addRow(
+            getString(R.string.reply_marks_own),
+            marks.list.joinToString(", ") { Roles.markName(it) }
+                .ifEmpty { getString(R.string.reply_marks_none) },
+            strong = true,
+            tag = "own",
+        ) { editMarks(marks) }
+
+        val stats = chapterSentences()?.let { Roles.stats(it) }
+        if (stats != null) {
+            addRow(
+                getString(R.string.reply_count_row, stats.replies, stats.sentences),
+                null,
+                tag = "count",
+            )
+        }
+
+        val heads = chapterSentences()?.let { Roles.heads(it) } ?: emptyList()
+        addRow(
+            getString(R.string.reply_heads_row),
+            getString(R.string.reply_heads_row_hint, heads.size),
+            strong = true,
+            tag = "heads",
+        ) { openSection(SECTION_HEADS) }
+
+        if (book.isNullOrBlank()) {
+            addHint(getString(R.string.reply_marks_nobook))
+        } else {
+            localCheck(
+                getString(R.string.reply_marks_remember),
+                getString(R.string.reply_marks_remember_hint, book),
+                ReplyMarks.remembered(this, book),
+                "remember",
+            ) { on ->
+                ReplyMarks.setRemember(this, book, on)
+                buildRows()
+            }
+        }
+    }
+
+    /** Часть «Чем начинаются фразы»: знаки этой главы и счёт фраз. Касание ставит
+     *  знак в набор реплик, второе касание снимает. */
+    private fun buildHeads() {
+        val book = bookName()
+        ReplyMarks.apply(this, book)
+        val heads = chapterSentences()?.let { Roles.heads(it) } ?: emptyList()
+        if (heads.isEmpty()) {
+            addHint(getString(R.string.reply_heads_empty))
+            return
+        }
+        addHint(getString(R.string.reply_heads_hint))
+        val cur = ReplyMarks.of(this, book)
+        for (h in heads) {
+            val inSet = cur.list.any { it.equals(h.mark, ignoreCase = true) }
+            addRow(
+                getString(R.string.reply_head_row, Roles.markName(h.mark), h.count),
+                getString(if (inSet) R.string.reply_head_in else R.string.reply_head_out),
+                strong = inSet,
+                tag = "head${h.mark}",
+            ) { toggleMark(h.mark, cur) }
+        }
+    }
+
+    /** Поставить или снять знак из набора. Набор один — общий или книжный, — и
+     *  правка идёт в тот, который сейчас действует. */
+    private fun toggleMark(mark: String, cur: ReplyMarks.Marks) {
+        val have = cur.list.any { it.equals(mark, ignoreCase = true) }
+        val list = if (have) cur.list.filterNot { it.equals(mark, ignoreCase = true) }
+        else cur.list + mark
+        ReplyMarks.save(this, bookName(), list, cur.number)
+        toastText(
+            getString(
+                if (have) R.string.reply_head_removed else R.string.reply_head_added,
+                Roles.markName(mark),
+            )
+        )
+        buildRows()
+        focusTagRetry("head$mark")
+    }
+
+    /** Правка своих знаков руками: тот же набор, но вписанный текстом. Знаки
+     *  диктор не читает, поэтому их видно словами в строке, а здесь можно
+     *  поправить, если увиденное в книге не подошло. */
+    private fun editMarks(cur: ReplyMarks.Marks) {
+        val field = EditText(this).apply {
+            setText(cur.list.joinToString(" "))
+            hint = getString(R.string.reply_marks_field_hint)
+            isSingleLine = true
+            textSize = 17f
+        }
+        val box = FrameLayout(this).apply {
+            setPadding(dp(24), dp(8), dp(24), 0)
+            addView(field)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.reply_marks_own)
+            .setMessage(R.string.reply_marks_edit_hint)
+            .setView(box)
+            .setPositiveButton(R.string.dict_save) { _, _ ->
+                ReplyMarks.save(this, bookName(), ReplyMarks.fromText(field.text.toString()), cur.number)
+                buildRows()
+                focusTagRetry("own")
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** Флажок с состоянием НЕ из настроек напрямую: у знаков реплик значение
+     *  зависит от книги, поэтому addCheck из RowsActivity (он пишет по одному
+     *  ключу) тут не годится. */
+    private fun localCheck(
+        title: String,
+        hint: String,
+        checked: Boolean,
+        tag: String,
+        onChange: (Boolean) -> Unit,
+    ) {
+        val box = CheckBox(this).apply {
+            text = withHint(title, hint)
+            textSize = 17f
+            isChecked = checked
+            isFocusable = true
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            this.tag = tag
+            setOnCheckedChangeListener { _, on -> onChange(on) }
+        }
+        contentRoot.addView(
+            box,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = dp(2)
+                bottomMargin = dp(2)
+            },
+        )
+    }
+
+    /** Перенести фокус на строку с меткой: только что пересобранный список ещё не
+     *  разложен, а невидимую цель диктор пропускает ([TabNav.a11yFocus]). */
+    private fun focusTagRetry(tag: String, retry: Boolean = true) {
+        val v = rowWithTag(tag) ?: return
+        if (!v.isShown && retry) {
+            v.postDelayed({ focusTagRetry(tag, retry = false) }, 120)
+            return
+        }
+        TabNav.a11yFocus(v)
     }
 
     // ---------------- Плееры: список и проба ----------------

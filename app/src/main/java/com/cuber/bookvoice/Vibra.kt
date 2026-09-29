@@ -39,7 +39,7 @@ object Vibra {
             2 -> 255
             else -> 170
         }
-        val v = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
+        val v = ctx.getSystemService(Vibrator::class.java) ?: return
         if (!v.hasVibrator()) return
         val pattern = longArrayOf(0, 150, 130, 150)
         try {
@@ -57,7 +57,7 @@ object Vibra {
 
     private fun pulse(ctx: Context, pattern: LongArray) {
         if (!enabled(ctx)) return
-        val v = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
+        val v = ctx.getSystemService(Vibrator::class.java) ?: return
         if (!v.hasVibrator()) return
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
