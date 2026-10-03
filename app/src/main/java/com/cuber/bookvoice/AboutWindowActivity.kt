@@ -1,6 +1,7 @@
 package com.cuber.bookvoice
 
 import android.content.Intent
+import android.net.Uri
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.cuber.bookvoice.databinding.ActivityAboutBinding
@@ -145,10 +146,22 @@ class AboutWindowActivity : SectionActivity() {
             root.addView(link)
         }
 
-        // msg3925: секции про связь с автором здесь больше нет. Группа — это
-        // действие, и живёт она строкой «Группа BookVoice в Telegram» в корне
-        // настроек; в справке она была тупиком — текст, который отправляет
-        // искать вход в другом экране. Подсказку про лог забрала строка группы.
+        // Ссылки-действия (2026-10): код на GitHub и группа в Telegram. Раньше
+        // GitHub человеку не показывали — по нему только шла проверка обновлений.
+        // Группа осталась и в корне настроек (там она в один шаг от входа), а
+        // здесь обе ссылки собраны в одном месте — справка отвечает и на вопрос
+        // «как связаться».
+        val gh = layoutInflater.inflate(R.layout.item_about_link, root, false) as TextView
+        gh.text = getString(R.string.about_github)
+        gh.setOnClickListener {
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))) }
+        }
+        root.addView(gh)
+
+        val tg = layoutInflater.inflate(R.layout.item_about_link, root, false) as TextView
+        tg.text = getString(R.string.settings_chat)
+        tg.setOnClickListener { AuthorContact.open(this) }
+        root.addView(tg)
 
         // Версия — спокойной строкой в самом низу. Не клик и не элемент
         // навигации: это подпись, а не содержимое.
@@ -191,4 +204,9 @@ class AboutWindowActivity : SectionActivity() {
     }
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
+
+    private companion object {
+        /** Ссылка на репозиторий — та, что человек открывает из «О программе». */
+        const val GITHUB_URL = "https://github.com/cuber454/bookvoice"
+    }
 }
