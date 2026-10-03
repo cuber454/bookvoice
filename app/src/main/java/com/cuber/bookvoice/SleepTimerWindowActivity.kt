@@ -126,8 +126,8 @@ class SleepTimerWindowActivity : RowsActivity() {
             getString(R.string.sleep_settings_hint),
             tag = TAG_SETTINGS,
         ) { startActivity(Intent(this, SleepTimerSettingsActivity::class.java)) }
-
-        addHint(getString(R.string.sleep_timer_hint))
+        // 30.09.2026: нижней подсказки больше нет — строкой выше уже сказано
+        // «Настройки таймера — Жесты, чувствительность, сигнал и проверки».
     }
 
     /** Сколько осталось в активном таймере — словами, без опоры на «N минут»

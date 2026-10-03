@@ -286,6 +286,20 @@ object BookStore {
         save(context, all(context).filterNot { it.uri == uri })
     }
 
+    /** Переписать адрес записи, оставив книгу на полке как была (30.09.2026).
+     *  Так лечится умерший адрес: проводники вроде Mixplorer выдают адреса,
+     *  живущие ровно столько, сколько живёт их грант на папку, а файл лежит на
+     *  месте. Отдельный метод, а не remove + upsert: правила словаря за книгой
+     *  забывать нельзя — книга-то никуда не ушла. */
+    @Synchronized
+    fun changeUri(context: Context, fromUri: String, rec: BookRecord) {
+        val list = all(context)
+            .filterNot { it.uri == fromUri || it.uri == rec.uri }
+            .toMutableList()
+        list.add(rec)
+        save(context, list)
+    }
+
     /** Склейка дублей скачанных книг (msg1333/1336). Записи с одинаковым
      *  [BookRecord.sourceUrl] — это одна и та же книга из каталога, попавшая
      *  в библиотеку дважды: раньше кнопка «Скачать» после первого открытия

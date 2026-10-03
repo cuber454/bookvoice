@@ -3,7 +3,7 @@ package com.cuber.bookvoice
 import android.content.Intent
 import android.view.View
 import android.view.ViewGroup
-import android.widget.CheckBox
+import androidx.appcompat.widget.SwitchCompat
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -13,17 +13,18 @@ import com.cuber.bookvoice.databinding.ActivitySettingsBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /**
- * Окно «Чтение по ролям» (26.09.2026) — настройка реплик.
+ * Окно «Прямая речь» (26.09.2026; до 30.09.2026 — «Чтение по ролям») —
+ * настройка реплик.
  *
  *  Зачем отдельным окном. Репликам нужен и голос, и своя скорость, и свой тон,
  *  и своя громкость: в общем списке «Голос» это ещё шесть строк, и до книжных
  *  ползунков приходилось бы слушать их все. В разделе осталась одна строка
- *  «По ролям» со значением (сразу под кнопкой чтения), а настройка — здесь.
+ *  «Прямая речь» со значением (сразу под кнопкой чтения), а настройка — здесь.
  *
  *  Интерфейс — ТОТ ЖЕ, что у основного голоса (просьба Сержа 26.09.2026):
  *  строки движка, языка и голоса рисует тот же набор [VoicePicker] с целью
  *  [VoicePicker.Target.REPLY], списки и подписи буквально одни и те же. Сверху
- *  стоит кнопка «Читать» — проба репликовым голосом, чтобы услышать выбор, не
+ *  стоит кнопка «Читать» — проба голосом прямой речи, чтобы услышать выбор, не
  *  трогая чтение книги. Ниже — переключатель режима и ползунки реплик.
  *
  *  Окно ОДНО на оба входа: его открывает и Настройки, и панель «Голос» из книги.
@@ -153,18 +154,18 @@ class ReplyVoiceActivity : RowsActivity() {
         ) { checked ->
             Diag.log(
                 this, "tts",
-                "роли: ${if (checked) "включены" else "выключены"} галочкой в окне «Чтение по ролям»",
+                "прямая речь: ${if (checked) "включена" else "выключена"} галочкой в окне «Прямая речь»",
             )
             applyReplyToPlayer()
         }
 
-        // Предупреждение — сразу под переключателем: его читают до того, как
-        // включат.
+        // Подсказка про второй движок — сразу под переключателем: её читают до
+        // того, как включат.
         addHint(getString(R.string.voice_reply_hint))
 
-        // Как приложение понимает, что фраза — реплика (30.09.2026). Отдельной
-        // частью окна, а не строками здесь: настроек разметки три, и на одном
-        // экране с голосом и ползунками получилась бы свалка.
+        // Как приложение понимает, что фраза — прямая речь (30.09.2026).
+        // Отдельной частью окна, а не строками здесь: настроек разметки три, и на
+        // одном экране с голосом и ползунками получилась бы свалка.
         addRow(
             getString(R.string.reply_marks_row),
             marksStateLine(),
@@ -172,13 +173,12 @@ class ReplyVoiceActivity : RowsActivity() {
             tag = "marks",
         ) { openSection(SECTION_HOW) }
 
-        // 26.09.2026: в альтернативном способе озвучки фразу целиком читает
-        // движок, наш конвейер файлов не участвует, а репликам без него не
-        // жить. Говорим об этом прямо, а не молчим выключенным переключателем.
-        if (prefs().getBoolean(MainActivity.KEY_ALT_VOICE, false)) {
-            addHint(getString(R.string.reply_alt_voice_hint))
-            Diag.log(this, "tts", "реплики: открыто окно ролей, но включён альтернативный способ озвучки")
-        }
+        // 26.09.2026 — 30.09.2026: здесь висело предупреждение «в альтернативном
+        // способе озвучки реплики другим голосом не работают». Оно устарело:
+        // реплики в этом способе читает второй движок (26.09), а с 30.09 работает
+        // и случай «оба голоса в одном движке» — основной экземпляр берётся в
+        // долг под реплику (SpeechPlayer.queueDirect, как в файловом способе).
+        // Предупреждать больше не о чем, поэтому строки нет.
 
         // Тот же набор строк, что у основного голоса, но с репликовой целью.
         val pick = VoicePicker(this, prefs(), replyHost, VoicePicker.Target.REPLY)
@@ -253,26 +253,44 @@ class ReplyVoiceActivity : RowsActivity() {
         ReplyMarks.apply(this, book)
         val marks = ReplyMarks.of(this, book)
 
-        addHint(getString(R.string.reply_marks_hint))
-
         localCheck(
             getString(R.string.reply_marks_number),
-            getString(R.string.reply_marks_number_hint),
+            null,
             marks.number,
             "num",
         ) { on ->
-            ReplyMarks.save(this, book, marks.list, on)
-            Diag.log(this, "roles", "знаки реплики: после номера ${if (on) "да" else "нет"}")
+            ReplyMarks.save(this, book, marks.list, on, marks.known)
+            Diag.log(this, "roles", "знаки прямой речи: после номера ${if (on) "да" else "нет"}")
             buildRows()
+            focusTagRetry("num")
         }
 
-        addRow(
-            getString(R.string.reply_marks_own),
-            marks.list.joinToString(", ") { Roles.markName(it) }
-                .ifEmpty { getString(R.string.reply_marks_none) },
-            strong = true,
-            tag = "own",
-        ) { editMarks(marks) }
+        // Свои знаки — по галочке на каждый: включён — действует, выключен — стоит
+        // в списке, но не участвует. Добавляются касанием в «Чем начинаются фразы».
+        // Долгое нажатие (и пункт «Действия» диктора) — изменить или удалить знак.
+        for (sign in marks.known) {
+            val active = marks.list.any { it.equals(sign, ignoreCase = true) }
+            val box = localCheck(
+                Roles.markName(sign),
+                null,
+                active,
+                "sign:$sign",
+            ) { on ->
+                val list = if (on) marks.list + sign
+                else marks.list.filterNot { it.equals(sign, ignoreCase = true) }
+                ReplyMarks.save(this, book, list, marks.number, marks.known)
+                buildRows()
+                focusTagRetry("sign:$sign")
+            }
+            box.setOnLongClickListener {
+                Vibra.confirm(this)
+                showSignActions(sign)
+                true
+            }
+            A11y.replaceLongPress(box, getString(R.string.reply_sign_actions)) {
+                showSignActions(sign)
+            }
+        }
 
         val stats = chapterSentences()?.let { Roles.stats(it) }
         if (stats != null) {
@@ -283,10 +301,9 @@ class ReplyVoiceActivity : RowsActivity() {
             )
         }
 
-        val heads = chapterSentences()?.let { Roles.heads(it) } ?: emptyList()
         addRow(
             getString(R.string.reply_heads_row),
-            getString(R.string.reply_heads_row_hint, heads.size),
+            null,
             strong = true,
             tag = "heads",
         ) { openSection(SECTION_HEADS) }
@@ -296,12 +313,13 @@ class ReplyVoiceActivity : RowsActivity() {
         } else {
             localCheck(
                 getString(R.string.reply_marks_remember),
-                getString(R.string.reply_marks_remember_hint, book),
+                null,
                 ReplyMarks.remembered(this, book),
                 "remember",
             ) { on ->
                 ReplyMarks.setRemember(this, book, on)
                 buildRows()
+                focusTagRetry("remember")
             }
         }
     }
@@ -330,12 +348,14 @@ class ReplyVoiceActivity : RowsActivity() {
     }
 
     /** Поставить или снять знак из набора. Набор один — общий или книжный, — и
-     *  правка идёт в тот, который сейчас действует. */
+     *  правка идёт в тот, который сейчас действует. Снятый знак остаётся в списке
+     *  известных (галочка выключена), чтобы его можно было вернуть. */
     private fun toggleMark(mark: String, cur: ReplyMarks.Marks) {
         val have = cur.list.any { it.equals(mark, ignoreCase = true) }
         val list = if (have) cur.list.filterNot { it.equals(mark, ignoreCase = true) }
         else cur.list + mark
-        ReplyMarks.save(this, bookName(), list, cur.number)
+        val known = if (have) cur.known else cur.known + mark
+        ReplyMarks.save(this, bookName(), list, cur.number, known)
         toastText(
             getString(
                 if (have) R.string.reply_head_removed else R.string.reply_head_added,
@@ -346,13 +366,28 @@ class ReplyVoiceActivity : RowsActivity() {
         focusTagRetry("head$mark")
     }
 
-    /** Правка своих знаков руками: тот же набор, но вписанный текстом. Знаки
-     *  диктор не читает, поэтому их видно словами в строке, а здесь можно
-     *  поправить, если увиденное в книге не подошло. */
-    private fun editMarks(cur: ReplyMarks.Marks) {
+    /** Долгое нажатие на знак: изменить или удалить его. */
+    private fun showSignActions(sign: String) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(Roles.markName(sign))
+            .setItems(
+                arrayOf(
+                    getString(R.string.reply_sign_edit),
+                    getString(R.string.reply_sign_delete),
+                )
+            ) { _, which ->
+                when (which) {
+                    0 -> editSign(sign)
+                    1 -> confirmDeleteSign(sign)
+                }
+            }
+            .show()
+    }
+
+    /** Изменить знак: поле с прежним знаком, сохраняем новым. */
+    private fun editSign(sign: String) {
         val field = EditText(this).apply {
-            setText(cur.list.joinToString(" "))
-            hint = getString(R.string.reply_marks_field_hint)
+            setText(sign)
             isSingleLine = true
             textSize = 17f
         }
@@ -361,13 +396,34 @@ class ReplyVoiceActivity : RowsActivity() {
             addView(field)
         }
         MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.reply_marks_own)
-            .setMessage(R.string.reply_marks_edit_hint)
+            .setTitle(R.string.reply_sign_edit)
             .setView(box)
             .setPositiveButton(R.string.dict_save) { _, _ ->
-                ReplyMarks.save(this, bookName(), ReplyMarks.fromText(field.text.toString()), cur.number)
+                val next = field.text.toString().trim()
+                if (next.isEmpty()) {
+                    toastText(getString(R.string.reply_sign_empty))
+                    return@setPositiveButton
+                }
+                if (next != sign) {
+                    ReplyMarks.renameMark(this, bookName(), sign, next)
+                    buildRows()
+                    focusTagRetry("sign:$next")
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** Удалить знак из списка совсем — с подтверждением. */
+    private fun confirmDeleteSign(sign: String) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.reply_sign_delete)
+            .setMessage(getString(R.string.reply_sign_delete_msg, Roles.markName(sign)))
+            .setPositiveButton(R.string.reply_sign_delete) { _, _ ->
+                ReplyMarks.removeMark(this, bookName(), sign)
+                toastText(getString(R.string.reply_head_removed, Roles.markName(sign)))
                 buildRows()
-                focusTagRetry("own")
+                focusTagRetry("num")
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
@@ -375,15 +431,16 @@ class ReplyVoiceActivity : RowsActivity() {
 
     /** Флажок с состоянием НЕ из настроек напрямую: у знаков реплик значение
      *  зависит от книги, поэтому addCheck из RowsActivity (он пишет по одному
-     *  ключу) тут не годится. */
+     *  ключу) тут не годится. Возвращает сам флажок, чтобы можно было повесить
+     *  долгое нажатие. */
     private fun localCheck(
         title: String,
-        hint: String,
+        hint: String?,
         checked: Boolean,
         tag: String,
         onChange: (Boolean) -> Unit,
-    ) {
-        val box = CheckBox(this).apply {
+    ): SwitchCompat {
+        val box = SwitchCompat(this).apply {
             text = withHint(title, hint)
             textSize = 17f
             isChecked = checked
@@ -402,12 +459,15 @@ class ReplyVoiceActivity : RowsActivity() {
                 bottomMargin = dp(2)
             },
         )
+        return box
     }
 
     /** Перенести фокус на строку с меткой: только что пересобранный список ещё не
-     *  разложен, а невидимую цель диктор пропускает ([TabNav.a11yFocus]). */
+     *  разложен, а невидимую цель диктор пропускает ([TabNav.a11yFocus]). Ищем по
+     *  метке как обычный [View], а не как строку [rowWithTag]: метки здесь стоят и
+     *  на галочках, и каст к TextView на них уронил бы окно. */
     private fun focusTagRetry(tag: String, retry: Boolean = true) {
-        val v = rowWithTag(tag) ?: return
+        val v = contentRoot.findViewWithTag<View>(tag) ?: return
         if (!v.isShown && retry) {
             v.postDelayed({ focusTagRetry(tag, retry = false) }, 120)
             return
@@ -443,7 +503,7 @@ class ReplyVoiceActivity : RowsActivity() {
         if (p.isReady && p.enginePackage == engine) return
         p.setEngine(engine) { ok ->
             if (!ok) {
-                Diag.log(this, "tts", "движок реплик ${engine ?: "системный"} не поднялся (окно ролей)")
+                Diag.log(this, "tts", "движок прямой речи ${engine ?: "системный"} не поднялся (окно «Прямая речь»)")
                 return@setEngine
             }
             picker?.refresh()
@@ -462,7 +522,9 @@ class ReplyVoiceActivity : RowsActivity() {
             p.pitch = s.getFloat(MainActivity.KEY_REPLY_PITCH, 1f)
             p.volume = s.getFloat(MainActivity.KEY_REPLY_VOLUME, 1f)
             s.getString(MainActivity.KEY_REPLY_VOICE, null)?.let { p.selectVoice(it) }
-            p.speak(getString(R.string.voice_preview_sample))
+            // 30.09.2026: свой образец — общий говорил про «чтение», и в окне
+            // прямой речи человек не понимал, чей голос слушает.
+            p.speak(getString(R.string.reply_preview_sample))
         }
         if (p.isReady && p.enginePackage == engine) {
             apply()
@@ -540,7 +602,7 @@ class ReplyVoiceActivity : RowsActivity() {
             e.apply()
             Diag.log(
                 this@ReplyVoiceActivity, "tts",
-                "реплики: выбран голос ${v.name} (движок " +
+                "прямая речь: выбран голос ${v.name} (движок " +
                     "${prefs().getString(MainActivity.KEY_REPLY_ENGINE, null) ?: "системный"})"
             )
             applyReplyToPlayer()

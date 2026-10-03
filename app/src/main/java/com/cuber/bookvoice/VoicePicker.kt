@@ -9,7 +9,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
-import android.widget.CheckBox
+import androidx.appcompat.widget.SwitchCompat
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -112,7 +112,7 @@ class VoicePicker(
      *
      *  Места в панели хватает: она прокручивается, а галочка встаёт сразу под
      *  строкой «По ролям», третьей строкой набора. */
-    val replyCheck: CheckBox = CheckBox(ctx).apply {
+    val replyCheck: SwitchCompat = SwitchCompat(ctx).apply {
         text = ctx.getString(R.string.voice_reply_check)
         textSize = 17f
         isChecked = prefs.getBoolean(MainActivity.KEY_REPLY_ON, false)
@@ -158,27 +158,43 @@ class VoicePicker(
         addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
     }
 
-    /** Строка ролей для НИЗА набора (29.09.2026, просьба Сержа: «строчка
-     *  переключения по ролям и рядом в этой же строчке галочка», и поставить её
-     *  вниз, а не под «Читать»).
+    /** Строка прямой речи и её галочка для НИЗА набора (29.09.2026, просьба
+     *  Сержа: «строчка переключения и рядом в этой же строчке галочка», и
+     *  поставить её вниз, а не под «Читать»).
      *
-     *  Слева кнопка-значение «По ролям» (она же вход в окно настройки голоса и
-     *  движка реплик), справа галочка включения. Диктор обходит их двумя
+     *  Сначала кнопка-значение «Прямая речь» (она же вход в окно настройки голоса
+     *  и движка прямой речи), под ней галочка включения. Диктор обходит их двумя
      *  остановками подряд: сначала значение, следом флажок с состоянием.
      *
-     *  Ставит её ХОЗЯИН набора, а не [build]: место в наборе у читалки и у
+     *  30.09.2026, важная правка: было В ОДНУ СТРОКУ (кнопка слева, галочка
+     *  справа), и после переименования галочки в «Читать прямую речь другим
+     *  голосом» она стала шире самой строки: чекбокс в горизонтальном
+     *  LinearLayout меряется по своему тексту и забрал всю ширину, а кнопке с
+     *  весом 1 осталось ноль — строка входа в окно просто исчезла (Серж: «войти
+     *  в это окно настройки не могу, потому что пропала строчка входа»). Теперь
+     *  две отдельные строки: каждая занимает всю ширину и не зависит от длины
+     *  чужого текста — при «очень крупном» размере шрифта это единственный
+     *  надёжный вариант.
+     *
+     *  Ставит блок ХОЗЯИН набора, а не [build]: место в наборе у читалки и у
      *  Настроек одно и то же — сразу под ползунками, перед строкой словаря. */
     fun replyBlock(): View = LinearLayout(ctx).apply {
-        orientation = LinearLayout.HORIZONTAL
+        orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT,
         )
-        addView(replyRow, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(
+            replyRow,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
         addView(
             replyCheck,
             LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
@@ -219,7 +235,7 @@ class VoicePicker(
      *  галочке не за что держаться, и она не появляется вовсе. */
     fun addRemember(parent: LinearLayout) {
         if (!host.hasBook()) return
-        val cb = CheckBox(ctx).apply {
+        val cb = SwitchCompat(ctx).apply {
             text = ctx.getString(R.string.voice_remember_book)
             contentDescription = ctx.getString(R.string.voice_remember_book_cd)
             textSize = 16f

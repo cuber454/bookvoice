@@ -3,6 +3,8 @@ package com.cuber.bookvoice
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
+import android.media.audiofx.LoudnessEnhancer
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -118,6 +120,19 @@ class SpeechPlayer(context: Context) {
      *
      *  По умолчанию ВЫКЛ — настройка тестовая, обычное чтение не меняется. */
     var altDirect: Boolean = false
+        set(value) {
+            val was = field
+            field = value
+            // 30.09.2026: включился прямой режим — тихий поток встаёт вместе с ним.
+            // В этом режиме звук играет движок, и без тихого потока система не
+            // видит нас играющими: кнопки на наушниках уходят чужому плееру.
+            // Раньше это делала галочка альтернативного способа в настройках, но
+            // способ включается и не только ею (голосом, из читалки) — поэтому
+            // следим здесь, в единственном месте, где режим и меняется.
+            if (value && !was) {
+                KeepAwake.enableSilenceAuto(appContext, "выбран альтернативный способ озвучки")
+            }
+        }
 
     /** Сетевой движок оказался не в состоянии отдавать файлы — читаем его
      *  голосом напрямую, как в альтернативном способе (29.09.2026).
@@ -180,12 +195,107 @@ class SpeechPlayer(context: Context) {
             field = v
             // Звучит ExoPlayer — громкость у него своя.
             runCatching { filePlayer.setVolume(v) }
+            // 30.09.2026: выше 100% в ПРЯМОМ режиме движок не умеет — добавку
+            // делает наш усилитель (см. [applyDirectBoost]).
+            applyDirectBoost()
             if (wasLoud != (v > 1f)) {
                 // Подстройка перешла через 100%: уже готовые фразы сделаны по
                 // прежнему правилу — не играем их, иначе смена слышна не сразу.
                 dropStaleReply()
             }
         }
+
+    // ---------------- Усилитель прямого звука (30.09.2026) ----------------
+    //
+    // Приём взят у @Voice Aloud Reader: приложение заводит себе звуковой сеанс
+    // (AudioManager.generateAudioSessionId), отдаёт его движку вместе с фразой
+    // (KEY_PARAM_SESSION_ID) и вешает на этот сеанс LoudnessEnhancer.
+    //
+    //  Зачем. Ползунок громкости пускает до 200%. В файловом способе всё, что выше
+    //  100%, домножается в самом звуке при синтезе (см. trimSilence) — работает,
+    //  но требует пересборки готовых фраз. В прямом способе звук играет движок, и
+    //  такого рычага у нас не было вовсе: параметр громкости движку больше единицы
+    //  не передать, и тихий сетевой голос поднять было нечем. Усилитель живёт
+    //  отдельно от звука: он прибавляет громкость уже играющему, и пересборка не
+    //  нужна.
+    //
+    //  Что важно знать: усилитель умеет только ПРИБАВЛЯТЬ (убавляет по-прежнему
+    //  параметр громкости), номер сеанса движок может и проигнорировать — тогда в
+    //  прямом режиме ничего не меняется, вреда нет; на части прошивок эффект
+    //  недоступен — тогда в журнал уходит строка, и мы больше не пробуем.
+
+    /** Номер звукового сеанса, который отдаём движку. 0 — система не дала. */
+    private var boostSession = 0
+    private var boostEffect: LoudnessEnhancer? = null
+
+    /** Усилитель не удался — второй раз не пробуем (в журнале уже сказано). */
+    private var boostBroken = false
+
+    /** Какая добавка уже объявлена в журнале: пишем только на изменение. */
+    private var boostLoggedMb = Int.MIN_VALUE
+
+    /** Сколько добавки просит ползунок, мБ. 0 — не выше 100%, добавка не нужна.
+     *  Берём большее из двух громкостей (книги и реплик): сеанс у нас один. */
+    private fun boostWantedMb(): Int = maxOf(
+        if (volume > 1f) Math.round((volume - 1f) * 2400f) else 0,
+        if (replyVolume > 1f) Math.round((replyVolume - 1f) * 2400f) else 0,
+    )
+
+    private fun boostSessionId(): Int {
+        if (boostSession != 0) return boostSession
+        boostSession = runCatching {
+            (appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+                .generateAudioSessionId()
+        }.getOrDefault(0)
+        return boostSession
+    }
+
+    /** Привести усилитель в соответствие с ползунком. Зовётся на смену громкости
+     *  и перед прямой речью — вызов безвреден и дёшев. */
+    private fun applyDirectBoost() {
+        val want = boostWantedMb()
+        if (want <= 0) {
+            if (boostLoggedMb != Int.MIN_VALUE) {
+                runCatching { boostEffect?.enabled = false }
+                Diag.log(appContext, "sound", "усилитель прямого звука выключен (громкость не выше 100%)")
+                boostLoggedMb = Int.MIN_VALUE
+            }
+            return
+        }
+        if (boostBroken) return
+        val session = boostSessionId()
+        if (session <= 0) {
+            boostBroken = true
+            Diag.log(appContext, "sound", "усилитель прямого звука не вышел: система не дала звуковой сеанс")
+            return
+        }
+        var e = boostEffect
+        if (e == null) {
+            val r = runCatching { LoudnessEnhancer(session) }
+            e = r.getOrNull()
+            if (e == null) {
+                boostBroken = true
+                Diag.log(appContext, "sound", "усилитель прямого звука недоступен: ${r.exceptionOrNull()}")
+                return
+            }
+            boostEffect = e
+            Diag.log(
+                appContext, "sound",
+                "усилитель прямого звука готов: сеанс $session, его же отдаю движку в параметрах speak"
+            )
+        }
+        runCatching {
+            e.setTargetGain(want)
+            e.enabled = true
+        }
+        if (boostLoggedMb != want) {
+            Diag.log(
+                appContext, "sound",
+                "усилитель прямого звука: добавка $want мБ (громкость ${Math.round(volume * 100)}%)"
+            )
+            boostLoggedMb = want
+        }
+    }
 
     private var selectedVoiceName: String? = null
 
@@ -227,7 +337,17 @@ class SpeechPlayer(context: Context) {
 
     // ---------- Пайплайн «синтез в файл → играет плеер» ----------
 
-    private val synthDir = File(appContext.cacheDir, "tts_speech").apply {
+    /** Каталог временных файлов синтеза. У КАЖДОГО экземпляра он свой
+     *  (30.09.2026). Прежде каталог был один на всех, и временный плеер,
+     *  который поднимается в панели «Голос» для пробы голоса, при закрытии
+     *  вычищал его ЦЕЛИКОМ — вместе с заготовками читалки. В журнале Сержа
+     *  (00:47:23) это ровно и видно: он на ходу менял голос реплик, прогремело
+     *  «закрываю плеер», файл, уже отданный плееру чтения, исчез с диска —
+     *  и на нём вышло «Source error» (см. [exoListener.onError]). */
+    private val synthDir = File(
+        File(appContext.cacheDir, "tts_speech"),
+        "p${instanceSeq.getAndIncrement()}",
+    ).apply {
         if (!exists()) mkdirs()
     }
 
@@ -280,6 +400,9 @@ class SpeechPlayer(context: Context) {
 
     /** Сторож «звук не начался»: молчание лечим прямой речью. */
     private var exoStartToken = 0
+
+    /** Сторож «звука нет, а читать должны» (см. [armSoundWatch]). */
+    private var soundWatchToken = 0
 
     /** Последний текст, который попросили говорить. */
     private var currentText: String? = null
@@ -462,6 +585,29 @@ class SpeechPlayer(context: Context) {
             .getStringSet(KEY_DIRECT_SYNTH, emptySet()) ?: emptySet()
     }.getOrDefault(emptySet())
 
+    /** Сколько РАЗНЫХ голосов этого движка уже попали в пометку «файлов не
+     *  отдаёт» (см. [markNetDirect]). Ключ пометки — «движок|голос», поэтому
+     *  считаем по части до разделителя: движок в имени пакета разделителя не
+     *  содержит.
+     *
+     *  30.09.2026 (сборка 227). Зачем считать по движку, а не по паре. У сетевых
+     *  голосов одного движка (MultiTTS с голосами mstrans) файловый путь не
+     *  работает НИ У ОДНОГО: движок просто не умеет synthesizeToFile. А пометка
+     *  ставится на пару «движок + голос», поэтому каждый НОВЫЙ голос снова
+     *  платил за пробу файла — в журнале Сержа 08:12 это ровно 5,1 с тишины
+     *  перед первой фразой, и ещё 5,1 с перед второй, и только потом чтение шло
+     *  без пауз. Два провалившихся голоса — уже приговор движку: третьему
+     *  пробовать нечего. */
+    private fun engineFileFailVoices(): Int {
+        val eng = enginePackage ?: "системный"
+        return directMarks().count { it.substringBefore('|') == eng }
+    }
+
+    /** У движка уже есть голос, не отдавший файл, а голос сам заявляет сеть:
+     *  второй заход за файлом не делаем (см. [onSynthWatchdog]). Ставится в
+     *  [applySpeedAndVoice]. */
+    private var netSuspectEngine = false
+
     /** Запомнить, что файловый путь у этой пары «движок + голос» не работает, и
      *  перейти на прямую речь СРАЗУ, не дожидаясь перезапуска движка. */
     private fun markNetDirect(reason: String) {
@@ -475,6 +621,9 @@ class SpeechPlayer(context: Context) {
         netFileFails = 0
         if (netDirect) return
         netDirect = true
+        // 30.09.2026: переход на прямую речь — тихий поток включаем сами (см.
+        // [altDirect]): без него кнопки на наушниках уходят чужому плееру.
+        KeepAwake.enableSilenceAuto(appContext, "движок файлов не отдаёт — читаю его голосом")
         Diag.log(
             appContext, "tts",
             "движок файлов не отдаёт ($reason) — читаю его голосом напрямую, " +
@@ -664,7 +813,8 @@ class SpeechPlayer(context: Context) {
 
     init {
         start(null)
-        // Старые временные файлы от прошлых запусков — почистим при старте.
+        // Свои временные файлы от прошлого запуска процесса (номер экземпляра
+        // повторяется) — чистим при старте. Чужие каталоги не трогаем.
         runCatching { synthDir.listFiles()?.forEach { it.delete() } }
     }
 
@@ -755,6 +905,12 @@ class SpeechPlayer(context: Context) {
     var replySpeed: Float = 1f
     var replyPitch: Float = 1f
     var replyVolume: Float = 1f
+        set(value) {
+            field = value.coerceIn(0f, 2f)
+            // 30.09.2026: у реплик громкость выше 100% тоже поднимает усилитель
+            // прямого звука (сеанс у нас один на оба голоса).
+            applyDirectBoost()
+        }
 
     /** Файлы, сделанные движком реплик: по имени файла видно, какую громкость
      *  ставить в момент звука. Набор подчищаем, когда разрастётся, — имена
@@ -1256,12 +1412,41 @@ class SpeechPlayer(context: Context) {
         netSynth = netDeclared || marked
         // Файловый путь у этой пары «движок + голос» уже проваливался — читаем
         // напрямую с самого начала (см. [netDirect]).
-        netDirect = directMarks().contains(synthMark())
+        //
+        // 30.09.2026 (сборка 227): одной пары для этого мало — у сетевых голосов
+        // одного движка файлы не приходят НИ У ОДНОГО (см.
+        // [engineFileFailVoices]). Два провалившихся сетевых голоса — приговор
+        // движку: все его сетевые голоса читаем напрямую, без пробы файла.
+        // Локальные голоса не задевает — заявленный сетевой нужен и здесь
+        // ([netDeclared]); у Google, чьи сетевые голоса файлы отдают, провалов не
+        // бывает вовсе, и пометки движка у него не появится.
+        val engineFails = engineFileFailVoices()
+        val engineNoFiles = engineFails >= ENGINE_NO_FILES_VOICES
+        val pairMarked = directMarks().contains(synthMark())
+        val wasDirect = directMode
+        netDirect = pairMarked || (netDeclared && engineNoFiles)
+        // Прямой режим включился на этом применении голоса — тихий поток встаёт
+        // вместе с ним (30.09.2026, см. [altDirect]).
+        if (directMode && !wasDirect) {
+            KeepAwake.enableSilenceAuto(
+                appContext,
+                if (pairMarked) "этот движок с этим голосом файлов не отдаёт"
+                else "движок не отдаёт файлы ни одним сетевым голосом",
+            )
+        }
+        // Голос сам заявил сеть, у движка уже есть провал — второй раз за файлом
+        // не ходим (см. [onSynthWatchdog]).
+        netSuspectEngine = netDeclared && !netDirect && engineFails >= 1
         if (netDirect && !was) {
             Diag.log(
                 appContext, "tts",
-                "этот движок с этим голосом файлов не отдаёт (помечено раньше) — " +
-                    "читаю напрямую, как в альтернативном способе"
+                if (pairMarked) {
+                    "этот движок с этим голосом файлов не отдаёт (помечено раньше) — " +
+                        "читаю напрямую, как в альтернативном способе"
+                } else {
+                    "движок ${enginePackage ?: "системный"} файлов не отдаёт ни одним " +
+                        "сетевым голосом (провалов $engineFails) — файл не заказываю вовсе"
+                }
             )
         }
         if (netSynth != was) {
@@ -1469,20 +1654,34 @@ class SpeechPlayer(context: Context) {
                 start(enginePackage)
                 return
             }
-            synthMisses[text] = 1
-            // 29.09.2026: заявок в работе несколько, и сторож срабатывает у каждой
-            // своей. Переспрашиваем только ту фразу, которую чтение ждёт: у
-            // заготовки впрок ждать некому, её закажут заново обычным порядком —
-            // и врать в журнале «переспрашиваю» про неё не надо.
-            if (wanted) {
-                Diag.log(appContext, "tts",
-                    "синтез молчит $waited с (${text.take(40)}…) — переспрашиваю фразу заново")
-                synthToFile(text)
+            // 30.09.2026 (сборка 227): у движка УЖЕ есть голос, который файл не
+            // отдал, а этот голос сам заявляет сеть — второго захода за файлом не
+            // делаем. В журнале Сержа проба файла стоила 5,1 с тишины на каждой из
+            // первых двух фраз нового голоса; здесь остаётся один срок (2,5 с), и
+            // фраза звучит напрямую. Google не задевает: у него провалов нет
+            // вовсе, и подозрительным движок не станет.
+            if (netSuspectEngine) {
+                Diag.log(
+                    appContext, "tts",
+                    "синтез молчит $waited с (${text.take(40)}…) — у движка файл уже " +
+                        "не проходил, второй раз не прошу: читаю напрямую",
+                )
             } else {
-                Diag.log(appContext, "tts",
-                    "заготовка впрок не доспела за $waited с (${text.take(40)}…) — закажу её снова")
+                synthMisses[text] = 1
+                // 29.09.2026: заявок в работе несколько, и сторож срабатывает у
+                // каждой своей. Переспрашиваем только ту фразу, которую чтение
+                // ждёт: у заготовки впрок ждать некому, её закажут заново обычным
+                // порядком — и врать в журнале «переспрашиваю» про неё не надо.
+                if (wanted) {
+                    Diag.log(appContext, "tts",
+                        "синтез молчит $waited с (${text.take(40)}…) — переспрашиваю фразу заново")
+                    synthToFile(text)
+                } else {
+                    Diag.log(appContext, "tts",
+                        "заготовка впрок не доспела за $waited с (${text.take(40)}…) — закажу её снова")
+                }
+                return
             }
-            return
         }
         // Перезапуск движка — мера для ЛОКАЛЬНОГО движка, потерявшего заявку.
         // Сетевому он вредит: заявка в пути выбрасывается, и мы теряем то, что
@@ -1505,8 +1704,11 @@ class SpeechPlayer(context: Context) {
             )
             // Файловый путь у этого движка не работает — считаем промахи подряд и
             // после второго переходим на прямую речь совсем (см. [markNetDirect]).
+            // Сетевому голосу на движке, где файл уже не проходил, хватает и
+            // одного промаха: второй заход мы и не делали (см.
+            // [netSuspectEngine]).
             netFileFails++
-            if (netFileFails >= DIRECT_MODE_HITS) {
+            if (netFileFails >= DIRECT_MODE_HITS || netSuspectEngine) {
                 markNetDirect("не отдал файл $netFileFails раз подряд")
             }
         } else {
@@ -1633,6 +1835,8 @@ class SpeechPlayer(context: Context) {
                 appContext, "tts",
                 "прямая речь молчит ${fuse / 1000} с — пропускаю фразу, чтение идёт дальше"
             )
+            // 30.09.2026: заминка прямой речи — в память окна «Не засыпать».
+            StallLog.record(appContext, "прямая речь молчала ${fuse / 1000} с")
             retriesInRow = 0
             onDone?.invoke()
         }, fuse)
@@ -1715,31 +1919,61 @@ class SpeechPlayer(context: Context) {
      *  фразами одной роли: дошли до смены роли — не заказываем дальше, ждём,
      *  пока текущая доиграет, и следующую отдаём уже другому движку. Внутри
      *  реплики и внутри повествования стык остаётся бесшовным, а на смене роли
-     *  слышна короткая пауза — цена двух движков в этом режиме. */
+     *  слышна короткая пауза — цена двух движков в этом режиме.
+     *
+     *  30.09.2026: когда голос реплик выбран в ТОМ ЖЕ движке, что книга, второго
+     *  экземпляра нет — основной берётся в долг под реплику, как в файловом
+     *  способе (см. [borrowMainForReply]). Роли работают и здесь. */
     private fun queueDirect(text: String): Boolean {
         if (tts == null || !ready) return false
         directWaitReply = false
-        val wantReply = replyOn && !replyBroken && Roles.looksReplica(text)
+        // 30.09.2026 (Серж: «в настройках написано, что роли здесь не работают,
+        // а они работают»): в этом способе реплики читаются ТАК ЖЕ, как в
+        // файловом. Свой экземпляр нужен, только когда голос реплик живёт в
+        // другом движке; когда движок один, берём его в долг под реплику —
+        // ровно как это делает synthToFile (см. [borrowMainForReply]). До этой
+        // правки реплика в таком случае уходила основному голосу, и роли в
+        // альтернативном способе пропадали.
+        val own = replyNeedsOwnInstance()
+        val wantReply = replyOn && Roles.looksReplica(text) && (!own || !replyBroken)
         // 27.09.2026: движок реплик ещё поднимается — реплику основному голосу
         // не отдаём (это слышно), а просто ждём его: заказ повторим сами.
-        if (wantReply && waitForReply(text)) {
+        if (wantReply && own && waitForReply(text)) {
             directWaitReply = true
             return false
         }
-        val rt = if (wantReply) replyInstance() else null
-        val role = if (rt != null) Pending.Role.REPLY else Pending.Role.MAIN
+        forgetReplyWait()
+        val rt = if (wantReply && own) replyInstance() else null
+        val sameEngine = wantReply && !own
+        val role = if (rt != null || sameEngine) Pending.Role.REPLY else Pending.Role.MAIN
         val lastRole = directQueue.lastOrNull()?.let { pending[it]?.role }
         if (lastRole != null && lastRole != role) return false
         val t = rt ?: tts ?: return false
+        val borrowed = role == Pending.Role.REPLY && sameEngine
+        if (role == Pending.Role.REPLY) {
+            if (borrowed) borrowMainForReply(t) else applyReplyParams(t)
+        }
         val idle = directQueue.isEmpty()
         val id = reqSeq++
         pending[id] = Pending(Pending.Kind.DIRECT, text, null, role = role)
-        val vol = (if (role == Pending.Role.REPLY) replyVolume else volume).coerceIn(0f, 1f)
+        val baseVol = if (role == Pending.Role.REPLY) replyVolume else volume
+        val vol = baseVol.coerceIn(0f, 1f)
         val params = android.os.Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, vol)
+            // 30.09.2026: выше 100% движку не заказать — добавку делает наш
+            // усилитель, и ему нужен тот же звуковой сеанс (см. [applyDirectBoost]).
+            // Ниже 100% сеанс не передаём вовсе: пусть движок работает как раньше.
+            if (baseVol > 1f) {
+                applyDirectBoost()
+                val s = boostSessionId()
+                if (s > 0) putInt(TextToSpeech.Engine.KEY_PARAM_SESSION_ID, s)
+            }
         }
         var r = runCatching { t.speak(Roles.stripped(text), TextToSpeech.QUEUE_ADD, params, id.toString()) }
             .getOrDefault(TextToSpeech.ERROR)
+        // Голос реплик брали у основного экземпляра в долг — возвращаем сразу:
+        // движок запоминает голос вместе с заявкой (как и в файловом способе).
+        if (borrowed) restoreMainParams(t)
         if (r != TextToSpeech.SUCCESS && role == Pending.Role.REPLY) {
             // Второй движок отказался — фразу читает основной, порядок не рвём.
             val main = tts ?: return false
@@ -2664,6 +2898,7 @@ class SpeechPlayer(context: Context) {
             startPositionMs = positionMs,
         )
         armExoStartWatch(text)
+        armSoundWatch()
         exoTopUp()
     }
 
@@ -2677,6 +2912,9 @@ class SpeechPlayer(context: Context) {
         // фраза уже лежала в списке (подготовили заранее) — плеер пускали без
         // слушателя, и «фраза доиграла» до чтения не доходила: чтение вставало.
         filePlayer.setListener(exoListener)
+        // 30.09.2026: вместе с фразой взводим сторож звука — если она так и не
+        // зазвучит (мёртвый список плеера после ошибки файла), чтение не замолчит.
+        armSoundWatch()
         // 1) эта фраза звучит прямо сейчас
         if (playingText == text && exoFilePlayingSafe()) {
             Diag.log(appContext, "sound", "exo: эта фраза уже звучит — очередь не трогаю")
@@ -2868,9 +3106,70 @@ class SpeechPlayer(context: Context) {
             if (token != exoStartToken) return@postDelayed
             if (!exoFilePlayingSafe()) {
                 Diag.log(appContext, "sound", "exo: звук не начался — говорю фразу напрямую")
+                // 30.09.2026: заминка — в память окна «Не засыпать» (StallLog).
+                StallLog.record(appContext, "фраза не зазвучала за ${PLAY_STALL_MS / 1000} с")
                 fallbackDirect(text)
             }
         }, PLAY_STALL_MS)
+    }
+
+    /** Сторож «звука нет, а читать должны».
+     *
+     *  30.09.2026, журнал 00:47:29 (жалоба Сержа «остановилось чтение»): после
+     *  ошибки файла список плеера оставался мёртвым — в нём шесть фраз, часть уже
+     *  удалена, — и новые в него не дописывались: очередь заготовок ждала места
+     *  (см. [exoTopUp]), места не появлялось, «фраза доиграла» не приходила.
+     *  Снаружи это вечная тишина, а приложение считает, что читает («power:
+     *  бьюсь: чтение идёт»). Сторож взводится на каждое обращение чтения и
+     *  снимается, когда фраза зазвучала: если за [SOUND_STALL_MS] ни одна не
+     *  началась, а фразы есть — выбрасываем список и играем следующую готовую
+     *  (или собираем заново). Пока идёт синтез, сторож молчит: это нормальное
+     *  ожидание, а не тупик. */
+    private fun armSoundWatch() {
+        val token = ++soundWatchToken
+        main.postDelayed({
+            if (token != soundWatchToken) return@postDelayed
+            if (exoFilePlayingSafe()) {
+                armSoundWatch()
+                return@postDelayed
+            }
+            if (pending.values.any { it.kind == Pending.Kind.FILE }) {
+                // Синтез в работе — ждём его, тупика нет.
+                armSoundWatch()
+                return@postDelayed
+            }
+            val next = readyQueue.firstOrNull()
+            if (next == null && exoPending.isEmpty()) {
+                // Просить нечего: чтение встало или на паузе — сторож не нужен.
+                return@postDelayed
+            }
+            Diag.log(
+                appContext, "sound",
+                "звука нет ${SOUND_STALL_MS / 1000} с, а фразы есть (готовых ${readyQueue.size}, " +
+                    "в списке плеера ${exoPending.size}) — выбрасываю список и играю дальше"
+            )
+            // 30.09.2026: самая честная заминка «читаем, а звука нет» — в память
+            // окна «Не засыпать» (StallLog): по ней видно, часто ли это вообще.
+            StallLog.record(appContext, "звука не было ${SOUND_STALL_MS / 1000} с, хотя фразы были")
+            exoClearAll()
+            if (next != null) {
+                readyQueue.removeFirst()
+                awaitingPlayText = null
+                exoPlay(next.text, next.file, next.rate)
+            } else {
+                val t = awaitingPlayText ?: currentText
+                if (!t.isNullOrBlank()) {
+                    awaitingPlayText = t
+                    synthToFile(t)
+                }
+            }
+            armSoundWatch()
+        }, SOUND_STALL_MS)
+    }
+
+    /** Снять сторож звука: фраза зазвучала или чтение встало. */
+    private fun dropSoundWatch() {
+        soundWatchToken++
     }
 
     private fun exoFilePlayingSafe(): Boolean = runCatching { filePlayer.isPlaying }.getOrDefault(false)
@@ -2880,6 +3179,7 @@ class SpeechPlayer(context: Context) {
     private val exoListener = object : FilePlayback.Listener {
         override fun onPhraseStart(index: Int, item: FilePlayback.Item) {
             exoStartToken++ // звук пошёл — сторож старта больше не нужен
+            dropSoundWatch() // и сторож «звука нет» тоже: фраза зазвучала
             playingText = item.text
             playingFile = item.file
             // Громкость у реплик своя: файл мог прийти от второго движка.
@@ -2944,9 +3244,29 @@ class SpeechPlayer(context: Context) {
         }
 
         override fun onError(item: FilePlayback.Item?, message: String) {
+            val text = item?.text ?: currentText
             item?.file?.delete()
-            Diag.log(appContext, "sound", "exo: своё не заиграло ($message) — говорю напрямую")
-            fallbackDirect(item?.text ?: currentText)
+            Diag.log(
+                appContext, "sound",
+                "exo: файл не заиграл ($message) — чищу список и собираю фразу заново «${FilePlayback.brief(text ?: "")}»"
+            )
+            // 30.09.2026 (журнал 00:47:29, жалоба Сержа «остановилось чтение»):
+            // прежде здесь произносили фразу НАПРЯМУЮ движком, а список плеера
+            // оставляли как был — с уже удалёнными файлами. Дальше очередь
+            // заготовок ждала в нём места, места не появлялось, «фраза доиграла»
+            // не приходила, и чтение замолкало насовсем. Плюс та прямая речь идёт
+            // своим уровнем и звучит громче выровненных файлов — Серж услышал это
+            // как «громкость скакнула вверх». Теперь чистим состояние плеера
+            // целиком и собираем ту же фразу заново — обычным путём, через файл.
+            exoClearAll()
+            if (text.isNullOrBlank()) {
+                onDone?.invoke()
+                return
+            }
+            awaitingPlayText = text
+            synthToFile(text)
+            armExoStartWatch(text)
+            armSoundWatch()
         }
     }
 
@@ -2978,6 +3298,40 @@ class SpeechPlayer(context: Context) {
         // читает старым». Список чистим целиком, вместе со звучащей фразой: её
         // чтение перечитает уже новым голосом ([restartAfterSwitch]).
         exoClearAll()
+        // 30.09.2026 (сборка 228). В ПРЯМОМ чтении файлов нет вовсе, и чистка
+        // списка плеера ничего не даёт: звук идёт из очереди САМОГО движка, и она
+        // продолжала играть прежним голосом. В журнале Сержа 11:38:02 так и
+        // вышло: голос применился, читалка попросила фразу заново, а мы ответили
+        // «эта фраза уже звучит — очередь не трогаю», и старый голос дочитывал
+        // текущую фразу и ещё две заготовки. Серж: «дочитывает кусочек, и потом
+        // только перескакивает — нужно, чтобы мгновенно». Теперь очередь движка
+        // обрывается тут же.
+        cutDirectNow("смена голоса на ходу")
+    }
+
+    /** Оборвать прямую речь прямо сейчас: движок перестаёт говорить, его очередь
+     *  и наши заявки выбрасываются (30.09.2026, сборка 228).
+     *
+     *  Зачем отдельно от [stop]. [stop] — это пауза: он ещё и отпускает плеер,
+     *  снимает надзоры, чистит сохранённую паузой фразу. Здесь нужно ровно одно:
+     *  чтобы движок замолчал и его очередь не доигрывала прежним голосом, пока
+     *  читалка заказывает ту же фразу заново. */
+    private fun cutDirectNow(reason: String) {
+        if (!directMode) return
+        val wasQueue = directQueue.size
+        val wasSpeaking = directSpeakingText != null
+        if (wasQueue == 0 && !wasSpeaking) return
+        flushDirectQueue(reason)
+        // Движок мог говорить и без нашей очереди (заявка уже доигрывала):
+        // гасим его самого, очередь у него при этом выметается целиком.
+        runCatching { tts?.stop() }
+        runCatching { replyTts?.stop() }
+        directSpeakingText = null
+        directAskedId = null
+        Diag.log(
+            appContext, "tts",
+            "прямая речь оборвана ($reason): в очереди было $wasQueue, звучала=$wasSpeaking",
+        )
     }
 
     /** Погасить список плеера целиком: ничего не остаётся ни звучать, ни ждать. */
@@ -3022,6 +3376,7 @@ class SpeechPlayer(context: Context) {
 
     /** Отменить текущее проигрывание. onDone НЕ вызывается. */
     private fun releaseMedia() {
+        dropSoundWatch() // чтение встало — сторож «звука нет» больше не нужен
         playingText = null
         playingFile = null
         // У ExoPlayer отпускаем его список целиком.
@@ -3268,13 +3623,23 @@ class SpeechPlayer(context: Context) {
         stop()
         Diag.log(appContext, "tts", "закрываю плеер: ${replyCountersLine()}")
         dropReplyEngine()
+        // 30.09.2026: усилитель прямого звука — отпускаем вместе с плеером.
+        runCatching { boostEffect?.release() }
+        boostEffect = null
         runCatching { tts?.shutdown() }
         tts = null
         ready = false
-        runCatching { synthDir.listFiles()?.forEach { it.delete() } }
+        // Чистим ТОЛЬКО свой каталог: общий вычищал бы заготовки соседнего
+        // экземпляра (например, читалки, если закрывается пробный плеер настроек).
+        runCatching { synthDir.deleteRecursively() }
     }
 
     companion object {
+        /** Номер экземпляра: по нему у каждого свой каталог временных файлов
+         *  (см. [synthDir]). 30.09.2026 — чтобы временный плеер настроек не мог
+         *  вычистить заготовки читалки. */
+        private val instanceSeq = java.util.concurrent.atomic.AtomicInteger(0)
+
         /** Сторож молчания (msg4077): сколько ждём движок на синтез одной фразы.
          *  msg5309: срок сокращён с 15 с до 6. 23.09.2026: и 6 с оказалось много
          *  (просьба Сергея «давай укорачиваем») — срок больше не одно число, а
@@ -3356,6 +3721,15 @@ class SpeechPlayer(context: Context) {
          *  промах случается у любого движка. */
         private const val DIRECT_MODE_HITS = 2
 
+        /** Сколько РАЗНЫХ сетевых голосов одного движка должны не отдать файл,
+         *  чтобы считать бесполезной саму пробу файла для ВСЕХ его сетевых
+         *  голосов (30.09.2026, сборка 227, см. [engineFileFailVoices]).
+         *  Два — как и [DIRECT_MODE_HITS]: один промах бывает у любого движка, а
+         *  два разных голоса сразу означают, что движок файлов не умеет вовсе
+         *  (MultiTTS: ни один его сетевой голос файл не отдаёт, и каждый новый
+         *  голос стоил 5 секунд тишины в начале чтения). */
+        private const val ENGINE_NO_FILES_VOICES = 2
+
         /** Сколько сроков ожидания даём движку реплик, прежде чем бросить роли до
          *  конца сеанса (29.09.2026): один промах — это просто медленный сетевой
          *  голос, из-за него роли терять нельзя. */
@@ -3370,6 +3744,11 @@ class SpeechPlayer(context: Context) {
          *  секунды; если за пять секунд не заиграл — не заиграет, и выгоднее
          *  сразу перейти к прямой речи, чем держать тишину. */
         private const val PLAY_STALL_MS = 5_000L
+
+    /** Сколько ждать звука, когда чтение попросило фразу (см. [armSoundWatch]).
+     *  Больше, чем [PLAY_STALL_MS]: там речь о «не началось», а здесь — о полной
+     *  тишине, и спешить некуда: самая длинная фраза синтезируется дольше. */
+    private const val SOUND_STALL_MS = 8_000L
 
         /** Сторож замершей позиции у ExoPlayer: как часто проверяем и сколько
          *  проверок подряд должны увидеть одинаковую позицию, чтобы счесть фразу

@@ -1,10 +1,12 @@
 package com.cuber.bookvoice
 
 import android.content.Intent
+import android.os.Build
 import android.view.ViewGroup
 import android.widget.TextView
 import com.cuber.bookvoice.databinding.ActivitySleepBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import java.util.Locale
 
 /**
  * Окно «Не засыпать» (msg4705/4709) — помощник для прошивок, которые морозят
@@ -136,6 +138,65 @@ class SleepWindowActivity : RowsActivity() {
             onClick = null,
         )
 
+        // ---------------- Расширенная проверка фона (30.09.2026) ----------------
+        // Взято у @Voice Aloud Reader: их окно отвечает на вопрос «почему чтение
+        // встало» и подсказывает дорогу по марке телефона. Здесь — то, чего у нас
+        // не было: экономия энергии, жёсткий режим ожидания, запрет фона для сети,
+        // след последнего выхода процесса и наши собственные заминки звука.
+        addHint(getString(R.string.sleep_checks_hint))
+        val saver = SleepGuard.powerSaveMode(this)
+        addRow(
+            getString(if (saver) R.string.sleep_saver_on else R.string.sleep_saver_off),
+            null,
+            onClick = null,
+        )
+        if (SleepGuard.lowPowerStandbySupported()) {
+            val standby = SleepGuard.lowPowerStandby(this)
+            addRow(
+                getString(if (standby) R.string.sleep_standby_on else R.string.sleep_standby_off),
+                null,
+                onClick = null,
+            )
+        }
+        val data = SleepGuard.dataSaver(this)
+        addRow(
+            getString(
+                when (data) {
+                    SleepGuard.DATA_BLOCKED -> R.string.sleep_data_off
+                    SleepGuard.DATA_WHITELISTED -> R.string.sleep_data_white
+                    else -> R.string.sleep_data_on
+                }
+            ),
+            null,
+            onClick = null,
+        )
+        // След прошлого запуска: причина от системы плюс наша отметка «читали».
+        // Вдвоём они отвечают, оборвала ли нас система и было ли приложение занято
+        // чтением (см. KeepAwake.wasReadingAtLastExit).
+        SleepGuard.lastExit(this)?.let { e ->
+            val when_ = java.text.SimpleDateFormat("dd.MM в HH:mm", java.util.Locale.US)
+                .format(java.util.Date(e.timeMs))
+            val reading = KeepAwake.wasReadingAtLastExit(this)
+            addRow(
+                getString(
+                    when {
+                        e.bySystem && reading -> R.string.sleep_exit_reading
+                        e.bySystem -> R.string.sleep_exit_killed
+                        else -> R.string.sleep_exit_closed
+                    },
+                    e.reason, when_,
+                ),
+                null,
+                onClick = null,
+            )
+        }
+        // Наши собственные заминки: звук не пошёл, хотя чтение его ждало.
+        StallLog.summary(this)?.let { addRow(it, null, onClick = null) }
+        addHint(getString(vendorHintRes()))
+        // В журнал — та же картина одной строкой: присланный лог тогда сам
+        // рассказывает про батарею, сеть и прошлый выход, без расспросов.
+        Diag.log(this, "power", SleepGuard.stateLine(this))
+
         addRow(
             getString(R.string.sleep_ask_title),
             getString(R.string.sleep_ask_hint),
@@ -164,6 +225,24 @@ class SleepWindowActivity : RowsActivity() {
     }
 
     // ---------------- Действия ----------------
+
+    /** Подсказка по марке телефона: где именно на этой прошивке живут запреты
+     *  фоновой работы. Словами, а не кнопкой: путей у марок много и они меняются
+     *  от версии к версии, а экран настроек приложения открывается строкой выше.
+     *  (Приём взят у @Voice Aloud Reader — у них это тоже текстом.) */
+    private fun vendorHintRes(): Int {
+        val m = (Build.MANUFACTURER ?: "").lowercase(Locale.US)
+        return when {
+            m.contains("samsung") -> R.string.sleep_vendor_samsung
+            m.contains("xiaomi") || m.contains("redmi") || m.contains("poco") ->
+                R.string.sleep_vendor_xiaomi
+            m.contains("huawei") || m.contains("honor") -> R.string.sleep_vendor_huawei
+            m.contains("oppo") || m.contains("realme") || m.contains("oneplus") ||
+                m.contains("oplus") -> R.string.sleep_vendor_oppo
+            m.contains("vivo") || m.contains("iqoo") -> R.string.sleep_vendor_vivo
+            else -> R.string.sleep_vendor_other
+        }
+    }
 
     /** Системный запрос «не ограничивать батарею». Уже разрешено — говорим об
      *  этом и никуда не уходим: окна запроса система в этом случае не покажет, и

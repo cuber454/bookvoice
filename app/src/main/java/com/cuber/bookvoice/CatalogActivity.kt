@@ -25,7 +25,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
-import android.widget.CheckBox
+import androidx.appcompat.widget.SwitchCompat
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -914,7 +914,7 @@ class CatalogActivity(private val act: SectionActivity) {
         }
         // Незрячему полезно уметь вернуться в поле и перечитать набранное:
         // у скрытого пароля скринридер читает «точка», у показанного — буквы.
-        val show = CheckBox(act).apply {
+        val show = SwitchCompat(act).apply {
             setText(R.string.catalog_login_show)
             setOnCheckedChangeListener { _, on ->
                 val variation = if (on) InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD

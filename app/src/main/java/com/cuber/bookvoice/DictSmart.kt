@@ -41,9 +41,15 @@ object DictSmart {
     /** Сколько слов перебираем за одну попытку. */
     private const val CANDIDATES = 12
 
+    /** До какого предела берём обобщение слова: 4 раза больше строк, чем было, и
+     *  не больше 200 строк вообще. Это второй заслон после [isAbbrev]: правило не
+     *  должно расползаться на строки другой породы. */
+    private const val MAX_GROWTH = 4
+    private const val MAX_LINES = 200
+
     /** Ищем похожие строки по образцу [sample] и собираем правило для книги. */
     fun find(book: BookDocument, bookName: String, sample: String): Found? {
-        val text = sample.trim()
+        val text = stripDash(sample.trim())
         if (text.isEmpty()) return null
         val sentences = allSentences(book)
         if (sentences.isEmpty()) return null
@@ -64,11 +70,12 @@ object DictSmart {
             var tried = 0
             for (i in parts.indices) {
                 if (isWildcard(parts[i]) || parts[i].length < 3) continue
+                if (isAbbrev(parts[i])) continue
                 if (tried++ >= CANDIDATES) break
                 val saved = parts[i]
                 parts[i] = WILD
                 val cur = matches(sentences, parts)
-                if (cur.size > bestMatches.size) {
+                if (cur.size > bestMatches.size && allowGeneralize(best.size, cur.size)) {
                     bestIndex = i
                     bestMatches = cur
                 }
@@ -99,7 +106,42 @@ object DictSmart {
 
     private const val WILD = "\u0000"
 
+    /** Начало образца: любые пробелы и, если строка была репликой, ведущее тире.
+     *  Тире необязательное: в книге строка записана как «— Ред.», а словарю при
+     *  чтении реплика достаётся УЖЕ без тире ([ReaderEngine.dictText] отрезает
+     *  его, чтобы правило не превратило реплику в обычную речь). Образец,
+     *  собранный с тире внутри, не совпадал ни с чем — ровно на этом «Убрать
+     *  такие строки» для пометок вида «— Ред.» не работало (30.09.2026). */
+    private const val START = "^\\s*(?:[—–−]\\s*)?"
+
     private fun isWildcard(part: String) = part == WILD
+
+    /** Сокращение — слово с точкой на конце («Ред.», «г.», «т.е.»). Обобщать
+     *  такое нельзя: в строке оно не «меняющееся слово», а сам её смысл.
+     *  Проверено на книге Сержа 30.09.2026: он показал строку «— Ред.» (пометка
+     *  редактора), и «Ред.» стало образцом «любое одно слово» — под него подошло
+     *  117 строк, то есть правило убрало бы из чтения ВСЕ однocловные реплики:
+     *  «— Да.», «— Нет.», «— Что?». Серж это правило уже сохранил (журнал
+     *  01:22:50), поэтому в сборке 224 оно снято, а обобщение сокращений
+     *  запрещено. */
+    private fun isAbbrev(part: String): Boolean =
+        part.length > 1 && part.endsWith(".")
+
+    /** Убрать ведущее тире реплики из образца: обобщать и привязывать его к
+     *  строке незачем — оно не часть текста, а знак реплики. */
+    private fun stripDash(s: String): String {
+        val t = s.trimStart(' ', '\t')
+        if (t.isEmpty()) return t
+        if (t[0] != '—' && t[0] != '–' && t[0] != '−') return t
+        return t.substring(1).trimStart(' ', '\t')
+    }
+
+    /** Брать ли обобщение слова: [was] строк подходило образцу до него, [now] —
+     *  после. Слишком широкий образец — уже не «такие же строки»: «— Ред.»
+     *  обобщалось в «любое слово» и правило убирало из чтения все однocловные
+     *  реплики книги. */
+    private fun allowGeneralize(was: Int, now: Int): Boolean =
+        now <= MAX_LINES && now <= (was * MAX_GROWTH).coerceAtLeast(was + 2)
 
     private fun allSentences(book: BookDocument): List<String> =
         book.chapters.flatMap { ch -> ch.sentences.map { it.text.trim() } }
@@ -122,7 +164,7 @@ object DictSmart {
     /** Собрать образец: слова через «любые пробелы», буквы экранируем как есть,
      *  а вся фраза привязана к началу и концу строки. */
     private fun build(parts: List<String>): String {
-        val sb = StringBuilder("^\\s*")
+        val sb = StringBuilder(START)
         for ((i, part) in parts.withIndex()) {
             if (i > 0) sb.append("\\s+")
             sb.append(if (isWildcard(part)) "\\S+" else escape(part))
@@ -144,7 +186,8 @@ object DictSmart {
 
     /** Строка для списка: то же правило, но короче — без служебных знаков. */
     fun humanLine(pattern: String): String =
-        pattern.replace("^\\s*", "").replace("\\s*$", "")
+        pattern.removePrefix(START)
+            .removeSuffix("\\s*$")
             .replace("\\s+", " ")
             .replace("\\S+", "…")
             .replace("\\", "")

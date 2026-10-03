@@ -291,9 +291,10 @@ internal object ReaderEngine {
             }
             AudioManager.AUDIOFOCUS_GAIN -> main.post {
                 haveAudioFocus = true
-                if (pausedByFocusLoss && book != null && !playing &&
-                    prefs.getBoolean(MainActivity.KEY_AUTO_RESUME, true)
-                ) {
+                // 30.09.2026: настройки «продолжать после чужого плеера» больше
+                // нет — возврат звука продолжает чтение всегда (Серж: «сделать
+                // чтобы было включено и всё»).
+                if (pausedByFocusLoss && book != null && !playing) {
                     pausedByFocusLoss = false
                     Diag.log(ctx, "focus", "возврат фокуса — продолжаю чтение сам")
                     requestStart()
@@ -1012,14 +1013,21 @@ internal object ReaderEngine {
     }
 
     /** Текст, который будет реально озвучен на позиции (ch, s). На первом
-     *  предложении главы спереди добавляется её название (если есть и в
-     *  настройках включено «Озвучивать название главы в начале»). Название,
-     *  дословно совпадающее с первым предложением, не дублируем. */
+     *  предложении главы спереди добавляется её название. Название, дословно
+     *  совпадающее с первым предложением, не дублируем.
+     *
+     *  30.09.2026: галочки «Озвучивать название главы в начале» больше нет —
+     *  Серж: «пускай всегда включена, а галочку убрать». Заголовок главы из
+     *  текста вынимает разбор (в FB2 это <title> секции, в DOCX, ODT и HTML —
+     *  абзац-заголовок), поэтому без этой приклейки на стыке глав в чтении не
+     *  звучало бы ничего: движок молча переходил бы к первой фразе следующей
+     *  главы. На экране название и так стоит строкой-заголовком, в оглавлении
+     *  оно есть, а после прыжка его называет объявление места. */
     private fun spokenText(ch: Int, s: Int): String? {
         val bk = book ?: return null
         val cur = bk.chapters.getOrNull(ch)?.sentences ?: return null
         val text = cur.getOrNull(s)?.text ?: return null
-        if (s != 0 || !prefs.getBoolean(MainActivity.KEY_SAY_CHAPTER_START, true)) return text
+        if (s != 0) return text
         // 0.4.71: название, которое придумали мы сами («Стр. N» у PDF без
         // закладок), вслух не читаем — иначе на каждой странице книги звучит
         // «страница один», «страница два». В оглавлении оно остаётся: по нему
@@ -1039,6 +1047,9 @@ internal object ReaderEngine {
         // или дыра в разборе не гоняли нас по кругу.
         var guard = 0
         while (t == null && guard++ < 8) {
+            val atCh = chapterIdx
+            val atS = sentenceIdx
+            val raw = chunkText(atCh, atS, spokenUnits)
             if (!advanceUnits(spokenUnits.coerceAtLeast(1))) {
                 // Та же остановка, что и в onUtteranceDone: если это настоящий
                 // конец книги — скажем об этом, а не просто замолчим.
@@ -1049,6 +1060,17 @@ internal object ReaderEngine {
             }
             spokenUnits = chunkSpan(chapterIdx, sentenceIdx)
             t = dictText(chunkText(chapterIdx, sentenceIdx, spokenUnits))
+            // 30.09.2026: пишем, ПОЧЕМУ фраза не прозвучала. Без этой строки
+            // «убрал строку правилом — а она всё равно читается / пропала» не
+            // разобрать: у словаря свой выключатель, у правила — своя книга.
+            Diag.log(
+                ctx, "dict",
+                if (raw != null) {
+                    "словарь убрал фразу: глава $atCh, предл. $atS «${raw.replace(Regex("\\s+"), " ").take(40)}»"
+                } else {
+                    "фразу пропускаю (одни знаки): глава $atCh, предл. $atS"
+                },
+            )
         }
         if (t == null) return
         // 30.09.2026: в журнал — ДЛЯ КАКОГО предложения собрана фраза и с чего она
@@ -1236,8 +1258,14 @@ internal object ReaderEngine {
         val t = src.trimStart()
         if (t.isNotEmpty() && (t[0] == '—' || t[0] == '–' || t[0] == '−')) {
             val cut = src.length - t.length + 1
-            val out = src.substring(0, cut) + Dict.apply(ctx, src.substring(cut), engine, book)
-            return out.ifBlank { null }
+            val body = Dict.apply(ctx, src.substring(cut), engine, book)
+            // 30.09.2026: словарь убрал САМУ реплику (книжное правило вида
+            // «убрать такие строки») — тогда тире остаётся одно, и движок получал
+            // фразу из одного знака: в журнале «фраза собрана … «—»». Речи в нём
+            // нет: отдаём null, чтобы чтение пропустило фразу целиком. Нашлось на
+            // живой проверке правила для строк «— Ред.».
+            if (body.isBlank()) return null
+            return (src.substring(0, cut) + body).ifBlank { null }
         }
         // Пустой результат означает, что фразу убрал словарь (например книжное
         // правило выкинуло строку-источник вроде «1995 (с лекций МГУ)»). Отдаём

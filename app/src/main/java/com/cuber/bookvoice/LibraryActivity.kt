@@ -226,6 +226,10 @@ class LibraryActivity(private val act: SectionActivity) {
             showRecentBooks()
             true
         }
+        // Убираем из озвучки «долгое нажатие»: действие есть в меню «Действия».
+        A11y.replaceLongPress(binding.btnLast, getString(R.string.recent_books_title)) {
+            showRecentBooks()
+        }
         // msg2351/2355: кнопка «Каталоги» правее от «Открыть книгу» — быстрый
         // вход в окно каталогов поверх полки (тот же переход, что пункт «⋮»).
         binding.btnCatalogs.setOnClickListener {
@@ -240,6 +244,11 @@ class LibraryActivity(private val act: SectionActivity) {
             startActivity(Intent(act, CatalogWindowActivity::class.java)
                 .putExtra(CatalogActivity.EXTRA_VOICE_SEARCH, true))
             true
+        }
+        // Убираем из озвучки «долгое нажатие»: действие есть в меню «Действия».
+        A11y.replaceLongPress(binding.btnCatalogs, getString(R.string.lib_catalogs_long)) {
+            startActivity(Intent(act, CatalogWindowActivity::class.java)
+                .putExtra(CatalogActivity.EXTRA_VOICE_SEARCH, true))
         }
         binding.btnMore.contentDescription = getString(R.string.lib_more)
         binding.btnMore.setOnClickListener { showMoreMenu() }
@@ -1122,6 +1131,11 @@ class LibraryActivity(private val act: SectionActivity) {
                 label, clearCount
             )) { confirmClearCategory() }
         }
+        // 30.09.2026 (разбор полки, просьба Сержа): убрать записи, за которыми
+        // файла нет. Пункт есть всегда, а число считается по нажатию: проверка
+        // чужого файла — запрос к провайдеру, и открывать из-за неё меню
+        // заметно медленнее. Место — рядом с другим разрушающим пунктом.
+        item(getString(R.string.lib_menu_dead)) { removeDeadRecordsMenu() }
         // msg4693: «Настройки» — прямо перед «Выходом» (одно место во всех
         // меню): в конце списка её и ищут, а не в шапке. msg5939: «Удаление из
         // категории» — строкой выше: место редких разрушающих действий внизу,
@@ -1335,6 +1349,10 @@ class LibraryActivity(private val act: SectionActivity) {
 
     /** Скан в фоне — не вешаем UI, названия из файлов читаем отдельно. */
     private fun scanInBackground(done: (Int) -> Unit) {
+        // «Доступ ко всем файлам» и слова о спрятанных книгах — это тост и
+        // объявление, то есть вьюхи: спрашиваем на главном потоке, а по чужим
+        // файлам ходим уже в фоне.
+        val canCheck = !cannotCheckFiles()
         Thread {
             // msg6161: скан — фоновая работа по чужим файлам, и НИ ОДНО исключение
             // отсюда не должно уходить в сторож падений (BookVoiceApp): тот
@@ -1343,17 +1361,36 @@ class LibraryActivity(private val act: SectionActivity) {
             // сканирует тот же файл и снова падает — «падает и запускается по
             // кругу». Один битый или нестандартный файл не имеет права ронять
             // приложение; конкретную причину ловим в разборе метаданных.
+            //
+            // 30.09.2026 (разбор полки): мёртвые записи считаем ДО скана — скан
+            // ищет те же файлы заново и переписывает их адреса, сохраняя место
+            // чтения (см. scanFolderWithMeta). Проверка чужого файла — запрос к
+            // провайдеру, дело небыстрое; зато она же решает, что убирать, так
+            // что делаем её здесь один раз и отдаём скану.
+            val deadTwins = if (canCheck) {
+                try {
+                    ArrayList(deadRecords())
+                } catch (_: Throwable) {
+                    ArrayList()
+                }
+            } else {
+                ArrayList()
+            }
             val added = try {
-                scanFolderWithMeta()
+                scanFolderWithMeta(deadTwins)
             } catch (_: Throwable) {
                 0
             }
             // Записи, за которыми нет файла, убираем с полки сразу и без вопросов
             // (28.09.2026, просьба Сержа) — до пересборки списка, чтобы книга не
             // мелькнула на полке ещё раз.
-            val dead = try {
-                dropDeadRecords()
-            } catch (_: Throwable) {
+            val dead = if (canCheck) {
+                try {
+                    dropDeadRecords()
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+            } else {
                 emptyList()
             }
             runOnUiThread {
@@ -1363,6 +1400,33 @@ class LibraryActivity(private val act: SectionActivity) {
                 }
             }
         }.start()
+    }
+
+    /** Записи, за которыми файла нет. Про доступ спрашивает вызывающий: он один
+     *  знает, на каком потоке можно говорить и трогать вьюхи. */
+    private fun deadRecords(): List<BookRecord> =
+        BookStore.all(act).filter { BookStore.fileGone(act, it.uri) }
+
+    /** Файлы чужих папок для нас невидимы без «Доступа ко всем файлам», и
+     *  проверка «файла нет» в этом случае врёт (журнал Сержа: «записей без
+     *  файлов 27 из 47», хотя файлы на месте). Возвращает true, если судить о
+     *  пропаже файлов нельзя; один раз за запуск говорит вслух, что часть книг
+     *  спрятана, — иначе полка просто выглядит короче и это похоже на пропажу
+     *  (30.09.2026). */
+    private fun cannotCheckFiles(): Boolean {
+        if (AllFiles.granted(act)) return false
+        val external = BookStore.externalCount(act)
+        Diag.log(
+            act, "shelf",
+            "нет доступа ко всем файлам — записи без файлов не проверяю (внешних книг на полке $external)"
+        )
+        if (external > 0 && !accessMissingTold) {
+            accessMissingTold = true
+            val msg = plurals(R.plurals.all_files_hidden_books, external)
+            toast(msg)
+            binding.tvTitle.announceForAccessibility(msg)
+        }
+        return true
     }
 
     /**
@@ -1378,30 +1442,10 @@ class LibraryActivity(private val act: SectionActivity) {
      * исчезла не сама, и молчание тут выглядит поломкой.
      */
     private fun dropDeadRecords(): List<BookRecord> {
+        // Про «Доступ ко всем файлам» спрашивает вызывающий (scanInBackground):
+        // там это можно сказать вслух, а мы здесь в фоне.
         val all = BookStore.all(act)
         if (all.isEmpty()) return emptyList()
-        // 30.09.2026: нет «Доступа ко всем файлам» — внешние книги для нас просто
-        // невидимы, и проверка «файла нет» врёт (журнал Сержа: «записей без файлов
-        // 27 из 47», хотя файлы на месте). В этом случае не проверяем вовсе:
-        // убрать запись — значит потерять место чтения, закладки и цитаты.
-        if (!AllFiles.granted(act)) {
-            val external = BookStore.externalCount(act)
-            Diag.log(
-                act, "shelf",
-                "нет доступа ко всем файлам — записи без файлов не проверяю (внешних книг на полке $external)"
-            )
-            // 30.09.2026: раньше в этом случае полка просто выглядела короче, и
-            // человек не знал, что часть книг спрятана. Говорим один раз за
-            // запуск и называем путь, где включить (на Android 11+ в обычных
-            // разрешениях приложения этого пункта нет).
-            if (external > 0 && !accessMissingTold) {
-                accessMissingTold = true
-                val msg = plurals(R.plurals.all_files_hidden_books, external)
-                toast(msg)
-                binding.tvTitle.announceForAccessibility(msg)
-            }
-            return emptyList()
-        }
         val gone = all.filter { BookStore.fileGone(act, it.uri) }
         if (gone.isEmpty()) return emptyList()
         if (all.size >= 6 && gone.size * 2 >= all.size) {
@@ -1425,17 +1469,86 @@ class LibraryActivity(private val act: SectionActivity) {
         toast(plurals(R.plurals.shelf_dead_removed, gone.size, names + tail))
     }
 
+    /**
+     * Пункт меню «Убрать записи без файлов» (30.09.2026, просьба Сержа по полке).
+     *
+     * Число мёртвых записей считаем в фоне: проверка чужого файла — запрос к
+     * провайдеру, а меню и его диалоги живут на главном потоке. Убираем только
+     * по подтверждению и говорим, что именно убираем: место чтения, закладки и
+     * цитаты этих книг возврату не подлежат.
+     *
+     * Защита «мёртвой оказалась половина полки — не трогаем» здесь НЕ работает:
+     * она про недоступное хранилище, а тут человек просит расчистить полку
+     * осознанно (решение Сержа 30.09.2026). Автоматическая уборка при скане
+     * остаётся как была, вместе с защитой.
+     */
+    private fun removeDeadRecordsMenu() {
+        // Про доступ спрашиваем до фоновой работы: сказать об этом можно только
+        // здесь (тост и объявление), а без доступа проверка файлов врёт.
+        if (cannotCheckFiles()) return
+        toast(getString(R.string.shelf_dead_checking))
+        Thread {
+            val dead = try {
+                deadRecords()
+            } catch (_: Throwable) {
+                emptyList()
+            }
+            runOnUiThread {
+                if (act.isFinishing || act.isDestroyed) return@runOnUiThread
+                if (dead.isEmpty()) {
+                    val msg = getString(R.string.shelf_dead_none)
+                    toast(msg)
+                    binding.tvTitle.announceForAccessibility(msg)
+                    return@runOnUiThread
+                }
+                MaterialAlertDialogBuilder(act)
+                    .setTitle(plurals(R.plurals.shelf_dead_title, dead.size))
+                    .setMessage(R.string.shelf_dead_msg)
+                    .setPositiveButton(R.string.shelf_dead_yes) { _, _ -> removeDead(dead) }
+                    .setNegativeButton(getString(R.string.dialog_cancel), null)
+                    .show()
+            }
+        }.start()
+    }
+
+    /** Убрать записи, за которыми нет файла, по ручной команде. Файлы на диске
+     *  не трогаем: книга вернётся на полку сканом папки, а место чтения — нет. */
+    private fun removeDead(dead: List<BookRecord>) {
+        for (r in dead) {
+            BookStore.remove(act, r.uri)
+            // Кэш разобранного текста под этим адресом — сирота (как при склейке).
+            BookCache.remove(act, Uri.parse(r.uri))
+            Diag.log(act, "shelf", "запись без файла убрана вручную: ${r.name}")
+        }
+        announceDeadRecords(dead)
+        refresh()
+    }
+
     /** Рекурсивно пройти дерево; новые книги добавить, у «безымянных»
      *  (добавлены прошлой версией по имени файла) дозаполнить настоящее
-     *  название и автора из содержимого, битые кодировки заголовков — починить. */
-    private fun scanFolderWithMeta(): Int {
+     *  название и автора из содержимого, битые кодировки заголовков — починить.
+     *  [deadTwins] — записи, за которыми файла нет по старому адресу: скан берёт
+     *  их список и, найдя тот же файл заново, переписывает адрес (см. ниже). */
+    private fun scanFolderWithMeta(deadTwins: MutableList<BookRecord>): Int {
         val treeStr = treeUri() ?: return 0
         val tree = Uri.parse(treeStr)
+        val treeDocId = DocumentsContract.getTreeDocumentId(tree)
         val found = ArrayList<Pair<String, String>>() // (documentId, name)
-        collectDocuments(tree, DocumentsContract.getTreeDocumentId(tree), found, 0)
+        collectDocuments(tree, treeDocId, found, 0)
+        // Папку книг в виде пути и её document id ищем один раз на весь скан:
+        // по ним узнаём, за какой мёртвой записью тот же файл (см. ниже).
+        val tp = treeResolver()
         val hidden = prefs.getStringSet(KEY_HIDDEN, null) ?: emptySet()
         val hiddenPaths = prefs.getStringSet(KEY_HIDDEN_PATHS, null) ?: emptySet()
+        // Сколько раз каждое имя встречается в папке: по имени чиним адрес только
+        // когда оно одно на всю папку (см. takeDeadTwin).
+        val nameCounts = HashMap<String, Int>()
+        for ((_, n) in found) {
+            val k = n.lowercase(Locale.ROOT)
+            nameCounts[k] = (nameCounts[k] ?: 0) + 1
+        }
         var added = 0
+        var repaired = 0
         for ((docId, name) in found) {
             val uri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
             val u = uri.toString()
@@ -1498,6 +1611,31 @@ class LibraryActivity(private val act: SectionActivity) {
             // возвращает: по точному uri и по реальному пути файла (запись могли
             // удалить под другим адресом — msg1347).
             if (docHiddenFromScan(u, hidden, hiddenPaths)) continue
+            // 30.09.2026 (разбор полки): за записью файла нет, а он лежит здесь
+            // же — значит умер не файл, а адрес: проводник (Mixplorer и подобные)
+            // выдаёт адреса, живущие ровно столько, сколько живёт его грант на
+            // папку. Переписываем адрес на найденный заново и оставляем запись
+            // как была: место чтения, закладки, цитаты и проценты остаются при
+            // книге. Ищем по пути внутри папки книг, а если по адресу пути не
+            // понять (разовый адрес на один файл) — по имени файла.
+            val twin = takeDeadTwin(
+                deadTwins,
+                relInTree(docId, treeDocId),
+                name,
+                tp,
+                (nameCounts[name.lowercase(Locale.ROOT)] ?: 0) == 1,
+            )
+            if (twin != null) {
+                BookStore.changeUri(act, twin.uri, twin.copy(uri = u, name = name))
+                // Разобранный текст лежал под старым адресом — запись осиротела.
+                BookCache.remove(act, Uri.parse(twin.uri))
+                repaired++
+                Diag.log(
+                    act, "shelf",
+                    "адрес книги починен (${uriTail(twin.uri)} → ${uriTail(u)}): ${twin.name}"
+                )
+                continue
+            }
             // msg1345/1346: файл уже есть в библиотеке по file://-адресу (скачан
             // из каталога в эту же папку) — content://-копия скана не нужна.
             // Прячем документ, чтобы скан больше его не встречал, и не добавляем.
@@ -1528,7 +1666,93 @@ class LibraryActivity(private val act: SectionActivity) {
             ))
             added++
         }
+        if (repaired > 0) {
+            Diag.log(act, "shelf", "адресов книг починено при скане: $repaired")
+        }
         return added
+    }
+
+    /** Путь документа внутри выбранного дерева: «primary:Books/flibusta.is/x.fb2»
+     *  минус «primary:Books» — то же, что путь файла от папки книг. */
+    private fun relInTree(docId: String, treeDocId: String): String? {
+        val prefix = treeDocId + "/"
+        if (!docId.startsWith(prefix)) return null
+        var rel = docId.substring(prefix.length)
+        if (rel.contains('%')) rel = Uri.decode(rel)
+        return rel
+    }
+
+    /** Относительный путь книги внутри папки книг по адресу её записи. Нужен,
+     *  чтобы узнать тот же файл под умершим адресом. file:// — путь от папки
+     *  книг; content:// — от «двоеточия» в document id: проводники зовут
+     *  внутреннюю память своими метками («0A99-3BD7:Books/flibusta.is/…»), и
+     *  такая метка нам ничего не говорит, а путь после неё — говорит. null —
+     *  по адресу пути не понять (тогда скан сравнивает по имени файла). */
+    private fun shelfRelPath(uriStr: String, tp: TreePaths): String? {
+        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return null
+        return try {
+            when (uri.scheme) {
+                "file" -> uri.path?.let { relUnder(tp.dir.canonicalPath, it) }
+                "content" -> {
+                    val doc = DocumentsContract.getDocumentId(uri) ?: return null
+                    val decoded = if (doc.contains('%')) Uri.decode(doc) else doc
+                    val own = relInTree(decoded, tp.treeDocId)
+                    if (own != null) {
+                        own
+                    } else {
+                        var rel = decoded.substringAfter(':', decoded).removePrefix("/")
+                        val shelfName = File(tp.dir.canonicalPath).name
+                        if (shelfName.isNotEmpty() && rel.startsWith("$shelfName/")) {
+                            rel = rel.substring(shelfName.length + 1)
+                        }
+                        rel.ifEmpty { null }
+                    }
+                }
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Путь внутри папки [dir], если файл под ней. */
+    private fun relUnder(dir: String, path: String): String? {
+        val d = dir.trimEnd('/') + "/"
+        return if (path.startsWith(d)) path.substring(d.length) else null
+    }
+
+    /** Забрать из [deadTwins] запись, за которой тот же файл. Сначала по пути
+     *  внутри папки книг — это надёжная примета. По имени — только когда путь по
+     *  адресу не понять вовсе (разовый адрес на один файл) и имя в папке одно:
+     *  «download.fb2» у flibusta называется половина книг, и по одному имени
+     *  легко отдать книге чужой адрес, а с ним — чужой текст под её местом
+     *  чтения и закладками. Найденную запись из списка убираем: одной книге —
+     *  одна починка. */
+    private fun takeDeadTwin(
+        deadTwins: MutableList<BookRecord>,
+        rel: String?,
+        name: String,
+        tp: TreePaths?,
+        nameUniqueInFolder: Boolean,
+    ): BookRecord? {
+        if (deadTwins.isEmpty()) return null
+        if (rel != null && tp != null) {
+            val byRel = deadTwins.firstOrNull {
+                shelfRelPath(it.uri, tp)?.equals(rel, ignoreCase = true) == true
+            }
+            if (byRel != null) {
+                deadTwins.remove(byRel)
+                return byRel
+            }
+        }
+        if (!nameUniqueInFolder) return null
+        val byName = deadTwins.filter {
+            it.name.equals(name, ignoreCase = true) &&
+                (tp == null || shelfRelPath(it.uri, tp) == null)
+        }
+        if (byName.size != 1) return null
+        deadTwins.remove(byName[0])
+        return byName[0]
     }
 
     /** Название ищем в файле только там, где оно есть: fb2, xml, архив, epub,

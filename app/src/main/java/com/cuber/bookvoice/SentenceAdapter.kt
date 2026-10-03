@@ -43,6 +43,12 @@ class SentenceAdapter(
     private val onSentenceDrop: (Int, Int) -> Unit = { _, _ -> },
     /** «Считать такие строки репликами» из меню действий диктора (30.09.2026). */
     private val onSentenceReply: (Int, Int) -> Unit = { _, _ -> },
+    /** «Вернуть такие строки» из меню действий диктора (30.09.2026): снимает
+     *  книжное правило, убравшее эту строку. */
+    private val onSentenceUndrop: (Int, Int) -> Unit = { _, _ -> },
+    /** Показывать ли у предложения пункт «Вернуть такие строки»: спрашивает
+     *  читалка, потому что правила знает словарь, а не текст абзаца. */
+    private val canUndrop: (Int, Int) -> Boolean = { _, _ -> false },
     /** Диктор подвёл предложение к экрану (ACTION_SHOW_ON_SCREEN, 29.09.2026):
      *  узел предложения виртуальный, строка сама не поедет — прокрутку
      *  заказывает читалка. */
@@ -305,6 +311,8 @@ class SentenceAdapter(
                 v.onSentenceDict = { i -> onSentenceDict(row.chapter, row.first + i) }
                 v.onSentenceDrop = { i -> onSentenceDrop(row.chapter, row.first + i) }
                 v.onSentenceReply = { i -> onSentenceReply(row.chapter, row.first + i) }
+                v.onSentenceUndrop = { i -> onSentenceUndrop(row.chapter, row.first + i) }
+                v.canUndrop = { i -> canUndrop(row.chapter, row.first + i) }
                 v.onSentenceShow = { i -> onSentenceShow(row.chapter, row.first + i) }
             }
         }

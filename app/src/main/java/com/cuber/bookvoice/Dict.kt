@@ -145,6 +145,44 @@ object Dict {
         saveBooks(c, loadBooks(c).filterNot { it == r })
     }
 
+    /** Книжные правила, которые УБИРАЮТ эту строку из чтения: после них не
+     *  остаётся ни букв, ни цифр. По ним работает действие «Вернуть такие
+     *  строки» (30.09.2026, вопрос Сержа «а если захочется вернуть назад?»).
+     *
+     *  Текст берём таким, каким его видит словарь ПРИ ЧТЕНИИ: у реплики ведущее
+     *  тире отрезано (это делает [ReaderEngine.dictText]). Иначе правило для
+     *  строк «— Ред.» не нашлось бы: оно привязано к тексту без тире. */
+    fun bookRulesRemoving(c: Context, book: String?, text: String): List<Rule> {
+        if (text.isBlank()) return emptyList()
+        val body = readingBody(text)
+        return loadBooks(c).filter { !it.off && it.appliesTo(book) && applyOne(it, body).isBlank() }
+    }
+
+    /** Выключить правила (а не удалить): строки снова читаются, а само правило
+     *  остаётся в словаре — включить обратно можно в «Правилах из книг».
+     *  Возвращает, сколько правил выключено. */
+    fun disableBookRules(c: Context, rules: List<Rule>): Int {
+        if (rules.isEmpty()) return 0
+        val list = loadBooks(c).toMutableList()
+        var n = 0
+        for (r in rules) {
+            val i = list.indexOf(r)
+            if (i < 0 || list[i].off) continue
+            list[i] = list[i].copy(off = true)
+            n++
+        }
+        if (n > 0) saveBooks(c, list)
+        return n
+    }
+
+    /** Текст строки без ведущего тире реплики — то, к чему применяется словарь. */
+    private fun readingBody(text: String): String {
+        val t = text.trimStart()
+        if (t.isEmpty()) return text
+        if (t[0] != '—' && t[0] != '–' && t[0] != '−') return text
+        return t.substring(1)
+    }
+
     /** Книга ушла с полки — её правила уходят вместе с ней (просьба Сержа:
      *  «чтобы это уходило вместе с книгой удаляемой»). Возвращает, сколько убрано. */
     fun forgetBook(c: Context, bookName: String): Int {

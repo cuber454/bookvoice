@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -176,6 +177,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private val handler = Handler(Looper.getMainLooper())
 
+    /** Пробелы подряд — одним регулярным выражением на всё окно (30.09.2026):
+     *  [sentenceTextAt] теперь зовут и при показе узла диктору, а там компиляция
+     *  выражения на каждый вызов — лишняя работа. */
+    private val wsRun = Regex("\\s+")
+
     // Состояние поиска по книге. Совпадения храним по всей книге (глава,
     // предложение), searchCurrent — номер текущего совпадения в этом списке.
     private var searchMatches: List<Pair<Int, Int>> = emptyList()
@@ -222,6 +228,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         onSentenceDict = { ch, s -> openDictForSentence(ch, s) },
         onSentenceDrop = { ch, s -> dropSimilarLines(ch, s) },
         onSentenceReply = { ch, s -> makeReplyFromSentence(ch, s) },
+        onSentenceUndrop = { ch, s -> undropSimilarLines(ch, s) },
+        canUndrop = { ch, s -> canUndropLine(ch, s) },
         onSentenceShow = { ch, s -> showSentenceForA11y(ch, s) },
     )
 
@@ -265,7 +273,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Портянка (msg4338): чтение встало, а лента стоит не на читаемом —
         // читатель уехал рукой и смотрит в другое место; оно и становится
         // местом книги, с него продолжит ▶. Читаемое на экране (обычная пауза,
-        // конец главы) — трогать нечего. Ключ «Прокручивать к читаемому»
+        // конец главы) — трогать нечего. Ключ «Прокручивать экран за чтением»
         // выключен — лента за голосом не ходит, брать её верх нельзя.
         if (!playing &&
             prefs.getBoolean(KEY_SCROLL, true) &&
@@ -343,6 +351,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         Palette.applyTo(this)
         super.onCreate(savedInstanceState)
         Diag.header(this)
+        // 30.09.2026: чем закончился прошлый запуск — сразу в журнал, не дожидаясь
+        // окна «Не засыпать». Причина от системы плюс наша отметка «читали» — это
+        // и есть ответ на «читал, и встало», причём даже тогда, когда журнал
+        // присылают, в окно не заходя (см. SleepGuard.lastExit).
+        SleepGuard.lastExit(this)?.let { e ->
+            Diag.log(
+                this, "power",
+                "прошлый запуск: ${e.reason}; чтение шло=${KeepAwake.wasReadingAtLastExit(this)}",
+            )
+        }
         // msg6338: кого обслуживаем — TalkBack или Jieshuo — видно в diag.log.
         A11y.logReaders(this)
         // Живой инстанс ридера: экран настроек достаёт через него плеер,
@@ -721,7 +739,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             return
         }
         currentUri = u
-        currentName = queryDisplayName(Uri.parse(u))
+        val bookUri = Uri.parse(u)
+        currentName = bookNameOf(bookUri)
+        // 30.09.2026: имя книги — ключ книжных правил и книжных знаков реплики.
+        // Пишем его в журнал: пустое имя ломало их молча, и по журналу это не
+        // читалось вовсе (жалоба Сержа «нажал „убрать такие строки“ — не убралось»).
+        Diag.log(
+            this, "activity",
+            "имя книги для правил: «${currentName ?: "?"}» (${bookUri.scheme})",
+        )
         // msg1245/1246: открытие книги всегда стартует с места из её записи (или
         // из prefs), а не с того, что передал интентом экран-открыватель. Страница
         // каталога держит запись на момент ПЕРВОГО рендера (0/0), пересоздание
@@ -969,24 +995,24 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg2685: книга открывается дольше ~2с — один раз сообщаем голосом и
         // лёгкой вибрацией, чтобы не казалось, что приложение зависло. Таймер
         // одноразовый: книга готова раньше — объявление не звучит (bookLoading
-        // уже false); опцию можно выключить в Настройках → Чтение.
-        if (prefs.getBoolean(KEY_LONG_LOAD_ANNOUNCE, true)) {
-            handler.postDelayed({
-                if (!isFinishing && bookLoading) {
-                    Diag.log(this, "activity", "долгая загрузка (>2с) — объявляю (msg2685)")
-                    // msg3142: для PDF говорим правду о том, что происходит (извлечение
-                    // текста); для остальных форматов — общая фраза.
-                    val longLoadText =
-                        if (looksLikePdf(uri)) getString(R.string.long_load_pdf_speech)
-                        else getString(R.string.long_load_speech)
-                    binding.tvHeader.announceForAccessibility(longLoadText)
-                    Vibra.confirm(this)
-                    // msg2849: сработал блок «подождите» — загрузка точно была
-                    // долгой; по готовности книги добавим звуковой «готово».
-                    longLoadFired = true
-                }
-            }, 2000)
-        }
+        // уже false). 30.09.2026: галочки «Сообщать, если книга открывается
+        // долго» больше нет — сообщаем всегда (Серж: раздел «Чтение» покомпактнее,
+        // а это только вежливое слово на долгом открытии).
+        handler.postDelayed({
+            if (!isFinishing && bookLoading) {
+                Diag.log(this, "activity", "долгая загрузка (>2с) — объявляю (msg2685)")
+                // msg3142: для PDF говорим правду о том, что происходит (извлечение
+                // текста); для остальных форматов — общая фраза.
+                val longLoadText =
+                    if (looksLikePdf(uri)) getString(R.string.long_load_pdf_speech)
+                    else getString(R.string.long_load_speech)
+                binding.tvHeader.announceForAccessibility(longLoadText)
+                Vibra.confirm(this)
+                // msg2849: сработал блок «подождите» — загрузка точно была
+                // долгой; по готовности книги добавим звуковой «готово».
+                longLoadFired = true
+            }
+        }, 2000)
         // msg1739: «Открываю…» убрано — скринридер читал тост при входе и перебивал
         // объявление названия книги (в FBReader при открытии нет «открытия», есть
         // название). Имя окна уже несёт название (restoreSession → setTitle).
@@ -1317,13 +1343,32 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         rec.copy(series = meta.series ?: "", seriesNo = meta.seriesNo)
     }.getOrNull()
 
-    private fun queryDisplayName(uri: Uri): String? =
-        try {
+    /** Имя файла книги — ключ всего «книжного»: правил словаря для книги, её
+     *  набора знаков реплики, записей синхронизации. У `content://` имя
+     *  спрашиваем у провайдера (DISPLAY_NAME), а у `file://` провайдера нет
+     *  вовсе: запрос не находит его и отдаёт null. До 30.09.2026 имя брали
+     *  только у провайдера, поэтому у книг с путём (а таких на полке Сержа
+     *  большинство) оно выходило ПУСТЫМ, и всё книжное молча не работало:
+     *  «Убрать такие строки» отвечало «Книга не из библиотеки — правило убрать
+     *  некуда» (жалоба 30.09.2026 «нажал — не убралось»), а уже сохранённое
+     *  правило книги не применялось при чтении. Теперь порядок такой: запись
+     *  полки (там имя файла точнее всего), затем провайдер, затем имя из адреса. */
+    private fun bookNameOf(uri: Uri): String? =
+        BookStore.byUri(this, uri.toString())?.name?.takeIf { it.isNotBlank() }
+            ?: queryDisplayName(uri)
+            ?: uri.lastPathSegment?.takeIf { it.isNotBlank() }
+
+    private fun queryDisplayName(uri: Uri): String? {
+        // Не контент — провайдера нет: у file:// запрос всё равно вернёт null,
+        // а на части версий Android ещё и бросит исключение. Не спрашиваем зря.
+        if (uri.scheme != ContentResolver.SCHEME_CONTENT) return null
+        return try {
             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
                 ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
         } catch (_: Exception) {
             null
         }
+    }
 
     /** msg1119: полная запись позиции (prefs + запись книги). Логика в движке —
      *  ему сохранять место нужно и при чтении без окна. */
@@ -1463,7 +1508,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             return
         }
         if (!prefs.getBoolean(KEY_SCROLL, true)) {
-            logScrollSkip("галочка «Прокручивать к читаемому предложению» снята")
+            logScrollSkip("галочка «Прокручивать экран за чтением» снята")
             return
         }
         markSelfScroll(row)
@@ -2327,12 +2372,34 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // ---------------- Воспроизведение ----------------
 
     private fun togglePlay() {
+        // 30.09.2026 (сборка 228): каждое нажатие «Читать/Пауза» пишем в журнал.
+        // Жалоба Сержа «не срабатывало двойное касание на остановку книжки» по
+        // журналу не разбиралась вовсе: нажатие кнопки не оставляло в нём ни
+        // одной строки, и отличить «касание не дошло» от «дошло, но ничего не
+        // сделало» было нечем.
+        Diag.log(
+            this, "activity",
+            "нажата «Читать/Пауза»: чтение идёт=$playing, книга открыта=${book != null}, " +
+                "книга грузится=$bookLoading",
+        )
         // msg2679: «Читать» нажали, пока книга ещё открывается (тяжёлый PDF
         // разбирается в фоне) — нажатие не теряем: объявляем один раз и начнём
         // сами по готовности книги (см. openBook). Повторные нажатия в это окно
         // объявление не дублируют.
         if (book == null) {
-            if (!bookLoading) return  // пустой экран (книги нет и не открывается)
+            // 30.09.2026 (сборка 228): окно может потерять книгу (пересоздание
+            // окна, возврат к живой книге), а движок при этом читает. Тогда
+            // кнопка обязана поставить паузу, а не промолчать: на слух это и есть
+            // «двойное касание на остановку не срабатывает».
+            if (playing) {
+                Diag.log(this, "activity", "«Пауза»: книга в окне пуста, но движок читает — ставлю паузу")
+                pausePlayback(keepFocus = true)
+                return
+            }
+            if (!bookLoading) {
+                Diag.log(this, "activity", "нажатие без последствий: книги нет и она не открывается")
+                return  // пустой экран (книги нет и не открывается)
+            }
             if (!playWantedWhileLoading) {
                 playWantedWhileLoading = true
                 Diag.log(this, "activity", "play: книга ещё не готова — старт по готовности (msg2679)")
@@ -3961,7 +4028,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val bk = book ?: return ""
         val cur = bk.chapters.getOrNull(ch)?.sentences ?: return ""
         val t = cur.getOrNull(s)?.text ?: return ""
-        return t.replace(Regex("\\s+"), " ").trim()
+        return t.replace(wsRun, " ").trim()
     }
 
     /**
@@ -3972,6 +4039,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      */
     private fun makeReplyFromSentence(ch: Int, s: Int) {
         val text = sentenceTextAt(ch, s)
+        val bookName = currentName
+        // 30.09.2026: как и у «убрать такие строки» — пишем, с чем пришли и почему
+        // отказали: пустое имя книги молча ломало и это действие.
+        Diag.log(
+            this, "roles",
+            "считать такие строки репликами: глава ${ch + 1}, предл. $s, " +
+                "книга «${bookName ?: "?"}», строка «$text»",
+        )
         if (text.isEmpty()) {
             toast(getString(R.string.dict_need_find))
             return
@@ -3990,8 +4065,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             toast(getString(R.string.reply_from_sentence_none))
             return
         }
-        val book = currentName
+        val book = bookName
         if (book.isNullOrBlank()) {
+            Diag.log(this, "roles", "знак реплики из книги: имя книги пустое — знак некуда")
             toast(getString(R.string.reply_from_sentence_nobook))
             return
         }
@@ -4026,14 +4102,30 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      * сработает только в этой книге и уйдёт вместе с ней.
      */
     private fun dropSimilarLines(ch: Int, s: Int) {
-        val bk = book ?: return
+        val bk = book
         val sample = sentenceTextAt(ch, s)
+        val bookName = currentName
+        // 30.09.2026: пишем ВСЁ, с чем пришли, одной строкой. Прежняя запись
+        // молчала в четырёх случаях из шести (книга не открыта, предложение не
+        // нашлось, имя книги пустое, окно закрыли), и разбор жалобы «нажал — не
+        // убралось» упирался в пустой журнал: у Сержа в files/dictionary_books.txt
+        // не оказалось ни одного правила, а в журнале — ни одной строки про это.
+        Diag.log(
+            this, "dict",
+            "убрать такие строки: глава ${ch + 1}, предл. $s, книга «${bookName ?: "?"}», " +
+                "строка «$sample»",
+        )
+        if (bk == null) {
+            Diag.log(this, "dict", "убрать такие строки: книга не открыта — нечего искать")
+            return
+        }
         if (sample.isEmpty()) {
+            Diag.log(this, "dict", "убрать такие строки: предложение не нашлось")
             toast(getString(R.string.dict_need_find))
             return
         }
-        val bookName = currentName
         if (bookName.isNullOrBlank()) {
+            Diag.log(this, "dict", "убрать такие строки: имя книги пустое — правило некуда")
             toast(getString(R.string.dict_drop_nobook))
             return
         }
@@ -4041,12 +4133,20 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         Thread {
             val found = DictSmart.find(bk, bookName, sample)
             handler.post {
-                if (isFinishing || isDestroyed) return@post
+                if (isFinishing || isDestroyed) {
+                    Diag.log(this, "dict", "убрать такие строки: окно закрылось — ответ не показываю")
+                    return@post
+                }
                 if (found == null) {
                     Diag.log(this, "dict", "умная замена: похожих строк не нашлось для «$sample»")
                     toast(getString(R.string.dict_drop_none))
                     return@post
                 }
+                Diag.log(
+                    this, "dict",
+                    "умная замена: нашлось строк ${found.count} (образец «${found.rule.find}»), " +
+                        "показываю окно",
+                )
                 askDrop(found, bookName)
             }
         }.start()
@@ -4066,8 +4166,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 )
                 toast(getString(R.string.dict_drop_done, found.count))
             }
-            .setNeutralButton(R.string.dict_drop_more) { _, _ -> showDropExamples(found) }
-            .setNegativeButton(R.string.dialog_cancel, null)
+            .setNeutralButton(R.string.dict_drop_more) { _, _ ->
+                Diag.log(this, "dict", "умная замена: показываю найденные строки списком")
+                showDropExamples(found)
+            }
+            .setNegativeButton(R.string.dialog_cancel) { _, _ ->
+                Diag.log(this, "dict", "умная замена: владелец отказался — правило не сохраняю")
+            }
             .show()
     }
 
@@ -4079,6 +4184,62 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             .setItems(items, null)
             .setNegativeButton(R.string.toc_close, null)
             .show()
+    }
+
+    /** «Вернуть такие строки» (30.09.2026, вопрос Сержа «а если захочется вернуть
+     *  назад?»): владелец встаёт на убранную строку и снимает правило, которое её
+     *  убирает. Правило НЕ удаляем, а выключаем: строка снова читается, а само
+     *  правило остаётся в словаре («Правила из книг») и его можно вернуть к работе.
+     *  Текст книги при этом цел — правило трогает только озвучку, терять нечего. */
+    private fun undropSimilarLines(ch: Int, s: Int) {
+        val text = sentenceTextAt(ch, s)
+        val bookName = currentName
+        Diag.log(
+            this, "dict",
+            "вернуть такие строки: глава ${ch + 1}, предл. $s, книга «${bookName ?: "?"}», " +
+                "строка «$text»",
+        )
+        if (text.isEmpty()) {
+            toast(getString(R.string.dict_need_find))
+            return
+        }
+        if (bookName.isNullOrBlank()) {
+            Diag.log(this, "dict", "вернуть такие строки: имя книги пустое — правило не найти")
+            toast(getString(R.string.dict_undrop_none))
+            return
+        }
+        val rules = Dict.bookRulesRemoving(this, bookName, text)
+        if (rules.isEmpty()) {
+            Diag.log(this, "dict", "вернуть такие строки: правило не нашлось")
+            toast(getString(R.string.dict_undrop_none))
+            return
+        }
+        val shown = rules.joinToString("; ") { DictSmart.humanLine(it.find) }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.dict_undrop_title))
+            .setMessage(getString(R.string.dict_undrop_ask, shown))
+            .setPositiveButton(R.string.dict_undrop_go) { _, _ ->
+                val n = Dict.disableBookRules(this, rules)
+                Diag.log(
+                    this, "dict",
+                    "вернуть такие строки: выключил правил $n для книги «$bookName» — «$shown»",
+                )
+                toast(resources.getQuantityString(R.plurals.dict_undrop_done, n, n))
+            }
+            .setNegativeButton(R.string.dialog_cancel) { _, _ ->
+                Diag.log(this, "dict", "вернуть такие строки: владелец отказался")
+            }
+            .show()
+    }
+
+    /** Есть ли у этой строки правило, которое её убирает: по этому признаку
+     *  [ParagraphView] показывает или прячет пункт «Вернуть такие строки».
+     *  Спрашивается по каждому предложению, которое диктор показывает на экране,
+     *  поэтому здесь только книжные правила (их единицы) и ничего больше. */
+    private fun canUndropLine(ch: Int, s: Int): Boolean {
+        val text = sentenceTextAt(ch, s)
+        if (text.isEmpty()) return false
+        return Dict.bookRulesRemoving(this, currentName, text).isNotEmpty()
     }
 
     /** «Добавить в словарь» из меню действий диктора (27.09.2026): открываем
@@ -4613,10 +4774,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
         internal const val KEY_AUTO = "auto"
         internal const val KEY_AUTO_START = "auto_start"
-        // msg2685: сообщать голосом, если книга открывается дольше ~2 секунд.
-        internal const val KEY_LONG_LOAD_ANNOUNCE = "long_load_announce"
-        internal const val KEY_AUTO_RESUME = "auto_resume"
-        internal const val KEY_SAY_CHAPTER_START = "say_chapter_start"
+        // msg2685: о долгом открытии книги сообщаем всегда (30.09.2026 галочка
+        // «Сообщать, если книга открывается долго» убрана вместе с ключом).
+        // 30.09.2026: ключ KEY_AUTO_RESUME («продолжать после чужого плеера»)
+        // тоже убран: возврат звука продолжает чтение всегда (ReaderEngine).
         // «Названия строк в тексте» (29.09.2026, просьба Сержа): называть ли
         // «Абзац» и «Разделитель» при обходе текста и при переходах. По умолчанию
         // включено. Выключенное — мы молчим: ни при свайпах по тексту, ни на
@@ -4665,6 +4826,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_UI_NEXT_SENT = "ui_next_sent"
         internal const val KEY_UI_PREV_CH = "ui_prev_ch"
         internal const val KEY_UI_NEXT_CH = "ui_next_ch"
+        // 30.09.2026: строки прокрутки Серж сначала просил убрать совсем, но
+        // потом уточнил: «нет, последнюю правку я не то хотел сказать» — настройки
+        // вернулись на место в том виде, в каком были согласованы (см. «Чтение»).
         internal const val KEY_SCROLL = "scroll_to_current"
         // Портянка (msg4338): прокрутка рукой становится местом чтения. Выкл —
         // прежнее поведение: место двигают только чтение, кнопки и ползунок.
@@ -4685,9 +4849,18 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val KEY_PAUSE_KEEP = "pause_keep_ms"
         internal const val PAUSE_KEEP_DEFAULT = 130
         // msg4721: тихий поток на время чтения — не давать засыпать звуковому каналу
-        // (Bluetooth-гарнитура не уходит в сон и не откусывает начало фразы). Эксперимент,
-        // поэтому по умолчанию выкл; галочка живёт на экране «Не засыпать».
+        // (Bluetooth-гарнитура не уходит в сон и не откусывает начало фразы).
+        // Галочка живёт в «Чтении», раздел «Звук и стыки» (msg5067), и включается
+        // сама, когда звук произносит движок, а не наш плеер (см. KeepAwake.
+        // enableSilenceAuto).
         internal const val KEY_SILENT_KEEPALIVE = "silent_keepalive"
+
+        /** Уровень тихого потока: 1 — младший разряд (−90 дБ, ухо не слышит),
+         *  дальше громче. Строка «Громкость тихого потока» в «Чтении».
+         *  Зачем уровень: часть гарнитур считает тишиной даже такой поток, и
+         *  человеку нужно поднять его самому — иначе галочка «стоит, а толку нет». */
+        internal const val KEY_SILENT_LEVEL = "silent_level"
+        internal const val SILENT_LEVEL_DEFAULT = 1
         internal const val KEY_TAP_TO_PLAY = "tap_to_play"
         internal const val KEY_TOC_PLAY = "toc_play"
         internal const val KEY_BM_PLAY = "bm_play"

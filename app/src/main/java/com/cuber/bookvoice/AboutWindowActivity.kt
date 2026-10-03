@@ -93,6 +93,20 @@ class AboutWindowActivity : SectionActivity() {
 
     private fun buildContent(root: LinearLayout) {
         val sections = listOf(
+            // 30.09.2026, просьба Сержа: справку открывают в первую очередь с
+            // вопросом «а что мне делать-то» — так пусть ответ будет первым, а не
+            // после рассказа про автора. Пять коротких строк, в каждой одно
+            // действие; подробности — в самих окнах настроек, а не здесь.
+            Section(
+                R.string.about_start_title,
+                listOf(
+                    R.string.about_start_book,
+                    R.string.about_start_read,
+                    R.string.about_start_place,
+                    R.string.about_start_silent,
+                    R.string.about_start_settings,
+                ),
+            ),
             Section(R.string.about_what_title, listOf(R.string.about_what_body)),
             Section(
                 R.string.about_features_title,

@@ -90,6 +90,20 @@ class ParagraphView @JvmOverloads constructor(
         ACTION_ID_REPLY, context.getString(R.string.sel_action_reply),
     )
 
+    /** «Вернуть такие строки» (30.09.2026): снимает книжное правило, которое
+     *  убирает показанную строку из чтения. Пункт появляется ТОЛЬКО у тех строк,
+     *  которые сейчас правда убраны правилом ([canUndrop]) — у остальных его нет,
+     *  иначе меню «Действия» пухло бы пунктом-пустышкой. */
+    private val actUndrop = AccessibilityNodeInfoCompat.AccessibilityActionCompat(
+        ACTION_ID_UNDROP, context.getString(R.string.sel_action_undrop),
+    )
+
+    /** Показывать ли у предложения пункт «Вернуть такие строки». */
+    var canUndrop: ((Int) -> Boolean)? = null
+
+    /** «Вернуть такие строки» из меню действий диктора: индекс предложения. */
+    var onSentenceUndrop: ((Int) -> Unit)? = null
+
     /** «Считать такие строки репликами» из меню действий диктора: индекс
      *  предложения (30.09.2026). */
     var onSentenceReply: ((Int) -> Unit)? = null
@@ -218,6 +232,9 @@ class ParagraphView @JvmOverloads constructor(
             node.addAction(actDict)
             node.addAction(actReply)
             node.addAction(actDrop)
+            // «Вернуть такие строки» — только у строки, которую сейчас убирает
+            // книжное правило (30.09.2026).
+            if (canUndrop?.invoke(i) == true) node.addAction(actUndrop)
             // Ссылка — только там, где она есть (29.09.2026). Текст узла приходит
             // из разметки абзаца, а пометки ссылок (URLSpan) в нём уже стоят —
             // диктор читает их как ссылки, этому пункту меню остаётся их открыть.
@@ -246,11 +263,30 @@ class ParagraphView @JvmOverloads constructor(
             // msg6352/6354: видно в diag.log, доходит ли до нас действие диктора
             // (двойной тап по тексту не срабатывал).
             seenAct++
-            logSparse("действие", seenAct) { "предложение $i, action=$action" }
+            // 30.09.2026: СВОИ действия пишем ВСЕГДА, а не по счётчику. Счётчик
+            // («первые три и дальше каждый сотый») скрывал самые важные строки:
+            // Серж нажал «Убрать такие строки», а в журнале не осталось ни следа
+            // — четвёртое по счёту действие на этом абзаце диктор не записал.
+            // Служебных действий диктора в журнале по-прежнему не видно (их
+            // пишет только счётчик), а свои — видно, потому что их мало.
+            if (actionName(action) != null) {
+                Diag.log(
+                    context, "a11y",
+                    "действие диктора: предложение $i, ${actionName(action)}",
+                )
+            } else {
+                logSparse("действие", seenAct) { "предложение $i, action=$action" }
+            }
             if (i !in starts.indices) return false
             // msg6364: жест и действие на одно предложение — один и тот же
             // поступок, второй раз не повторяем.
-            if (handledRecently(i)) return true
+            if (handledRecently(i)) {
+                Diag.log(
+                    context, "a11y",
+                    "действие пропущено: предложение $i обработано только что (жест и меню — одно)",
+                )
+                return true
+            }
             return when (action) {
                 AccessibilityNodeInfoCompat.ACTION_CLICK -> {
                     markHandled(i)
@@ -281,6 +317,11 @@ class ParagraphView @JvmOverloads constructor(
                 ACTION_ID_DROP -> {
                     markHandled(i)
                     onSentenceDrop?.invoke(i)
+                    true
+                }
+                ACTION_ID_UNDROP -> {
+                    markHandled(i)
+                    onSentenceUndrop?.invoke(i)
                     true
                 }
                 ACTION_ID_REPLY -> {
@@ -412,6 +453,10 @@ class ParagraphView @JvmOverloads constructor(
          *  знаки строки в свои знаки реплики. */
         const val ACTION_ID_REPLY = 0x01000006
 
+        /** «Вернуть такие строки» (30.09.2026) — седьмое: снимает книжное
+         *  правило, которое убирает показанную строку из чтения. */
+        const val ACTION_ID_UNDROP = 0x01000007
+
         /** Окно, в котором жест и действие диктора считаются одним поступком. */
         const val DOUBLE_MS = 400L
     }
@@ -497,6 +542,20 @@ class ParagraphView @JvmOverloads constructor(
     private fun logSparse(tag: String, n: Int, msg: () -> String) {
         if (n > 3 && n % 100 != 0) return
         Diag.log(context, "a11y", "$tag #$n: ${msg()}")
+    }
+
+    /** Как называется наше действие — для журнала (30.09.2026). Служебные
+     *  действия диктора (их десятки за минуту) сюда не попадают: null значит
+     *  «пиши по счётчику, как раньше». */
+    private fun actionName(action: Int): String? = when (action) {
+        ACTION_ID_READ -> "«Прочитать отсюда»"
+        ACTION_ID_MARK -> "«Поставить закладку»"
+        ACTION_ID_DICT -> "«Добавить в словарь»"
+        ACTION_ID_DROP -> "«Убрать такие строки»"
+        ACTION_ID_LINK -> "«Открыть ссылку»"
+        ACTION_ID_REPLY -> "«Считать такие строки репликами»"
+        ACTION_ID_UNDROP -> "«Вернуть такие строки»"
+        else -> null
     }
 
     /** Первое непустое предложение абзаца — с него абзац и начинается. У него

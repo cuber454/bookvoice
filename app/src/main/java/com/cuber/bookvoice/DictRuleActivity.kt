@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.CheckBox
+import androidx.appcompat.widget.SwitchCompat
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -91,7 +92,7 @@ class DictRuleActivity : RowsActivity() {
 
     private var findField: EditText? = null
     private var replField: EditText? = null
-    private var regexCheck: CheckBox? = null
+    private var regexCheck: SwitchCompat? = null
 
     /** Пробный синтезатор — только для проговаривания, книгу не трогает. */
     private var probe: SpeechPlayer? = null
@@ -223,8 +224,8 @@ class DictRuleActivity : RowsActivity() {
         hint: String,
         checked: Boolean,
         onChange: (Boolean) -> Unit,
-    ): CheckBox {
-        val cb = CheckBox(this).apply {
+    ): SwitchCompat {
+        val cb = SwitchCompat(this).apply {
             text = withHint(title, hint)
             textSize = 17f
             isChecked = checked

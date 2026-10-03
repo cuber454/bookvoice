@@ -20,7 +20,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
-import android.widget.CheckBox
+import androidx.appcompat.widget.SwitchCompat
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
@@ -118,12 +118,22 @@ class SettingsActivity(private val act: SectionActivity) {
     private var controlsGroupRow: Button? = null
     // Строки-резюме блока «После звонка» (#98).
     private var afterCallRow: Button? = null
-    private var afterCallRewindRow: Button? = null
     // Строка-резюме «Отступать назад при старте» (msg2093, раздел «Чтение»).
     private var startRewindRow: Button? = null
+    // 30.09.2026: строки-выборы раздела «Чтение» вместо пачек галочек —
+    // «читать сразу после перехода» (jumpPlayRow). Строки «что останавливает
+    // чтение» и «что прокрутка делает с местом и голосом» в тот же вечер стали
+    // тремя галочками и одной галочкой: окна у них больше нет.
+    private var jumpPlayRow: Button? = null
+    // Галочка «Читать с того места, куда прокрутил»: показывается только при
+    // включённой прокрутке, поэтому ссылка на неё нужна (раздел «Чтение»).
+    private var scrollPlaceBox: SwitchCompat? = null
     // msg5604: строка-значение «Пауза между фразами» — сколько тишины движка
     // оставлять на стыке предложений (раздел «Чтение»).
     private var pauseKeepRow: Button? = null
+    // 30.09.2026: строка «Громкость тихого потока» — уровень того самого
+    // неслышного звука, который держит звуковой тракт открытым (раздел «Чтение»).
+    private var silentLevelRow: Button? = null
     // msg5931: строка «Системные кнопки» в разделе «Экран книги» — показывать /
     // скрывать во время чтения / скрывать, пока открыта книга.
     private var readerBarsRow: Button? = null
@@ -145,7 +155,7 @@ class SettingsActivity(private val act: SectionActivity) {
     // 0.4.86 (msg7020): строка «Синхронизация» в «Библиотеке» — открывает
     // подраздел (весь блок переехал туда).
     private var syncGroupRow: Button? = null
-    private var booksBox: CheckBox? = null
+    private var booksBox: SwitchCompat? = null
     private var booksRow: Button? = null
     // #57: галочка «Бесшовная передача» — при альтернативном способе озвучки
     // становится недоступной (она в этом режиме не работает).
@@ -159,20 +169,10 @@ class SettingsActivity(private val act: SectionActivity) {
     private var cacheRow: Button? = null
     // msg5730: строка «Размер текста» — общая ручка размера для всего приложения.
     private var textScaleRow: Button? = null
-    // msg5730: галочки «что видно на экране книги» — чтобы «простой экран» мог
-    // переставить их НА МЕСТЕ, не пересобирая раздел (пересборка убила бы строку,
-    // на которой стоит человек).
-    private val readerUiBoxes = ArrayList<CheckBox>()
-
-    /** Что остаётся на «простом экране» (msg5730): кнопка чтения, ползунок,
-     *  строка места в книге и «⋮». «⋮» не убираем ни в каком наборе — через него
-     *  достаётся всё остальное, включая сами Настройки. */
-    private val SIMPLE_KEEP = setOf(
-        MainActivity.KEY_UI_PLAY,
-        MainActivity.KEY_UI_SLIDER,
-        MainActivity.KEY_UI_POSITION,
-        MainActivity.KEY_UI_MORE,
-    )
+    // 30.09.2026: списка галочек «что видно на экране книги» (readerUiBoxes) и
+    // набора «что оставить на простом экране» (SIMPLE_KEEP) больше нет — вместе
+    // со строками «простой экран» они стали не нужны: набор собирается галочками
+    // в подразделе «Что показывать в книге».
 
     // Открытый раздел (null = экран списка групп).
     private var group: Group? = null
@@ -232,14 +232,23 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Разрешение «Телефон» (#98): READ_PHONE_STATE, чтобы узнавать о конце
      *  настоящего звонка. Просим только при выборе «Продолжить чтение». Результат
      *  разбирает колбэк act.requestPermission. */
+    /** Откат, выбранный вместе с «Продолжить», пока ждём разрешение «Телефон»
+     *  (30.09.2026): список строки «После звонка» — один, и без этого память о
+     *  выборе терялась бы на время системного запроса. */
+    private var pendingCallRewind: String? = null
+
     private fun requestPhonePerm() {
         act.requestPermission(Manifest.permission.READ_PHONE_STATE) { granted ->
             if (granted) {
-                prefs.edit().putString(
+                val e = prefs.edit().putString(
                     MainActivity.KEY_AFTER_CALL, MainActivity.AFTER_CALL_CONTINUE,
-                ).apply()
+                )
+                pendingCallRewind?.let { e.putString(MainActivity.KEY_AFTER_CALL_REWIND, it) }
+                e.apply()
+                pendingCallRewind = null
                 toast(getString(R.string.after_call_continue))
             } else {
+                pendingCallRewind = null
                 toast(getString(R.string.after_call_perm_denied))
             }
             rebuildCurrentGroup()
@@ -592,45 +601,78 @@ class SettingsActivity(private val act: SectionActivity) {
 
     /** «Чтение» (msg721): когда начинать чтение и что озвучивать. Переехало из «Голоса».
      *  msg5711: 19 строк — простыня, поэтому раздел размечен заголовками по смыслу,
-     *  как «Кнопки и жесты»: Начало книги / Переходы / Звук и стыки / Прерывания /
-     *  Прокрутка. Порядок строк прежний, кроме «Паузы между фразами»: она ушла из
-     *  «Начала книги» в звуковую группу — она про стык, а не про старт. */
+     *  как «Кнопки и жесты».
+     *
+     *  30.09.2026 (просьба Сержа: «сделать покомпактнее, чтобы было не так много
+     *  всего»): было 22 строки, пять заголовков и три подсказки отдельными
+     *  остановками — стало 12 строк и четыре заголовка. Что именно сделано:
+     *  — пять галочек «читать сразу при переходе» собраны в одну строку-выбор с
+     *    окном, а пункт «Настроить по отдельности» разворачивает их под строкой;
+     *  — три галочки «останавливать чтение» (наушники, экран, экран вниз) — одна
+     *    строка с окном из трёх галочек;
+     *  — две галочки прокрутки — одна строка «что прокрутка делает», и видна она
+     *    только когда прокрутка включена;
+     *  — «Громкость тихого потока» видна только при включённом тихом потоке;
+     *  — убраны галочки, которые ничего не решали: название главы теперь звучит
+     *    всегда, о долгом открытии книга говорит всегда (Серж: «а зачем эта
+     *    галочка вообще нужна, пускай всегда включена»);
+     *  — подсказки альтернативного способа и тихого потока стали второй строкой
+     *    своих галочек: раньше каждая была отдельной остановкой в списке;
+     *  — «Продолжать чтение после прерывания другим плеером» переехала в
+     *    «Прерывания»: она про вторжение извне, а не про начало книги.
+     *  Порядок строк прежний, кроме «Паузы между фразами»: она ушла из «Начала
+     *  книги» в звуковую группу — она про стык, а не про старт.
+     *
+     *  30.09.2026, дальше в тот же вечер: заголовки внутри раздела убраны
+     *  (Серж: «дурацкая формулировка, вообще убирай», потом «заголовки убираем
+     *  отсюда») — строки идут одним списком: старт, переходы, звук, прерывания,
+     *  прокрутка. Заголовков в разделе нет вовсе. */
     private fun buildReadingGroup() {
-        addHeading(getString(R.string.reading_section_start))
-        addCheck(R.string.chapter_start_title, MainActivity.KEY_SAY_CHAPTER_START, true)
-        addCheck(R.string.auto_start_title, MainActivity.KEY_AUTO_START, true)
-        // msg2685: книга открывается дольше ~2с — сообщить об этом голосом.
-        addCheck(R.string.long_load_announce_title, MainActivity.KEY_LONG_LOAD_ANNOUNCE, true)
-        addCheck(R.string.auto_resume_title, MainActivity.KEY_AUTO_RESUME, true)
+        // msg2685: о долгом открытии книга говорит сама (30.09.2026 — всегда),
+        // поэтому это сказано подсказкой в самой галочке, а не отдельной строкой.
+        addCheck(
+            R.string.auto_start_title, MainActivity.KEY_AUTO_START, true,
+            hintRes = R.string.auto_start_hint,
+        )
         // msg2093: «Отступать назад при старте» — начать на N предложений раньше
         // места остановки, чтобы вспомнить, что было. Выключено по умолчанию.
         startRewindRow = addValueButton { pickStartRewind() }
-
-        // msg5711: «Переходы» — откуда чтение подхватывает, когда человек сам
-        // ткнул в место книги: касание по тексту, оглавление, закладка, поиск.
-        addHeading(getString(R.string.reading_section_jumps))
         // 29.09.2026 (просьба Сержа): одно слово о структуре текста — «Абзац» и
-        // «Разделитель». Стоит первым в «Переходах»: это про то, что слышно,
-        // когда идёшь по книге.
+        // «Разделитель». Стоит здесь, а не в «Переходах»: это про то, что
+        // слышно, когда идёшь по книге.
         addCheck(
             R.string.line_names_title, MainActivity.KEY_LINE_NAMES, true,
             hintRes = R.string.line_names_hint,
         )
-        addCheck(R.string.tap_to_play_title, MainActivity.KEY_TAP_TO_PLAY, true)
-        addCheck(R.string.toc_play_title, MainActivity.KEY_TOC_PLAY, true)
-        addCheck(R.string.bm_play_title, MainActivity.KEY_BM_PLAY, true)
-        // Найденное по поиску слово — читать ли с него сразу (как с главы/закладки).
-        addCheck(R.string.search_play_title, MainActivity.KEY_SEARCH_PLAY, true)
-        // 0.4.74: то же правило для шагов по книге кнопками и свайпами — глава,
-        // абзац, предложение, «Прыжок». Просьба Сергея: «на паузе должно
-        // начинать читать» — до этого шаги молчали, а читали только тап,
-        // оглавление, закладка и поиск.
-        addCheck(R.string.nav_play_title, MainActivity.KEY_NAV_PLAY, true)
+        // Переходы (тап, оглавление, закладка, поиск, кнопки) — один выбор вместо
+        // пяти галочек (30.09.2026).
+        jumpPlayRow = addValueButton { pickJumpPlay() }
+        if (jumpPlayDetail()) {
+            // «Настроить по отдельности»: те же пять галочек, что были до
+            // 30.09.2026, с прежними значениями по умолчанию. Резюме строки
+            // обновляем на месте, чтобы человек слышал, что у него получилось.
+            addCheck(R.string.tap_to_play_title, MainActivity.KEY_TAP_TO_PLAY, true) {
+                refreshJumpPlayRow()
+            }
+            addCheck(R.string.toc_play_title, MainActivity.KEY_TOC_PLAY, true) {
+                refreshJumpPlayRow()
+            }
+            addCheck(R.string.bm_play_title, MainActivity.KEY_BM_PLAY, true) {
+                refreshJumpPlayRow()
+            }
+            addCheck(R.string.search_play_title, MainActivity.KEY_SEARCH_PLAY, true) {
+                refreshJumpPlayRow()
+            }
+            // 0.4.74: то же правило для шагов по книге кнопками и свайпами.
+            addCheck(R.string.nav_play_title, MainActivity.KEY_NAV_PLAY, true) {
+                refreshJumpPlayRow()
+            }
+        }
 
-        // msg5711: «Звук и стыки» — как звучит чтение и что происходит на стыке
-        // фраз. «Пауза между фразами» переехала сюда из «Начала книги»: она про
-        // стык, а не про старт.
-        addHeading(getString(R.string.reading_section_sound))
+        // 30.09.2026 (Серж: «„Звук и стыки“ — дурацкая формулировка, вообще
+        // убирай»): заголовок убран, строки про звук идут сразу за строками
+        // старта. msg5711: «Пауза между фразами» переехала сюда из «Начала
+        // книги» — она про стык фраз, а не про старт.
         // msg5604: «Пауза между фразами» — сколько тишины, которую движок
         // дописывает по краям фразы, оставлять на стыке. У сетевых голосов
         // Google её 0,5–0,7 с на фразу, и это слышно как пауза в чтении.
@@ -641,17 +683,24 @@ class SettingsActivity(private val act: SectionActivity) {
         // #57: альтернативный способ озвучки — звук целиком отдаём движку.
         // Тестовая галочка, по умолчанию выкл; применяется на месте, не
         // дожидаясь перезапуска.
-        addHint(getString(R.string.alt_voice_hint))
         // 29.09.2026, просьба Сержа: тихий поток включается ВМЕСТЕ с этой
-        // галочкой и вместе с ней выключается. Зачем: в альтернативном способе
-        // звук играет движок, а не читалка, поэтому система перестаёт видеть
-        // нас играющими и кнопки на наушниках (волшебное касание) уходят
-        // чужому плееру — тихий поток возвращает нас в список играющих.
-        // Галочку переключаем тем же CheckBox, что и руками: он сам запишет
-        // настройку, применит её и напишет строку в журнал. Снять руками можно —
-        // обратно встанет только при следующем включении этого способа.
-        var silentBox: CheckBox? = null
-        addCheck(R.string.alt_voice_title, MainActivity.KEY_ALT_VOICE, false) { on ->
+        // галочкой. Зачем: в альтернативном способе звук играет движок, а не
+        // читалка, поэтому система перестаёт видеть нас играющими и кнопки на
+        // наушниках (волшебное касание) уходят чужому плееру — тихий поток
+        // возвращает нас в список играющих. Галочку переключаем тем же CheckBox,
+        // что и руками: он сам запишет настройку, применит её и напишет строку в
+        // журнал. Снять руками можно — обратно встанет при следующем включении
+        // прямого режима (30.09.2026: следит уже сам движок —
+        // SpeechPlayer.altDirect и netDirect зовут KeepAwake.enableSilenceAuto,
+        // поэтому способ, включённый не этой галочкой, тоже не теряет кнопки).
+        // 30.09.2026: подсказки у галочки нет, а название Серж вернул к
+        // привычному «Альтернативный способ чтения» («надо исправить на
+        // альтернативный способ чтения всё-таки») — под этим именем он её и
+        // ищет. Про тихий поток сказано в его собственной строке ниже.
+        var silentBox: SwitchCompat? = null
+        addCheck(
+            R.string.alt_voice_title, MainActivity.KEY_ALT_VOICE, false,
+        ) { on ->
             ReaderEngine.player?.altDirect = on
             silentBox?.isChecked = on
         }
@@ -661,67 +710,189 @@ class SettingsActivity(private val act: SectionActivity) {
         // не закрывался между фразами. (Бывшая пара — «Бесшовная передача» —
         // убрана в msg5955: про стык предложений галочек больше нет.) Ниже по
         // разделу уже другое: прокрутка, она про место, а не про голос.
-        addHint(getString(R.string.sleep_silent_hint))
-        silentBox = addCheck(R.string.sleep_silent_title, MainActivity.KEY_SILENT_KEEPALIVE, false) { on ->
+        // 30.09.2026: подсказки у галочки нет — всё сказано в одной строке
+        // (Серж: «можно всё в одной строчке, просто коротко»).
+        silentBox = addCheck(
+            R.string.sleep_silent_title, MainActivity.KEY_SILENT_KEEPALIVE, false,
+        ) { on ->
             KeepAwake.syncSilence()
             logSilence(on)
+            // 30.09.2026: строка громкости относится только к включённому потоку —
+            // включать её незачем, а раздел от неё только длиннее.
+            silentLevelRow?.visibility = if (on) View.VISIBLE else View.GONE
         }
+        // 30.09.2026: уровень тихого звука — по образцу @Voice Aloud Reader, где
+        // у этой же настройки есть поле громкости. Нужен на случай гарнитуры,
+        // которая и наш поток считает тишиной: человек поднимет сам, вместо того
+        // чтобы гадать, почему галочка стоит, а начало фраз всё равно теряется.
+        // Строка появляется только при включённом потоке: создаём её всегда, а
+        // прячем невидимой — так галочка выше может показать её на месте, не
+        // пересобирая раздел (пересборка сбросила бы фокус с этой же галочки).
+        silentLevelRow = addValueButton { pickSilentLevel() }
+        silentLevelRow?.visibility =
+            if (prefs.getBoolean(MainActivity.KEY_SILENT_KEEPALIVE, false)) View.VISIBLE else View.GONE
 
-        // msg5711: «Прерывания» — что делать, когда в чтение влезло что-то извне:
-        // звонок или отключённые наушники. Стоит после звука и до прокрутки:
-        // сначала как звучит, потом что его перебивает, потом место в книге.
-        addHeading(getString(R.string.reading_section_interrupts))
-        // #98 «После звонка»: ряд-резюме + при «Продолжить» — ряд отката.
-        // Оба про поведение при внешнем прерывании, поэтому рядом с #99 ниже.
+        // msg5711: строки про прерывания — что делать, когда в чтение влезло
+        // что-то извне: звонок или снятые наушники.
+        // #98 «После звонка» (30.09.2026): одна строка со всеми случаями —
+        // «Остановиться» и четыре «Продолжить…» с разным откатом. Прежде было
+        // две строки (режим и отдельно откат), и человек читал про откат, даже
+        // когда стояло «Остановиться».
         afterCallRow = addValueButton { pickAfterCallMode() }
-        afterCallRewindRow = if (afterCallMode() == MainActivity.AFTER_CALL_CONTINUE) {
-            addValueButton { pickAfterCallRewind() }
-        } else {
-            null
-        }
-        // #99: останавливать чтение, когда отключаются наушники.
-        addCheck(R.string.headphones_pause_title, MainActivity.KEY_PAUSE_HEADSET, true)
-        // #85 (msg5895/5899): загорание экрана — тоже вторжение в чтение извне,
-        // поэтому рядом с наушниками. Ловим и разблокировку: при снятии замка на
-        // уже горящем экране отдельного SCREEN_ON может не прийти (msg5919).
-        // Выключено по умолчанию — у тех, кто читает под погашенным экраном,
-        // поведение не должно меняться само.
-        // onChange — потому что галочка меняет и живую работу: включили на ходу,
-        // во время чтения, — приёмник встаёт, не дожидаясь следующего старта.
-        addCheck(R.string.pause_on_screen_title, MainActivity.KEY_PAUSE_ON_SCREEN, false) {
+        // 30.09.2026: строку «Продолжать чтение после прерывания другим плеером»
+        // убрали (Серж: «сделать чтобы было включено и всё»): возврат звука после
+        // чужого плеера работает всегда, настройки у него больше нет.
+        // 30.09.2026: три галочки «останавливать чтение» — вместо одной строки с
+        // окном. В названии каждой сказано, что она делает, и окно с длинным
+        // сообщением не нужно. Сторожа экрана и переворота читают настройку на
+        // месте, поэтому включённое начинает работать сразу, без перезапуска
+        // чтения (наушники движок перечитывает при следующем старте чтения).
+        addCheck(
+            R.string.headphones_pause_title, MainActivity.KEY_PAUSE_HEADSET, true,
+        )
+        addCheck(
+            R.string.pause_on_screen_title, MainActivity.KEY_PAUSE_ON_SCREEN, false,
+        ) {
             ScreenOnPause.sync()
         }
-        // 23.09.2026: пауза по перевороту экраном вниз. Стоит рядом с двумя
-        // предыдущими: это тоже про то, что чтение прерывают извне — только
-        // прерывает его сам человек, положив телефон экраном вниз. Выключено по
-        // умолчанию, как и сторож экрана.
-        addCheck(R.string.pause_face_down_title, MainActivity.KEY_PAUSE_FACE_DOWN, false) {
+        addCheck(
+            R.string.pause_face_down_title, MainActivity.KEY_PAUSE_FACE_DOWN, false,
+            hintRes = R.string.pause_face_down_hint,
+        ) {
             FaceDownPause.sync()
         }
-        addHint(getString(R.string.pause_face_down_hint))
 
-        // msg5711: «Прокрутка» — как лента книги связана с голосом.
-        addHeading(getString(R.string.reading_section_scroll))
-        // Портянка (msg4372): пара про прокрутку — что она делает с местом и с
-        // голосом. Переехала сюда из «Интерфейса»: «Интерфейс» — что видно на
-        // экране чтения, «Чтение» — как ведут себя голос и место.
-        // 1) место едет за лентой, пока голос молчит (msg4338);
-        // 2) во время чтения отпущенная прокрутка перекидывает голос на верхнюю
-        //    строку.
-        // Третьей галочки («прыгать на ходу») больше нет: голос дёргался на
-        // каждом движении пальца и не успевал договорить слово (msg4450/4452 —
-        // Сергей попросил убрать, вариант «по отпусканию» остаётся).
-        // 0.4.86 (msg7023): длинной подсказки над тройкой больше нет — она
-        // читалась отдельной остановкой и пересказывала то, что теперь сказано
-        // в самих названиях галочек.
-        // msg5707: «Прокручивать к читаемому предложению» переехала сюда из
-        // «Экрана книги» — прокрутка это поведение чтения, а не «что видно».
-        // Строка стоит первой в тройке: она главная (идёт ли прокрутка вообще),
-        // две нижние уточняют, что прокрутка делает с местом и с голосом.
-        addCheck(R.string.scroll_title, MainActivity.KEY_SCROLL, true)
-        addCheck(R.string.scroll_place_title, MainActivity.KEY_SCROLL_PLACE, true)
-        addCheck(R.string.scroll_follow_title, MainActivity.KEY_SCROLL_FOLLOW, true)
+        // msg5711: строки про прокрутку — как экран книги связан с голосом.
+        // 30.09.2026: Серж просил убрать их совсем, но потом уточнил, что сказал
+        // не то, — строки остаются, с согласованными названиями (см. строки
+        // scroll_title и scroll_place_title).
+        addCheck(R.string.scroll_title, MainActivity.KEY_SCROLL, true) { on ->
+            // Прокрутку выключили — строка про место больше ни о чём, и её прячем
+            // на месте (раздел не пересобираем: пересборка сбросила бы фокус с
+            // этой же галочки).
+            scrollPlaceBox?.visibility = if (on) View.VISIBLE else View.GONE
+        }
+        // 30.09.2026: вместо строки-выбора «Что прокрутка делает с местом и
+        // голосом» (четыре значения) — одна галочка. В коде эти два ключа и
+        // правда ходят парой: после ручной прокрутки верхняя строка становится
+        // местом чтения, а голос переезжает туда (MainActivity читает
+        // KEY_SCROLL_PLACE и KEY_SCROLL_FOLLOW вместе). Старое состояние из
+        // четырёх значений («только место», «только голос») сводим к одному:
+        // галочка либо стоит, либо нет.
+        val scrollPlaceOn = prefs.getBoolean(MainActivity.KEY_SCROLL_PLACE, true) &&
+            prefs.getBoolean(MainActivity.KEY_SCROLL_FOLLOW, true)
+        if (!scrollPlaceOn && (prefs.getBoolean(MainActivity.KEY_SCROLL_PLACE, true) ||
+                prefs.getBoolean(MainActivity.KEY_SCROLL_FOLLOW, true))
+        ) {
+            prefs.edit()
+                .putBoolean(MainActivity.KEY_SCROLL_PLACE, false)
+                .putBoolean(MainActivity.KEY_SCROLL_FOLLOW, false)
+                .apply()
+            Diag.log(act, "reading", "«Чтение»: прокрутка — старое значение сведено к «выключено»")
+        }
+        scrollPlaceBox = addCheck(
+            R.string.scroll_place_title, MainActivity.KEY_SCROLL_PLACE, true,
+        ) { on ->
+            prefs.edit().putBoolean(MainActivity.KEY_SCROLL_FOLLOW, on).apply()
+        }
+        scrollPlaceBox?.visibility =
+            if (prefs.getBoolean(MainActivity.KEY_SCROLL, true)) View.VISIBLE else View.GONE
     }
+
+    // ---------------- «Чтение»: строки-выборы (30.09.2026) ----------------
+
+    /** Состояние «показывать галочки переходов врозь»: либо человек сам выбрал
+     *  «Настроить по отдельности», либо у него стоит набор, которого нет среди
+     *  готовых (например, достался от прежних сборок с пятью галочками) —
+     *  тогда галочки показываем сразу, чтобы его набор было видно и можно было
+     *  поправить. Это состояние самого раздела, а не настройка чтения: живёт в
+     *  prefs, чтобы список не схлопывался при каждом заходе в «Чтение». */
+    private fun jumpPlayDetail(): Boolean =
+        jumpPlayPreset() < 0 || prefs.getBoolean("reading_jump_play_detail", false)
+
+    /** Пять переходов, у каждого до 30.09.2026 была своя галочка «читать сразу».
+     *  Порядок тот же, что был у галочек в разделе. */
+    private val jumpPlayKeys = listOf(
+        MainActivity.KEY_TAP_TO_PLAY,
+        MainActivity.KEY_TOC_PLAY,
+        MainActivity.KEY_BM_PLAY,
+        MainActivity.KEY_SEARCH_PLAY,
+        MainActivity.KEY_NAV_PLAY,
+    )
+
+    /** Номер готового набора: 0 — везде, 1 — только тап и оглавление, 2 — нигде.
+     *  Минус единица — набор свой, его одним словом не назвать. */
+    private fun jumpPlayPreset(): Int {
+        val on = jumpPlayKeys.map { prefs.getBoolean(it, true) }
+        return when {
+            on.all { it } -> 0
+            on.none { it } -> 2
+            on == listOf(true, true, false, false, false) -> 1
+            else -> -1
+        }
+    }
+
+    /** Резюме строки «Читать сразу после перехода»: готовый набор называем по
+     *  имени, свой — «По отдельности» (тогда галочки и разворачиваются). */
+    private fun jumpPlayLabel(): String = getString(
+        when (jumpPlayPreset()) {
+            0 -> R.string.jump_play_all
+            1 -> R.string.jump_play_tap_toc
+            2 -> R.string.jump_play_none
+            else -> R.string.jump_play_custom
+        }
+    )
+
+    private fun refreshJumpPlayRow() {
+        jumpPlayRow?.text = valueLine(getString(R.string.jump_play_title), jumpPlayLabel())
+    }
+
+    /** Окно выбора: три готовых набора и «настроить по отдельности». */
+    private fun pickJumpPlay() {
+        val items = arrayOf(
+            getString(R.string.jump_play_all),
+            getString(R.string.jump_play_tap_toc),
+            getString(R.string.jump_play_none),
+            getString(R.string.jump_play_detail),
+        )
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.jump_play_dialog)
+            // Ничего не отмечено нарочно: наборы — это не «одно из», а выбор
+            // действия, и подсвечивать нечего, если стоит свой набор.
+            .setSingleChoiceItems(items, -1) { d, which ->
+                val e = prefs.edit()
+                when (which) {
+                    0 -> {
+                        for (k in jumpPlayKeys) e.putBoolean(k, true)
+                        e.putBoolean("reading_jump_play_detail", false)
+                    }
+                    1 -> {
+                        e.putBoolean(MainActivity.KEY_TAP_TO_PLAY, true)
+                        e.putBoolean(MainActivity.KEY_TOC_PLAY, true)
+                        e.putBoolean(MainActivity.KEY_BM_PLAY, false)
+                        e.putBoolean(MainActivity.KEY_SEARCH_PLAY, false)
+                        e.putBoolean(MainActivity.KEY_NAV_PLAY, false)
+                        e.putBoolean("reading_jump_play_detail", false)
+                    }
+                    2 -> {
+                        for (k in jumpPlayKeys) e.putBoolean(k, false)
+                        e.putBoolean("reading_jump_play_detail", false)
+                    }
+                    else -> e.putBoolean("reading_jump_play_detail", true)
+                }
+                e.apply()
+                Diag.log(act, "reading", "«Чтение»: читать сразу после перехода — ${jumpPlayLabel()}")
+                d.dismiss()
+                rebuildCurrentGroup()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    // 30.09.2026: окна «что останавливает чтение» и «что прокрутка делает с
+    // местом и голосом» убраны — вместо них галочки прямо в разделе (см.
+    // buildReadingGroup). Вместе с окнами ушли pauseStopKeys, pauseStopLabel,
+    // refreshPauseStopRow, pickPauseStop, scrollWhatLabel и pickScrollWhat.
 
     /** Ползунок скорости/тона по списку значений [values] (RateSteps): свайп
      *  TalkBack двигает ровно на одну десятую (0.6 → 0.7 → 0.8), а не на сотые
@@ -833,57 +1004,29 @@ class SettingsActivity(private val act: SectionActivity) {
             act.recreate()
         }
 
-        // Подсказка: эти флажки убирают/возвращают элементы экрана чтения.
-        // 0.4.86 (msg7026): сами галочки переехали в подраздел «Что показывать
-        // в книге» — здесь остаётся строка-переход с числом спрятанного.
-        addHint(getString(R.string.reader_group_hint))
-
+        // 30.09.2026: подсказки здесь больше нет — галочки живут в подразделе
+        // «Что показывать в книге», и там же сказано, что значит галочка. Здесь
+        // строка говорит состояние числом, и этого довольно.
         // Конструктор экрана чтения (#58): какие элементы читалки показывать.
         // Применяется в MainActivity.onStart (applyReaderUi) при возврате в книгу.
         showGroupRow = addValueButton { openShowSub() }
 
-        // msg5730: «простой экран» — те же галочки, но разом. Ставим их после
-        // списка: строки действуют на него, и так это слышно по порядку.
-        addReaderPresetRows()
+        // 30.09.2026: строк «простой экран» («Оставить только самое нужное» и
+        // «Вернуть все кнопки») здесь больше нет — Серж попросил их убрать.
+        // Набор галочек человек собирает сам в подразделе «Что показывать в книге».
 
         // msg5923/5931: системные кнопки («назад/домой/недавние») — тоже про то,
-        // что видно на экране книги. Строка последняя в разделе: на список выше
-        // она не действует, а после «простого экрана» читается как отдельная тема.
+        // что видно на экране книги. Строка последняя в разделе.
         readerBarsRow = addValueButton { cycleReaderBars() }
     }
 
-    /** Строки «простой экран» (msg5730): разом оставить на экране книги самое
-     *  нужное или вернуть всё. Не отдельный режим, а готовый набор тех же
-     *  галочек — сразу после него любую можно вернуть по одной.
-     *
-     *  Почему действием, а не галочкой-состоянием. Галочка разошлась бы с
-     *  списком ниже, как только человек тронул бы одну из десяти: «простой
-     *  экран» горит, а поиск уже вернули. Строка-действие ничего не помнит и
-     *  потому врать не может. */
-    private fun addReaderPresetRows() {
-        addMenuRow(getString(R.string.reader_simple_title), getString(R.string.reader_simple_hint)) { row ->
-            applyReaderPreset(simple = true, row)
-        }
-        addMenuRow(getString(R.string.reader_all_title), getString(R.string.reader_all_hint)) { row ->
-            applyReaderPreset(simple = false, row)
-        }
-    }
-
-    /** Разложить набор по галочкам читалки. Галочки уже на экране — обновляем их
-     *  на месте, а не пересобираем раздел: пересборка убила бы строку, на которой
-     *  стоит человек (msg5005), а сдвинутые галочки TalkBack читает сам. */
-    private fun applyReaderPreset(simple: Boolean, row: Button) {
-        val e = prefs.edit()
-        readerUi.forEach { (_, key) -> e.putBoolean(key, if (simple) key in SIMPLE_KEEP else true) }
-        e.apply()
-        readerUiBoxes.forEachIndexed { i, box -> box.isChecked = prefs.getBoolean(readerUi[i].second, true) }
-        Diag.log(act, "ui", if (simple) "простой экран: лишние кнопки убраны" else "простой экран: все кнопки возвращены")
-        // Читалка применит набор при возврате в книгу (MainActivity.onStart →
-        // applyReaderUi) — здесь его применять не к чему.
-        row.announceForAccessibility(
-            getString(if (simple) R.string.reader_simple_done else R.string.reader_all_done)
-        )
-    }
+    // 30.09.2026: строки «простой экран» (msg5730) убраны (Серж: «в меню книги
+    // убери две настройки — показывать только нужное и показывать все кнопки»).
+    // Работали они так: разом проставляли галочки из подраздела «Что показывать
+    // в книге» — либо самое нужное (кнопка чтения, ползунок, место и «⋮»), либо
+    // всё подряд. Теперь набор человек собирает сам теми же галочками; строки
+    // `reader_simple_*` и `reader_all_*` удалены вместе с кодом, как и константа
+    // SIMPLE_KEEP со списком «что оставить».
 
     /** Строка «Размер текста» (msg5730): общий размер для всего приложения, а не
      *  только для книги. Меняется сразу и целиком: размер окно берёт при своём
@@ -946,9 +1089,11 @@ class SettingsActivity(private val act: SectionActivity) {
     }
 
     /** Строка прыжка: «Прыжок вперёд: 15 предложений» (msg5234). */
-    private fun jumpRowText(titleRes: Int, key: String): String =
-        getString(titleRes) + ": " +
+    private fun jumpRowText(titleRes: Int, key: String): CharSequence =
+        valueLine(
+            getString(titleRes),
             MainActivity.sentencesPhrase(act, prefs.getInt(key, MainActivity.JUMP_DEFAULT))
+        )
 
     /** Строки свайпов вправо/влево (#77). Раньше были отдельным разделом «Жесты»,
      *  по просьбе перенесены в «Управление». Палитра действий общая с ридером
@@ -1017,10 +1162,10 @@ class SettingsActivity(private val act: SectionActivity) {
      *  Кнопка спрятана — говорим и это (0.4.86, msg7026): галочка «видна» теперь
      *  в другом подразделе, и без пометки связь потерялась бы. Пометка есть
      *  только у спрятанных строк. */
-    private fun actionRowText(r: ButtonActionRow): String {
+    private fun actionRowText(r: ButtonActionRow): CharSequence {
         val hidden = !prefs.getBoolean(r.uiKey, true)
         val who = if (hidden) getString(R.string.btn_action_hidden, r.title) else r.title
-        return who + ": " + gestureLabel(prefs.getString(r.key, r.def) ?: r.def)
+        return valueLine(who, gestureLabel(prefs.getString(r.key, r.def) ?: r.def))
     }
 
     /** Строки кнопок гарнитуры „назад/вперёд“ (msg2136). msg2527: жили в отдельном
@@ -1224,17 +1369,19 @@ class SettingsActivity(private val act: SectionActivity) {
         controlsSubOpen = true
         screenTitle(getString(R.string.controls_group_title))
         content().removeAllViews()
+        // 30.09.2026: подсказок в подразделе нет вовсе (Серж: «в разделе жесты и
+        // кнопки убери строки с подсказками»). Убраны три отдельные остановки:
+        // карта прыжков (`controls_jumps_hint`), объяснение про четыре кнопки
+        // читалки (`reader_actions_hint`) и подсказка про прыжок (`jump_hint`).
+        // Заголовки групп (свайпы, кнопки на экране, кнопки гарнитуры, прыжок)
+        // остаются: по ним слышно, где что.
         addHeading(getString(R.string.controls_section_swipes))
-        // 26.09.2026 (вопрос Сержа «что на что переназначать»): короткая карта
-        // прыжков — чем «глава» отличается от «заголовка» и «разделителя».
-        addHint(getString(R.string.controls_jumps_hint))
         addGestureRows()
         // msg5266: у каждой из четырёх кнопок читалки два действия — короткое и
         // долгое нажатие; оба выбираются здесь из той же палитры, что у свайпов.
         // Список по долгому нажатию на самой кнопке убран.
         // msg5707: сюда же переехала галочка «видна» — три строки на кнопку.
         addHeading(getString(R.string.controls_section_buttons))
-        addHint(getString(R.string.reader_actions_hint))
         addReaderButtonRows()
         // msg2527: кнопки гарнитуры жили отдельным подразделом — теперь стоят
         // строками здесь, третьего уровня в настройках не осталось.
@@ -1243,10 +1390,8 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg5234: прыжок — шаг сразу на несколько предложений, число выбирается
         // здесь (своё для «вперёд» и «назад»), а сам прыжок появляется пунктом в
         // общем списке действий — на кнопке читалки, на свайпе и на кнопке
-        // гарнитуры. Подсказка нужна: без неё непонятно, что пункт списка и эта
-        // строка связаны.
+        // гарнитуры. Подсказки под заголовком больше нет.
         addHeading(getString(R.string.controls_section_jump))
-        addHint(getString(R.string.jump_hint))
         jumpFwdRow = addValueButton { pickJumpSteps(MainActivity.KEY_JUMP_FWD, forward = true) }
         jumpBackRow = addValueButton { pickJumpSteps(MainActivity.KEY_JUMP_BACK, forward = false) }
         refreshRows()
@@ -1275,7 +1420,8 @@ class SettingsActivity(private val act: SectionActivity) {
             LibraryActivity.KEY_LIB_COVERS,
             LibraryActivity.LIB_COVERS_DEFAULT,
         )
-        addHint(getString(R.string.lib_covers_hint))
+        // 30.09.2026: подсказки у этой галочки больше нет — из названия всё
+        // понятно (Серж: «некоторые пункты вообще очевидные»).
         // Вкладки Библиотеки (#97, переехали из «Интерфейса» msg5317): порядок и
         // видимость верхних фильтров «Читаю/Новые/Прочитанные/Все» — это про
         // полку, а не про экран книги, поэтому и живут в «Библиотеке». «Все»
@@ -1297,15 +1443,19 @@ class SettingsActivity(private val act: SectionActivity) {
             // кнопка, и казалось, что менять нечем.
             openFolderPicker()
         }
-        // Пояснение, которое раньше жило в том окошке, теперь строкой под настройкой:
-        // «файлы не копируются» — важное, а сказать его больше негде.
-        addHint(getString(R.string.folder_title_hint))
+        // 30.09.2026: подсказки «Файлы не копируются.» здесь больше нет (Серж:
+        // «убери из библиотеки эту подсказку»). Что она значила: книги остаются
+        // лежать в выбранной папке, приложение их не копирует к себе — полка
+        // просто показывает файлы по их адресу. Человеку это знать не обязательно,
+        // а остановка в списке была лишней.
         // #44: куда скачивать книги из каталога.
         dlFolderRow = addValueButton {
             // Так же без окошка (см. folderRow выше).
             openDlFolderPicker()
         }
-        addHint(getString(R.string.dl_folder_title_hint))
+        // 30.09.2026: подсказки у этой строки больше нет — сказанное в ней и так
+        // видно из названия и значения (Серж: «некоторые пункты вообще очевидные,
+        // давай по минимуму уберём»).
         // #45: какой формат качать из каталога по умолчанию.
         dlFormatRow = addValueButton {
             MaterialAlertDialogBuilder(act)
@@ -1351,17 +1501,17 @@ class SettingsActivity(private val act: SectionActivity) {
      *  кнопки-стрелки. Раньше четыре из них жили в «Кнопках и жестах» у своих
      *  кнопок: связь с действиями там была, а одного места для «что видно» не
      *  было вовсе. Теперь наоборот: видно — здесь, что делает — там, а связь
-     *  держит пометка «скрыта» в строках действий (см. [actionRowText]). */
+     *  держит пометка «скрыта» в строках действий (см. [actionRowText]).
+     *  30.09.2026: заголовки «Панели и кнопки» и «Четыре кнопки внизу» убраны
+     *  (Серж: «убрать оба заголовка, как в „Чтении“»); вдобавок второй врал — из
+     *  четырёх кнопок две сверху. */
     private fun openShowSub() {
         showSubOpen = true
         screenTitle(getString(R.string.show_group_title))
         content().removeAllViews()
         addHint(getString(R.string.reader_group_hint))
-        addHeading(getString(R.string.show_panels_heading))
-        readerUiBoxes.clear()
-        readerUi.forEach { (res, key) -> readerUiBoxes.add(addCheck(res, key, true)) }
+        readerUi.forEach { (res, key) -> addCheck(res, key, true) }
         // Четыре кнопки читалки: своё имя у каждой — «нижняя левая кнопка: видна».
-        addHeading(getString(R.string.show_buttons_heading))
         for (b in MainActivity.READER_BUTTONS) {
             addCheckText(
                 getString(R.string.btn_visible_title, getString(b.posRes)),
@@ -1393,7 +1543,13 @@ class SettingsActivity(private val act: SectionActivity) {
         // Чем копия отличается от синхронизации — говорим прямо: обе умеют
         // «отправить файл», и без этого человек путает два разных файла.
         addHint(getString(R.string.backup_diff_hint))
-        addButton(getString(R.string.backup_create)) { createBackupDialog() }
+        // 30.09.2026: окна «Что включить в копию» больше нет — копия всегда
+        // полная (настройки и книги). Копия для восстановления нужна целиком:
+        // одни настройки без книг ничего не вернут, а окно с двумя галочками
+        // стоило человеку лишнего шага при каждом создании.
+        addButton(getString(R.string.backup_create)) {
+            runBackupCreate(includeSettings = true, includeBooks = true)
+        }
         addButton(getString(R.string.backup_restore)) {
             openBackupFilePicker()
         }
@@ -1471,9 +1627,8 @@ class SettingsActivity(private val act: SectionActivity) {
         booksRow = null
         booksBox = null
         // 0.4.86 (msg7026): галочки «что показывать» живут в подразделе — вне его
-        // ссылки на них мертвы. Заодно чистим список для «простого экрана»: он
-        // обновляет галочки на месте, а обновлять, пока подраздел закрыт, нечего.
-        readerUiBoxes.clear()
+        // ссылки на них мертвы. Списка галочек для «простого экрана» больше нет:
+        // сами строки «простой экран» убраны 30.09.2026.
     }
 
     /** Строка состояния без действия (msg6046…6078): «Последняя синхронизация: …».
@@ -1613,8 +1768,8 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Галочка с готовым текстом — нужна конструктору читалки (msg5220): строка
      *  называется действием кнопки, а оно меняется долгим нажатием в читалке,
      *  поэтому текст приходит строкой и обновляется в [refreshRows]. */
-    private fun addCheckText(text: CharSequence, key: String, def: Boolean): CheckBox {
-        val cb = CheckBox(act).apply {
+    private fun addCheckText(text: CharSequence, key: String, def: Boolean): SwitchCompat {
+        val cb = SwitchCompat(act).apply {
             this.text = text
             textSize = 17f
             isChecked = prefs.getBoolean(key, def)
@@ -1637,8 +1792,8 @@ class SettingsActivity(private val act: SectionActivity) {
         def: Boolean,
         hintRes: Int = 0,
         onChange: ((Boolean) -> Unit)? = null,
-    ): CheckBox {
-        val box = CheckBox(act).apply {
+    ): SwitchCompat {
+        val box = SwitchCompat(act).apply {
             // Подсказка идёт второй строкой того же пункта (как у строк-разделов,
             // см. addMenuRow): диктор читает её там же, где название, и лишней
             // остановки в списке не появляется (29.09.2026, «Названия строк»).
@@ -1686,6 +1841,7 @@ class SettingsActivity(private val act: SectionActivity) {
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
             setPadding(dp(12), 0, dp(12), 0)
             setOnClickListener { onClick() }
+            ripple(this)
         }
         asPlainText(b)
         content().addView(b, lp().apply {
@@ -1723,6 +1879,7 @@ class SettingsActivity(private val act: SectionActivity) {
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(6), dp(12), dp(6))
             setOnClickListener { onClick(this) }
+            ripple(this)
         }
         asPlainText(b)
         content().addView(b, lp().apply {
@@ -1748,85 +1905,137 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     }
 
+    /** Рябь при касании на строке-кнопке (единый вид). */
+    private fun ripple(v: View) {
+        val tv = android.util.TypedValue()
+        if (act.theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true) && tv.resourceId != 0) {
+            v.setBackgroundResource(tv.resourceId)
+        }
+    }
+
+    /** Значение настройки второй строкой: название обычным, значение мельче и серым. */
+    private fun valueLine(title: String, value: String): CharSequence =
+        SpannableStringBuilder().apply {
+            append(title)
+            append("\n")
+            val start = length
+            append(value)
+            setSpan(RelativeSizeSpan(0.76f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(ForegroundColorSpan(Palette.DIM), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+
     /** Обновить тексты строк-резюме (стартовый экран, шаг, папка, сортировка). */
     private fun refreshRows() {
         // msg5730: резюме строки размера текста — выбранное значение. Строки
         // может и не быть в этом разделе (тогда ссылка с прошлой сборки мертва,
         // это безвредно).
-        textScaleRow?.text = getString(R.string.text_scale_title) + ": " +
+        textScaleRow?.text = valueLine(
+            getString(R.string.text_scale_title),
             getString(TextScale.labelRes(TextScale.value(act)))
+        )
 
         val startLast = prefs.getString(MainActivity.KEY_START, MainActivity.START_LAST) == MainActivity.START_LAST
-        startRow?.text = getString(R.string.start_screen_title) + ": " +
+        startRow?.text = valueLine(
+            getString(R.string.start_screen_title),
             if (startLast) getString(R.string.start_screen_last) else getString(R.string.start_screen_library)
+        )
 
         val exitLibrary = prefs.getString(MainActivity.KEY_EXIT, MainActivity.EXIT_LIBRARY) == MainActivity.EXIT_LIBRARY
-        exitRow?.text = getString(R.string.exit_title) + ": " +
+        exitRow?.text = valueLine(
+            getString(R.string.exit_title),
             if (exitLibrary) getString(R.string.exit_library) else getString(R.string.exit_desktop)
+        )
 
-        playLongRow?.text = getString(R.string.play_long_title) + ": " + getString(
-            if (prefs.getString(MainActivity.KEY_PLAY_LONG, MainActivity.PLAY_LONG_SLEEP) == MainActivity.PLAY_LONG_OFF)
-                R.string.play_long_off else R.string.play_long_sleep
+        playLongRow?.text = valueLine(
+            getString(R.string.play_long_title),
+            getString(
+                if (prefs.getString(MainActivity.KEY_PLAY_LONG, MainActivity.PLAY_LONG_SLEEP) == MainActivity.PLAY_LONG_OFF)
+                    R.string.play_long_off else R.string.play_long_sleep
+            )
         )
 
         val tree = treeUri()
-        folderRow?.text = getString(R.string.folder_title) + ": " +
+        folderRow?.text = valueLine(
+            getString(R.string.folder_title),
             if (tree == null) getString(R.string.folder_none) else folderLabel(Uri.parse(tree))
+        )
 
         val dlTree = dlTreeUri()
-        dlFolderRow?.text = getString(R.string.dl_folder_title) + ": " +
+        dlFolderRow?.text = valueLine(
+            getString(R.string.dl_folder_title),
             if (dlTree == null) getString(R.string.dl_folder_none) else folderLabel(Uri.parse(dlTree))
+        )
 
-        dlFormatRow?.text = getString(R.string.dl_format_title) + ": " +
+        dlFormatRow?.text = valueLine(
+            getString(R.string.dl_format_title),
             OPDS_READABLE_FORMATS.firstOrNull { it.first == dlFormatKey() }?.second ?: "FB2"
+        )
 
-        gestureRightRow?.text = getString(R.string.gesture_right_title) + ": " +
+        gestureRightRow?.text = valueLine(
+            getString(R.string.gesture_right_title),
             gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_RIGHT, MainActivity.G_NEXT_HEADER))
-        gestureLeftRow?.text = getString(R.string.gesture_left_title) + ": " +
+        )
+        gestureLeftRow?.text = valueLine(
+            getString(R.string.gesture_left_title),
             gestureLabel(prefs.getString(MainActivity.KEY_GESTURE_LEFT, MainActivity.G_PREV_HEADER))
+        )
         // msg5266: восемь строк действий кнопок читалки — значение следует выбору.
         for (r in buttonActionRows) r.button.text = actionRowText(r)
         // msg5234: прыжок — числа показываем словами («15 предложений»).
         jumpFwdRow?.text = jumpRowText(R.string.jump_fwd_title, MainActivity.KEY_JUMP_FWD)
         jumpBackRow?.text = jumpRowText(R.string.jump_back_title, MainActivity.KEY_JUMP_BACK)
 
-        headsetPrevRow?.text = getString(R.string.headset_prev_title) + ": " +
+        headsetPrevRow?.text = valueLine(
+            getString(R.string.headset_prev_title),
             headsetLabel(
                 prefs.getString(MainActivity.KEY_HS_PREV, MainActivity.HS_SENTENCE),
                 MainActivity.KEY_HS_PREV,
             )
-        headsetNextRow?.text = getString(R.string.headset_next_title) + ": " +
+        )
+        headsetNextRow?.text = valueLine(
+            getString(R.string.headset_next_title),
             headsetLabel(
                 prefs.getString(MainActivity.KEY_HS_NEXT, MainActivity.HS_SENTENCE),
                 MainActivity.KEY_HS_NEXT,
             )
+        )
         // #75: движок, язык и голос — строки общего набора (тот же код, что в
         // панели читалки). Раздела «Голос» на экране нет — набору нечего
         // перерисовывать, но вызов дешёвый и без ветвлений.
         voicePicker?.refresh()
-        afterCallRow?.text = getString(R.string.after_call_title) + ": " + afterCallLabel()
-        afterCallRewindRow?.text = getString(R.string.after_call_rewind_title) + ": " + rewindLabel()
-        startRewindRow?.text = getString(R.string.start_rewind_title) + ": " + startRewindLabel()
-        // msg5604: «Пауза между фразами: <значение>».
-        pauseKeepRow?.text = getString(R.string.pause_keep_title) + ": " + pauseKeepLabel()
-        readerBarsRow?.text = getString(R.string.reader_bars_title) + ": " + readerBarsLabel()
+        afterCallRow?.text = valueLine(getString(R.string.after_call_title), afterCallLabel())
+        startRewindRow?.text = valueLine(getString(R.string.start_rewind_title), startRewindLabel())
+        // 30.09.2026: строка-выбор раздела «Чтение». Галочки «останавливать
+        // чтение» и «долистал сам» состояние держат сами — им резюме не нужно.
+        jumpPlayRow?.text = valueLine(getString(R.string.jump_play_title), jumpPlayLabel())
+        // msg5604: «Пауза между предложениями: <значение>».
+        pauseKeepRow?.text = valueLine(getString(R.string.pause_keep_title), pauseKeepLabel())
+        // 30.09.2026: «Уровень этого звука: <значение>».
+        silentLevelRow?.text = valueLine(getString(R.string.silent_level_title), silentLevelLabel())
+        readerBarsRow?.text = valueLine(getString(R.string.reader_bars_title), readerBarsLabel())
 
         val hiddenTabs = LibraryActivity.tabsHidden(prefs)
         for ((mode, b) in tabRowButtons) {
-            b.text = getString(LibraryActivity.tabLabelRes(mode)) + ": " +
+            b.text = valueLine(
+                getString(LibraryActivity.tabLabelRes(mode)),
                 getString(if (mode in hiddenTabs) R.string.lib_tabs_hidden else R.string.lib_tabs_visible)
+            )
         }
 
         // 0.4.86 (msg7026): строка «Что показывать в книге» — состояние числом:
         // по ней слышно, что часть элементов убрана, не заходя внутрь.
         val hiddenUi = hiddenReaderUiCount()
-        showGroupRow?.text = getString(R.string.show_group_title) + ": " +
+        showGroupRow?.text = valueLine(
+            getString(R.string.show_group_title),
             if (hiddenUi == 0) getString(R.string.show_group_all)
             else getString(R.string.show_group_hidden, hiddenUi)
+        )
 
         val dir = BackupStore.dirUri(act)
-        backupDirRow?.text = getString(R.string.backup_dir_title) + ": " +
+        backupDirRow?.text = valueLine(
+            getString(R.string.backup_dir_title),
             if (dir == null) getString(R.string.backup_dir_none) else folderLabel(dir)
+        )
         backupAutoRow?.text = backupAutoText()
         // 0.4.86 (msg7020): папка нужна только расписанию — копию можно создать
         // кнопкой и отправить в Telegram. Выключено расписание — строку прячем.
@@ -1849,8 +2058,10 @@ class SettingsActivity(private val act: SectionActivity) {
             }
         }
         booksRow?.text = booksLabel()
-        syncLastRow?.text = getString(R.string.sync_last_title) + ": " +
-            (SyncStore.lastResult(act) ?: getString(R.string.sync_last_never))
+        syncLastRow?.text = valueLine(
+            getString(R.string.sync_last_title),
+            SyncStore.lastResult(act) ?: getString(R.string.sync_last_never)
+        )
 
         cacheRow?.text = cacheText()
 
@@ -1862,46 +2073,74 @@ class SettingsActivity(private val act: SectionActivity) {
         prefs.getString(MainActivity.KEY_AFTER_CALL, MainActivity.AFTER_CALL_STOP)
             ?: MainActivity.AFTER_CALL_STOP
 
-    private fun afterCallLabel(): String = getString(
-        if (afterCallMode() == MainActivity.AFTER_CALL_CONTINUE)
-            R.string.after_call_continue_value else R.string.after_call_stop_value
-    )
-
-    private fun rewindLabel(): String = getString(when (
-        prefs.getString(MainActivity.KEY_AFTER_CALL_REWIND, MainActivity.AFTER_CALL_REWIND_5)
-            ?: MainActivity.AFTER_CALL_REWIND_5
-    ) {
-        MainActivity.AFTER_CALL_REWIND_NONE -> R.string.after_call_rewind_none
-        MainActivity.AFTER_CALL_REWIND_2 -> R.string.after_call_rewind_2
-        MainActivity.AFTER_CALL_REWIND_10 -> R.string.after_call_rewind_10
-        else -> R.string.after_call_rewind_5
-    })
+    /** Значение строки «После звонка»: либо «Остановиться», либо «Продолжить…» —
+     *  с какого места. Общая на оба прежних случая (30.09.2026). */
+    private fun afterCallLabel(): String {
+        if (afterCallMode() != MainActivity.AFTER_CALL_CONTINUE) {
+            return getString(R.string.after_call_stop)
+        }
+        return getString(when (
+            prefs.getString(MainActivity.KEY_AFTER_CALL_REWIND, MainActivity.AFTER_CALL_REWIND_5)
+                ?: MainActivity.AFTER_CALL_REWIND_5
+        ) {
+            MainActivity.AFTER_CALL_REWIND_NONE -> R.string.after_call_go_same
+            MainActivity.AFTER_CALL_REWIND_2 -> R.string.after_call_go_2
+            MainActivity.AFTER_CALL_REWIND_10 -> R.string.after_call_go_10
+            else -> R.string.after_call_go_5
+        })
+    }
 
     private fun hasPhonePerm(): Boolean =
         checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
 
-    /** Выбор режима «После звонка». «Продолжить чтение» требует разрешения
-     *  «Телефон» (READ_PHONE_STATE) — просим его здесь, один раз. */
+    /** Выбор «После звонка» (30.09.2026): один список — остановиться или
+     *  продолжить, и если продолжить, то с какого места. Прежде это были две
+     *  строки: режим и отдельно откат, — и человек читал про откат даже тогда,
+     *  когда стояло «Остановиться» (Серж: «что если всё это в одной строчке
+     *  повыбирать»). Любой вариант с «Продолжить» требует разрешения «Телефон»
+     *  (READ_PHONE_STATE) — просим его здесь, один раз. */
     private fun pickAfterCallMode() {
-        val cur = if (afterCallMode() == MainActivity.AFTER_CALL_CONTINUE) 1 else 0
+        val rewinds = arrayOf(
+            MainActivity.AFTER_CALL_REWIND_NONE,
+            MainActivity.AFTER_CALL_REWIND_2,
+            MainActivity.AFTER_CALL_REWIND_5,
+            MainActivity.AFTER_CALL_REWIND_10,
+        )
+        val cur = if (afterCallMode() != MainActivity.AFTER_CALL_CONTINUE) {
+            0
+        } else {
+            val saved = prefs.getString(
+                MainActivity.KEY_AFTER_CALL_REWIND, MainActivity.AFTER_CALL_REWIND_5
+            )
+            (rewinds.indexOf(saved).takeIf { it >= 0 } ?: 2) + 1
+        }
         MaterialAlertDialogBuilder(act)
             .setTitle(R.string.after_call_dialog)
             .setSingleChoiceItems(
                 arrayOf(
                     getString(R.string.after_call_stop),
-                    getString(R.string.after_call_continue),
+                    getString(R.string.after_call_go_same),
+                    getString(R.string.after_call_go_2),
+                    getString(R.string.after_call_go_5),
+                    getString(R.string.after_call_go_10),
                 ),
                 cur,
             ) { d, which ->
-                if (which == 1 && !hasPhonePerm()) {
+                if (which > 0 && !hasPhonePerm()) {
+                    pendingCallRewind = rewinds[which - 1]
                     d.dismiss()
                     requestPhonePerm()
                     return@setSingleChoiceItems
                 }
-                prefs.edit().putString(
-                    MainActivity.KEY_AFTER_CALL,
-                    if (which == 0) MainActivity.AFTER_CALL_STOP else MainActivity.AFTER_CALL_CONTINUE,
-                ).apply()
+                val e = prefs.edit()
+                if (which == 0) {
+                    e.putString(MainActivity.KEY_AFTER_CALL, MainActivity.AFTER_CALL_STOP)
+                } else {
+                    e.putString(MainActivity.KEY_AFTER_CALL, MainActivity.AFTER_CALL_CONTINUE)
+                    e.putString(MainActivity.KEY_AFTER_CALL_REWIND, rewinds[which - 1])
+                }
+                e.apply()
+                Diag.log(act, "reading", "«Чтение»: после звонка — ${afterCallLabel()}")
                 d.dismiss()
                 rebuildCurrentGroup()
             }
@@ -1988,6 +2227,49 @@ class SettingsActivity(private val act: SectionActivity) {
         }
     )
 
+    // ---------------- Тихий поток: громкость (30.09.2026) ----------------
+
+    /** Порядок уровней тихого потока: 1 — младший разряд (ухо не слышит),
+     *  дальше громче (см. SilentKeepAlive.LEVELS). */
+    private val silentLevels = intArrayOf(1, 2, 3, 4, 5)
+
+    private fun pickSilentLevel() {
+        val cur = prefs.getInt(
+            MainActivity.KEY_SILENT_LEVEL, MainActivity.SILENT_LEVEL_DEFAULT
+        ).let { v -> silentLevels.indexOf(v).takeIf { it >= 0 } ?: 0 }
+        val labels = arrayOf(
+            getString(R.string.silent_level_1),
+            getString(R.string.silent_level_2),
+            getString(R.string.silent_level_3),
+            getString(R.string.silent_level_4),
+            getString(R.string.silent_level_5),
+        )
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.silent_level_title)
+            .setSingleChoiceItems(labels, cur) { d, which ->
+                val lvl = silentLevels[which]
+                prefs.edit().putInt(MainActivity.KEY_SILENT_LEVEL, lvl).apply()
+                // Поток уже идёт — пересобираем его с новой амплитудой на ходу:
+                // человек слушает гарнитуру и сразу слышит, помогло ли.
+                SilentKeepAlive.levelChanged(act)
+                d.dismiss()
+                rebuildCurrentGroup()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Название выбранного уровня — для строки-резюме. */
+    private fun silentLevelLabel(): String = getString(
+        when (prefs.getInt(MainActivity.KEY_SILENT_LEVEL, MainActivity.SILENT_LEVEL_DEFAULT)) {
+            2 -> R.string.silent_level_2
+            3 -> R.string.silent_level_3
+            4 -> R.string.silent_level_4
+            5 -> R.string.silent_level_5
+            else -> R.string.silent_level_1
+        }
+    )
+
     // ---------------- «Системные кнопки» (msg5931) ----------------
     // Та же механика: касание переводит на следующее состояние по кругу, текст
     // правится НА МЕСТЕ (msg5005). Дополнительно проговариваем подсказку о том,
@@ -2031,51 +2313,38 @@ class SettingsActivity(private val act: SectionActivity) {
         ReaderBars.sync()
         Diag.log(act, "ui", "системные кнопки: ${readerBarsLabel()}")
         val row = readerBarsRow ?: return
-        val text = getString(R.string.reader_bars_title) + ": " + readerBarsLabel()
+        val text: CharSequence = valueLine(getString(R.string.reader_bars_title), readerBarsLabel())
         row.text = text
         row.announceForAccessibility(
             listOfNotNull(text, readerBarsHint()).joinToString(". ")
         )
     }
 
-    /** Откат после звонка (виден только при «Продолжить чтение»). */
-    private fun pickAfterCallRewind() {
-        val values = arrayOf(
-            MainActivity.AFTER_CALL_REWIND_NONE,
-            MainActivity.AFTER_CALL_REWIND_2,
-            MainActivity.AFTER_CALL_REWIND_5,
-            MainActivity.AFTER_CALL_REWIND_10,
-        )
-        val cur = values.indexOf(
-            prefs.getString(MainActivity.KEY_AFTER_CALL_REWIND, MainActivity.AFTER_CALL_REWIND_5)
-        ).coerceAtLeast(0)
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.after_call_rewind_dialog)
-            .setSingleChoiceItems(
-                arrayOf(
-                    getString(R.string.after_call_rewind_none),
-                    getString(R.string.after_call_rewind_2),
-                    getString(R.string.after_call_rewind_5),
-                    getString(R.string.after_call_rewind_10),
-                ),
-                cur,
-            ) { d, which ->
-                prefs.edit().putString(MainActivity.KEY_AFTER_CALL_REWIND, values[which]).apply()
-                d.dismiss()
-                rebuildCurrentGroup()
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-    }
+    // 30.09.2026: отдельного окна «На сколько отмотать после звонка» больше нет —
+    // откат выбирается в общем списке строки «После звонка» (pickAfterCallMode).
 
     // ---------------- Вкладки Библиотеки (#97) ----------------
 
-    /** Диалог одной вкладки: показать/скрыть, передвинуть выше/ниже. */
+    /** Диалог одной вкладки: показать/скрыть, передвинуть выше/ниже.
+     *
+     *  30.09.2026 (вопрос Сержа: «есть опция убрать вкладку „Все“ — её убрать
+     *  нельзя, тогда для чего там кнопка убрать?»): пункт «Скрыть» показываем
+     *  ТОЛЬКО когда скрыть и правда можно. Прежде он был в меню всегда, а после
+     *  нажатия отвечал отказом — «вкладку „Все“ скрыть нельзя», «эта вкладка
+     *  сейчас открыта», «нельзя скрыть последнюю видимую». Предлагать то, чего
+     *  сделать нельзя, — хуже, чем не предлагать: человек тратит касание и
+     *  слышит отказ. Правила остались те же, просто теперь о них не узнаёшь
+     *  нажатием:
+     *   - «Все» не скрывается никогда (её нет в списке скрываемых);
+     *   - открытую сейчас вкладку прячем только после перехода на другую;
+     *   - последнюю видимую (кроме «Все») тоже не прячем — иначе полка
+     *     осталась бы без единого фильтра. */
     private fun tabActions(mode: Int) {
         val items = ArrayList<String>()
         val acts = ArrayList<Int>() // 0 — выше, 1 — ниже, 2 — показать/скрыть
         val order = LibraryActivity.tabsOrder(prefs)
-        val hidden = mode in LibraryActivity.tabsHidden(prefs)
+        val hiddenSet = LibraryActivity.tabsHidden(prefs)
+        val hidden = mode in hiddenSet
         if (hidden) {
             items.add(getString(R.string.lib_tabs_show))
             acts.add(2)
@@ -2089,8 +2358,20 @@ class SettingsActivity(private val act: SectionActivity) {
                 items.add(getString(R.string.lib_tabs_down))
                 acts.add(1)
             }
-            items.add(getString(R.string.lib_tabs_hide))
-            acts.add(2)
+            val visibleNonAll = order.count { it !in hiddenSet && it != LibraryActivity.FILTER_ALL }
+            val canHide = mode != LibraryActivity.FILTER_ALL &&
+                mode != LibraryActivity.activeFilterMode &&
+                visibleNonAll > 1
+            if (canHide) {
+                items.add(getString(R.string.lib_tabs_hide))
+                acts.add(2)
+            }
+        }
+        // Менять нечего (например, в порядке всего одна вкладка): молчание хуже
+        // короткой фразы — человек нажал и ждёт ответа.
+        if (items.isEmpty()) {
+            toast(getString(R.string.lib_tabs_nothing))
+            return
         }
         MaterialAlertDialogBuilder(act)
             .setTitle(getString(R.string.lib_tabs_dialog, getString(LibraryActivity.tabLabelRes(mode))))
@@ -2158,22 +2439,8 @@ class SettingsActivity(private val act: SectionActivity) {
     // ---------------- Резервная копия и восстановление (#100) ----------------
 
     /** Ручное создание: два блока галочками, файл уходит системным Share. */
-    private fun createBackupDialog() {
-        val items = arrayOf(
-            getString(R.string.backup_block_settings),
-            getString(R.string.backup_block_books),
-        )
-        val checked = booleanArrayOf(true, true)
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.backup_blocks_create)
-            .setMultiChoiceItems(items, checked) { _, _, _ -> }
-            .setPositiveButton(R.string.backup_create_go) { _, _ ->
-                if (!checked[0] && !checked[1]) return@setPositiveButton
-                runBackupCreate(checked[0], checked[1])
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-    }
+    // 30.09.2026: окно «Что включить в копию» убрано — createBackupDialog()
+    // заменён прямым вызовом runBackupCreate(true, true) в openBackupSub().
 
     private fun runBackupCreate(includeSettings: Boolean, includeBooks: Boolean) {
         Thread {
@@ -2711,22 +2978,13 @@ class SettingsActivity(private val act: SectionActivity) {
             toast(getString(R.string.backup_bad_file))
             return
         }
-        var sIdx = -1
-        var bIdx = -1
-        val items = ArrayList<String>()
-        if (info.hasSettings) {
-            sIdx = items.size
-            items.add(getString(R.string.backup_block_settings))
-        }
-        if (info.hasBooks) {
-            bIdx = items.size
-            items.add(getString(R.string.backup_block_books))
-        }
-        if (items.isEmpty()) {
+        if (!info.hasSettings && !info.hasBooks) {
             toast(getString(R.string.backup_bad_file))
             return
         }
-        val checked = BooleanArray(items.size) { true }
+        // 30.09.2026: галочек «что брать» больше нет — восстанавливаем всё, что
+        // есть в файле. Окно остаётся подтверждением: по нему слышно, копия от
+        // какого числа и что в ней лежит.
         val msg = StringBuilder(
             getString(R.string.backup_preview_title, backupDateStr(info.createdAt))
         )
@@ -2739,12 +2997,8 @@ class SettingsActivity(private val act: SectionActivity) {
         MaterialAlertDialogBuilder(act)
             .setTitle(R.string.backup_blocks_restore)
             .setMessage(msg)
-            .setMultiChoiceItems(items.toTypedArray(), checked) { _, _, _ -> }
             .setPositiveButton(R.string.backup_restore_go) { _, _ ->
-                val doSettings = sIdx >= 0 && checked[sIdx]
-                val doBooks = bIdx >= 0 && checked[bIdx]
-                if (!doSettings && !doBooks) return@setPositiveButton
-                val res = BackupStore.restore(act, bytes, doSettings, doBooks)
+                val res = BackupStore.restore(act, bytes, info.hasSettings, info.hasBooks)
                 if (res == null) {
                     toast(getString(R.string.backup_restore_fail, "файл повреждён"))
                 } else {
@@ -2808,12 +3062,13 @@ class SettingsActivity(private val act: SectionActivity) {
     /** Строка расписания с датой последней копии (0.4.86, msg7020): раньше даты
      *  в списке не было вовсе, и по строке нельзя было понять, работает ли
      *  расписание. Информация добавляется, остановка — нет. */
-    private fun backupAutoText(): String {
-        val base = getString(R.string.backup_auto_title) + ": " + backupAutoLabel()
+    private fun backupAutoText(): CharSequence {
+        val base = valueLine(getString(R.string.backup_auto_title), backupAutoLabel())
         if (backupAutoOff()) return base
         val last = BackupStore.lastBackupAt(act)
         if (last <= 0L) return base
-        return base + ", " + getString(R.string.backup_auto_last, backupDateStr(last))
+        return SpannableStringBuilder(base).append(", ")
+            .append(getString(R.string.backup_auto_last, backupDateStr(last)))
     }
 
     // ---------------- Диагностика обновлений ----------------

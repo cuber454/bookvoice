@@ -9,7 +9,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.CheckBox
+import androidx.appcompat.widget.SwitchCompat
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.view.ViewCompat
@@ -71,6 +71,7 @@ abstract class RowsActivity : SectionActivity() {
             if (tag != null) this.tag = tag
             if (onClick != null) {
                 isClickable = true
+                ripple(this)
                 setOnClickListener { onClick() }
             }
             accessibilityDelegate = object : View.AccessibilityDelegate() {
@@ -111,9 +112,9 @@ abstract class RowsActivity : SectionActivity() {
         tag: String? = null,
         hintOf: ((Boolean) -> String)? = null,
         onChange: (Boolean) -> Unit,
-    ): CheckBox {
+    ): SwitchCompat {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val v = CheckBox(this).apply {
+        val v = SwitchCompat(this).apply {
             val on = prefs.getBoolean(key, def)
             text = withHint(title, hintOf?.invoke(on) ?: hint)
             textSize = 17f
@@ -178,6 +179,14 @@ abstract class RowsActivity : SectionActivity() {
         }
 
     protected fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /** Рябь при касании — как у гугловских строк списка (единый вид). */
+    protected fun ripple(v: View) {
+        val tv = android.util.TypedValue()
+        if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true) && tv.resourceId != 0) {
+            v.setBackgroundResource(tv.resourceId)
+        }
+    }
 
     companion object {
         /** Те же настройки чтения, что и у читалки: `MainActivity.prefs` и

@@ -26,8 +26,12 @@ object ReplyMarks {
     /** Свои знаки реплики, через пробел: «*», «-», ««», можно и слово. */
     const val KEY_MARKS = "reply_marks_own"
 
+    /** Все известные свои знаки, включая выключенные — для списка галочек. */
+    const val KEY_KNOWN = "reply_marks_known"
+
     /** Приставки книжного набора: наличие ключа и означает «у книги свой набор». */
     private const val BOOK_MARKS = "reply_marks_book_"
+    private const val BOOK_KNOWN = "reply_marks_known_book_"
     private const val BOOK_NUMBER = "reply_num_book_"
     private const val BOOK_REMEMBER = "reply_marks_remember_"
 
@@ -38,15 +42,18 @@ object ReplyMarks {
 
     /** Действующий набор знаков: свой у книги, если он для неё сохранён, иначе
      *  общий. [book] — имя файла книги (как в словаре), null — книга не открыта. */
-    data class Marks(val list: List<String>, val number: Boolean, val fromBook: Boolean) {
+    data class Marks(val list: List<String>, val known: List<String>, val number: Boolean, val fromBook: Boolean) {
         /** Словами для строки состояния: «длинное тире» наследие разбора, поэтому
-         *  его в наборе не перечисляем — говорим про свои знаки и про номер. */
+         *  его в наборе не перечисляем — говорим про свои знаки и про номер.
+         *  30.09.2026: «номер с тире» → «номер и тире» (слышно, что правил два, а
+         *  не одно составное); набор «общий» и «для этой книги» называет строка
+         *  окна (`reply_marks_common` / `reply_marks_for_book`). */
         fun words(): String {
             val own = list.joinToString(", ") { Roles.markName(it) }
             return when {
-                own.isEmpty() && number -> "номер с тире"
+                own.isEmpty() && number -> "номер и тире"
                 own.isEmpty() -> "только длинное тире"
-                number -> "$own, номер с тире"
+                number -> "$own, номер и тире"
                 else -> own
             }
         }
@@ -56,34 +63,46 @@ object ReplyMarks {
         val p = prefs(c)
         val key = book?.trim()?.takeIf { it.isNotEmpty() }?.let { Dict.key(it) }
         if (key != null && p.contains(BOOK_MARKS + key)) {
+            val active = parse(p.getString(BOOK_MARKS + key, "").orEmpty())
             return Marks(
-                parse(p.getString(BOOK_MARKS + key, "").orEmpty()),
+                active,
+                knownOf(parse(p.getString(BOOK_KNOWN + key, "").orEmpty()), active),
                 p.getBoolean(BOOK_NUMBER + key, true),
                 true,
             )
         }
+        val active = parse(p.getString(KEY_MARKS, "").orEmpty())
         return Marks(
-            parse(p.getString(KEY_MARKS, "").orEmpty()),
+            active,
+            knownOf(parse(p.getString(KEY_KNOWN, "").orEmpty()), active),
             p.getBoolean(KEY_NUMBER, true),
             false,
         )
     }
 
+    /** Известные знаки = сохранённые плюс действующие: у каждой галочки должна
+     *  быть строка, даже если знак когда-то выключили. */
+    private fun knownOf(saved: List<String>, active: List<String>): List<String> =
+        (saved + active).distinct()
+
     /** Сохранить набор: в книжный, если для этой книги включено «запомнить»,
      *  иначе в общий. Сразу применяет его к разбору. */
-    fun save(c: Context, book: String?, list: List<String>, number: Boolean) {
+    fun save(c: Context, book: String?, list: List<String>, number: Boolean, known: List<String>) {
         val p = prefs(c)
         val key = book?.trim()?.takeIf { it.isNotEmpty() }?.let { Dict.key(it) }
         val remembered = key != null && p.getBoolean(BOOK_REMEMBER + key, false)
         val clean = normalize(list)
+        val cleanKnown = knownOf(known, clean)
         if (remembered) {
             p.edit()
                 .putString(BOOK_MARKS + key, clean.joinToString(" "))
+                .putString(BOOK_KNOWN + key, cleanKnown.joinToString(" "))
                 .putBoolean(BOOK_NUMBER + key, number)
                 .apply()
         } else {
             p.edit()
                 .putString(KEY_MARKS, clean.joinToString(" "))
+                .putString(KEY_KNOWN, cleanKnown.joinToString(" "))
                 .putBoolean(KEY_NUMBER, number)
                 .apply()
         }
@@ -100,7 +119,31 @@ object ReplyMarks {
      *  набор, который получился. */
     fun addMark(c: Context, book: String?, mark: String): Marks {
         val cur = of(c, book)
-        save(c, book, cur.list + mark, cur.number)
+        save(c, book, cur.list + mark, cur.number, cur.known + mark)
+        return of(c, book)
+    }
+
+    /** Убрать знак совсем: и из действующих, и из известных. */
+    fun removeMark(c: Context, book: String?, mark: String): Marks {
+        val cur = of(c, book)
+        save(
+            c, book,
+            cur.list.filterNot { it.equals(mark, ignoreCase = true) },
+            cur.number,
+            cur.known.filterNot { it.equals(mark, ignoreCase = true) },
+        )
+        return of(c, book)
+    }
+
+    /** Заменить знак на другой: и в действующих, и в известных. */
+    fun renameMark(c: Context, book: String?, old: String, new: String): Marks {
+        val cur = of(c, book)
+        save(
+            c, book,
+            cur.list.map { if (it.equals(old, ignoreCase = true)) new else it },
+            cur.number,
+            cur.known.map { if (it.equals(old, ignoreCase = true)) new else it },
+        )
         return of(c, book)
     }
 
@@ -113,12 +156,14 @@ object ReplyMarks {
             p.edit()
                 .putBoolean(BOOK_REMEMBER + key, true)
                 .putString(BOOK_MARKS + key, common.list.joinToString(" "))
+                .putString(BOOK_KNOWN + key, common.known.joinToString(" "))
                 .putBoolean(BOOK_NUMBER + key, common.number)
                 .apply()
         } else {
             p.edit()
                 .remove(BOOK_REMEMBER + key)
                 .remove(BOOK_MARKS + key)
+                .remove(BOOK_KNOWN + key)
                 .remove(BOOK_NUMBER + key)
                 .apply()
         }
@@ -145,9 +190,6 @@ object ReplyMarks {
     /** Знаки из строки: по пробелам, повторы убираем, длинные обрезаем. */
     private fun parse(s: String): List<String> =
         normalize(s.split(' ', '\n', '\t', ',').map { it.trim() })
-
-    /** То же для окна правки: то, что человек вписал в поле. */
-    fun fromText(s: String): List<String> = parse(s)
 
     private fun normalize(src: List<String>): List<String> =
         src.map { it.trim() }

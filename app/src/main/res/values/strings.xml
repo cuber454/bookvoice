@@ -8,26 +8,18 @@
     <string name="next_sentence">Следующее предложение</string>
     <!-- msg2471: имена кнопок «Пред.»/«След.» для скринридера меняются по выбранному
          шагу (предложение/абзац/глава) — код ставит нужную пару в contentDescription. -->
-    <string name="prev_paragraph">Предыдущий абзац</string>
-    <string name="next_paragraph">Следующий абзац</string>
     <string name="prev_chapter">Предыдущая глава</string>
     <string name="next_chapter">Следующая глава</string>
     <!-- msg2531/2535: имена кнопок «◀ Глава/Глава ▶» следуют режиму «Кнопки глав
          шагают» (ch_nav): «По главам» → глава, «По крупным разделам» → раздел,
          «По всем заголовкам» → заголовок. Код ставит нужную пару в contentDescription. -->
-    <string name="prev_section">Предыдущий раздел</string>
-    <string name="next_section">Следующий раздел</string>
     <string name="prev_header">Предыдущий заголовок</string>
     <string name="next_header">Следующий заголовок</string>
     <string name="no_book">Открой книгу, чтобы начать слушать</string>
-    <string name="auto_on">Авто: вкл</string>
     <string name="auto_off">Авто: выкл</string>
-    <string name="auto_desc_on">Автопродолжение включено, читает подряд без остановки</string>
-    <string name="auto_desc_off">Автопродолжение выключено, читает одно предложение за раз</string>
     <string name="engine_loading">Настраиваю движок…</string>
 
     <!-- Библиотека -->
-    <string name="add_book">Добавить</string>
     <string name="continue_last">Открыть книгу</string>
     <string name="continue_last_with">Открыть книгу: %1$s</string>
     <!-- msg3206: кнопка «Открыть книгу…» не пропадает — открытых книг не
@@ -35,7 +27,7 @@
     <string name="continue_last_none">Нет открытых книг</string>
     <string name="recent_books_title">Недавние книги</string>
     <string name="recent_books_empty">Других недавних книг нет.</string>
-    <string name="sort_books">Сортировать</string>
+    <string name="lib_catalogs_long">Панель поиска</string>
     <string name="go_library">Библиотека</string>
     <string name="books_empty">В библиотеке пока пусто. Нажми „Ещё“ и выбери „Открыть файл“, чтобы добавить первую книгу.</string>
     <string name="already_in_library">Эта книга уже в библиотеке — открываю.</string>
@@ -69,7 +61,6 @@
     <string name="pdf_no_text_layer">В этом PDF нет извлекаемого текста — похоже, это скан или картинки. Распознавание текста с картинок (OCR) пока не поддерживается.</string>
     <string name="pdf_encrypted">PDF защищён паролем — открыть его не получается.</string>
     <string name="pdf_out_of_memory">Не хватило памяти, чтобы разобрать этот PDF. Если в нём нет текста (скан) — читать его голосом нельзя. Если текст есть, сообщи разработчику — попробуем открыть иначе.</string>
-    <string name="no_last_book">Последней книги ещё нет — сначала добавь книгу.</string>
     <string name="book_added">Книга добавлена.</string>
     <string name="sort_dialog">Сортировка книг</string>
     <string name="sort_title">По названию</string>
@@ -154,6 +145,10 @@
     <string name="lib_more">Ещё</string>
     <string name="lib_menu_open_file">Открыть файл</string>
     <string name="lib_menu_scan">Сканировать папку</string>
+    <!-- 30.09.2026: ручная уборка полки от записей, за которыми файла нет.
+         Без числа в подписи: число считается по нажатию (проверка чужого файла —
+         запрос к провайдеру), а меню должно открываться мгновенно. -->
+    <string name="lib_menu_dead">Убрать записи без файлов</string>
     <string name="lib_menu_sort">Сортировать</string>
     <string name="lib_menu_view">Вид: список или сетка</string>
     <string name="lib_view_title">Как показывать книги</string>
@@ -168,13 +163,10 @@
          «Библиотека». Название проверяем на слух: человек слышит его, а не
          читает, поэтому без слова «интерфейс» и без «карточек». -->
     <string name="lib_covers_title">Показывать обложки книг</string>
-    <string name="lib_covers_hint">Обложки видны в виде «Сетка». Если обложки в книге нет, вместо неё рисуется заглушка с названием. Озвучка карточек от этого не меняется.</string>
     <!-- Прогресс чтения книги в библиотеке (msg656): процент вместо «глава/предл.» -->
     <string name="lib_progress_pct">прочитано %1$d%%</string>
     <string name="scan_folder">Сканировать папку</string>
-    <string name="scan_button">Сканировать</string>
     <string name="choose_folder">Выбрать папку</string>
-    <string name="folder_picker_hint">Выбери папку, в которой лежат книги. Приложение запомнит её и будет сканировать автоматически при каждом открытии.</string>
     <string name="other_folder">Другая папка</string>
     <string name="rescan_now">Сканировать сейчас</string>
     <string name="folder_added">Папка выбрана, сканирую…</string>
@@ -182,7 +174,6 @@
     <string name="scanning_start">Сканирую и достаю названия…</string>
 
     <!-- Сетевые библиотеки (OPDS, v0.3.20; переименованы из «каталогов» — msg4187) -->
-    <string name="catalog_library_btn">🌐 Сетевые библиотеки</string>
     <string name="catalog_title">Сетевые библиотеки</string>
     <!-- msg4191/4193/4197: у кнопки на полке ДВА имени — короткое видимое (влезает
          в нижний ряд, не выдавливает «Открыть книгу») и полное для синтезатора
@@ -233,12 +224,8 @@
     <string name="catalog_checking">Проверяю „%1$s“…</string>
     <string name="catalog_check_ok">Библиотека „%1$s“ отвечает</string>
     <string name="catalog_check_fail">Библиотека „%1$s“ не отвечает: %2$s</string>
-    <string name="catalog_section_cd">Раздел. %1$s</string>
-    <string name="catalog_book_cd">Книга, скачать и добавить в библиотеку. %1$s</string>
     <string name="catalog_sections">Разделы</string>
     <string name="catalog_books">Книги</string>
-    <string name="catalog_pages">Страницы</string>
-    <string name="catalog_next">Дальше ▸</string>
     <string name="catalog_loading">Загружаю библиотеку…</string>
     <!-- Озвучка сетевых неудач (0.4.83, msg7001). Владельцу — по-русски и с
          подсказкой, что делать; технические подробности (код ответа, текст
@@ -263,8 +250,8 @@
     <!-- msg3214: панель поиска каталога — кнопка голосового ввода и подсказка при
          пустом запросе. -->
     <string name="catalog_search_mic">Продиктовать название книги или автора</string>
-    <string name="catalog_search_empty">Сначала введите название или автора — или нажмите микрофон</string>
-    <string name="catalog_search_voice_prompt">Продиктуйте название книги или автора</string>
+    <string name="catalog_search_empty">Сначала введи название или автора — или нажми микрофон</string>
+    <string name="catalog_search_voice_prompt">Продиктуй название книги или автора</string>
     <string name="catalog_search_voice_announce">Ищу: %1$s</string>
     <string name="catalog_announce">Библиотека: %1$s. Разделов %2$d, книг %3$d.</string>
     <string name="catalog_dl_start">Скачиваю „%1$s“…</string>
@@ -293,11 +280,6 @@
     <string name="catalog_search_icon">🔍</string>
     <string name="catalog_back_top">Назад</string>
     <string name="catalog_back_icon">←</string>
-    <string name="catalog_download_btn">Скачать</string>
-    <string name="catalog_dl_cd">Скачать книгу: %1$s</string>
-    <string name="catalog_open_book">Открыть страницу книги: %1$s</string>
-    <string name="catalog_book_download">Скачать книгу и добавить в библиотеку</string>
-    <string name="catalog_book_dl_cd">Скачать книгу „%1$s“</string>
     <string name="catalog_info_authors">Авторы: %1$s</string>
     <string name="catalog_info_genres">Жанры: %1$s</string>
     <string name="catalog_info_source">Библиотека: %1$s</string>
@@ -316,30 +298,28 @@
          с первого слова. -->
     <string name="settings_program">Настройки программы</string>
     <string name="auto_start_title">Автоматически читать при открытии книги</string>
-    <string name="auto_start_on">Авто-чтение включено</string>
-    <string name="auto_start_off">Авто-чтение выключено</string>
-    <!-- msg2685: если книга открывается дольше ~2 секунд — сообщить голосом,
-         чтобы не казалось, что приложение зависло. -->
-    <string name="long_load_announce_title">Сообщать, если книга открывается долго</string>
+    <!-- 30.09.2026: сюда переехало то, что раньше стояло отдельной галочкой
+         «Сообщать, если книга открывается долго» (msg2685): о долгом открытии
+         книга теперь говорит всегда, а галочки в разделе «Чтение» стало меньше. -->
+    <string name="auto_start_hint">Если книга большая и открывается долго, приложение скажет об этом голосом.</string>
     <string name="long_load_speech">Книга большая, открывается. Подожди немного</string>
     <!-- msg3142: для PDF слова честнее — пока идёт разбор, мы именно извлекаем
          текст из файла. -->
     <string name="long_load_pdf_speech">Извлекаю текст из PDF</string>
-    <string name="auto_resume_title">Продолжать чтение после прерывания другим плеером</string>
-    <string name="auto_resume_on">Автопродолжение после прерывания включено</string>
-    <string name="auto_resume_off">Автопродолжение после прерывания выключено</string>
-    <string name="tap_to_play_title">Начинать чтение с предложения по двойному тапу на нём</string>
-    <string name="toc_play_title">Читать сразу при выборе главы в оглавлении</string>
-    <string name="bm_play_title">Читать сразу при выборе закладки</string>
-    <string name="search_play_title">Читать сразу при переходе к найденному слову</string>
+    <!-- 30.09.2026 (просьба Сержа: «по-простому, человеческим языком»): эти пять
+         галочек показываются, когда в строке выбора взят «свой выбор». Ни «тапа»,
+         ни «перехода» здесь больше нет — вместо них «ткнул», «выбрал», «нашёл». -->
+    <string name="tap_to_play_title">Читать сразу, когда дважды ткнул в предложение</string>
+    <string name="toc_play_title">Читать сразу, когда выбрал главу в оглавлении</string>
+    <string name="bm_play_title">Читать сразу, когда выбрал закладку</string>
+    <string name="search_play_title">Читать сразу, когда нашёл слово поиском</string>
     <!-- 0.4.74: шаги по книге кнопками и свайпами. Сергей: «на паузе должно
          начинать читать» — раньше из переходов читали только тап, оглавление,
          закладка и поиск, а кнопки «глава/абзац/предложение» молчали. -->
-    <string name="nav_play_title">Читать сразу при переходе по главам, абзацам и предложениям</string>
+    <string name="nav_play_title">Читать сразу, когда листаю главы, абзацы и предложения</string>
     <!-- Диагностический лог -->
     <string name="diag_send">Отправить лог</string>
     <string name="diag_clear">🧹 Очистить лог</string>
-    <string name="diag_sent_hint">Выбери Telegram и отправь файл в этот чат</string>
 
     <!-- Автообновление (#35) -->
     <string name="update_check">Проверить обновление</string>
@@ -371,19 +351,15 @@
     <string name="toc_btn">Оглавление</string>
     <string name="toc_close">Закрыть</string>
     <string name="toc_current">%1$d. %2$s — сейчас</string>
-    <string name="seek_progress">Позиция в книге</string>
+    <string name="seek_progress">Место в книге</string>
 
     <!-- Закладки в читалке -->
     <string name="bookmark_btn">Закладка</string>
-    <string name="bm_new_title">Новая закладка</string>
-    <string name="bm_field_hint">Имя закладки</string>
     <string name="bm_create">Создать</string>
     <string name="bm_save">Сохранить</string>
-    <string name="bm_rename">Переименовать</string>
     <string name="bm_remove">Убрать</string>
     <string name="bm_remove_cd">Убрать закладку, %1$s</string>
     <string name="bm_existing_title">Закладка на этом месте уже есть</string>
-    <string name="bm_rename_title">Переименовать закладку</string>
     <string name="bm_list_title">Закладки</string>
     <string name="bm_toc_entry">Закладки (%1$d)</string>
     <string name="bm_none">Закладок нет</string>
@@ -402,57 +378,96 @@
     <string name="settings_group_diag">Разное</string>
     <!-- Подсказки разделов (msg721): короткая статичная строка-содержимое под названием
          в главном списке Настроек. Не значения, а «что внутри» — помогает найти раздел. -->
-    <string name="settings_group_voice_hint">Скорость, громкость, голос и синтезатор</string>
-    <string name="settings_group_reading_hint">Когда начинать чтение и что озвучивать</string>
-    <string name="settings_group_reader_hint">Что видно на экране книги</string>
-    <string name="settings_group_start_hint">Запуск и вибрация</string>
-    <string name="settings_group_library_hint">Вкладки полки, папка с книгами и формат скачивания</string>
-    <string name="settings_group_diag_hint">Проверка обновлений и журнал приложения</string>
-    <string name="settings_about_hint">Что это за программа и её фишки</string>
-    <string name="settings_bg_hint_on">Разрешена: система не останавливает чтение</string>
-    <string name="settings_bg_hint_off">Не разрешена — на Poco и realme чтение может замолкать. Откройте, чтобы разрешить</string>
+    <!-- 30.09.2026: подсказки корневых строк переписаны ключевыми словами
+         (Серж: «как-то очень всё длинно и заумно»). -->
+    <string name="settings_group_voice_hint">Голос, скорость и прямая речь</string>
+    <string name="settings_group_reading_hint">Начало чтения, переходы, паузы, остановки, листание</string>
+    <string name="settings_group_reader_hint">Размер текста, контрастность и что показывать в книге</string>
+    <string name="settings_group_start_hint">Жесты, кнопки, гарнитура, стартовый экран</string>
+    <string name="settings_group_library_hint">Папка книг, фильтры полки, скачивание, копии, синхронизация</string>
+    <string name="settings_group_diag_hint">Обновления и журнал</string>
+    <string name="settings_about_hint">Что умеет, версия, что нового</string>
+    <!-- 30.09.2026: состояние строки «Не засыпать» — справка и призыв. Марки
+         телефонов из подсказки убраны: про них сказано внутри окна, у каждой
+         марки своя строка. -->
+    <string name="settings_bg_hint_on">Разрешено: чтение не прерывается</string>
+    <string name="settings_bg_hint_off">Внимание: предоставь разрешение, иначе чтение может замолкать</string>
     <string name="settings_bg_already">Работа в фоне уже разрешена</string>
 
     <!-- «Не засыпать» (msg4705/4709): экран-помощник для прошивок MIUI/HyperOS
          (Poco) и ColorOS (realme), которые морозят чтение своим сторожем энергии.
          Строка корня настроек ведёт сюда; название общее с заголовком окна. -->
     <string name="sleep_title">Не засыпать</string>
-    <string name="sleep_intro">На Poco и realme чтение иногда замолкает, когда экран погас: прошивка морозит приложение своим сторожем энергии — это отдельно от обычной экономии батареи. Ниже видно, что уже разрешено, и что можно дотянуть руками. Чем больше разрешено, тем реже замирает.</string>
-    <string name="sleep_battery_on">Оптимизация батареи: не ограничена — система не останавливает чтение</string>
-    <string name="sleep_battery_off">Оптимизация батареи: ограничена — с погасшим экраном чтение может замолкать</string>
-    <string name="sleep_bg_on">Фоновая активность приложения: разрешена</string>
-    <string name="sleep_bg_off">Фоновая активность приложения: запрещена системой — чтение будет останавливаться</string>
+    <string name="sleep_intro">Когда экран гаснет, некоторые прошивки морозят приложение, и чтение замолкает — это не обычная экономия батареи. Ниже видно, что уже разрешено и что можно разрешить руками: чем больше разрешено, тем реже замирает.</string>
+    <string name="sleep_battery_on">Оптимизация батареи: не ограничена</string>
+    <string name="sleep_battery_off">Оптимизация батареи: ограничена</string>
+    <string name="sleep_bg_on">Фоновая активность: разрешена</string>
+    <string name="sleep_bg_off">Фоновая активность: запрещена</string>
+    <!-- 30.09.2026: расширенная проверка фона, по образцу окна @Voice Aloud Reader.
+         Три проверки, которые чаще всего и объясняют «читал, и встало», и след
+         последнего выхода процесса. Подсказка сокращена до одной фразы. -->
+    <string name="sleep_checks_hint">Ниже — три проверки и след прошлого запуска: они и объясняют, почему чтение замолкает.</string>
+    <string name="sleep_saver_on">Экономия энергии: включена</string>
+    <string name="sleep_saver_off">Экономия энергии: выключена</string>
+    <string name="sleep_standby_on">Жёсткий режим ожидания: включён</string>
+    <string name="sleep_standby_off">Жёсткий режим ожидания: выключен</string>
+    <string name="sleep_data_on">Фон для сети: не ограничен</string>
+    <string name="sleep_data_white">Фон для сети: ограничен, но BookVoice в исключениях</string>
+    <string name="sleep_data_off">Фон для сети: запрещён — сетевые голоса будут молчать без Wi-Fi</string>
+    <string name="sleep_exit_reading">Прошлый раз система остановила приложение прямо во время чтения: %1$s, %2$s</string>
+    <string name="sleep_exit_killed">Прошлый раз система остановила приложение: %1$s, %2$s</string>
+    <string name="sleep_exit_closed">Прошлый раз приложение закрыли: %1$s, %2$s</string>
+    <string name="sleep_vendor_samsung">Samsung: Настройки, Батарея, Ограничения фоновой активности — убери BookVoice из «Спящих приложений» и добавь в «Приложения, которые никогда не спят».</string>
+    <string name="sleep_vendor_xiaomi">Xiaomi, Redmi, POCO: Настройки, Приложения, BookVoice, Батарея — «Без ограничений»; там же «Автозапуск».</string>
+    <string name="sleep_vendor_huawei">Huawei и Honor: Настройки, Батарея, Запуск приложений, BookVoice — «Управлять вручную», включи «Автозапуск» и «Работа в фоне».</string>
+    <string name="sleep_vendor_oppo">OPPO, realme, OnePlus: Настройки, Батарея, Расход заряда приложениями, BookVoice — разреши фоновую активность; там же «Автозапуск».</string>
+    <string name="sleep_vendor_vivo">vivo и iQOO: Настройки, Батарея, Расход фоновой энергии, BookVoice — разреши работу в фоне.</string>
+    <string name="sleep_vendor_other">Ищи в настройках телефона пункты про батарею, фоновую активность и автозапуск для BookVoice: названия у разных прошивок свои.</string>
     <string name="sleep_ask_title">Разрешить работу в фоне</string>
-    <string name="sleep_ask_hint">Системный запрос: одно нажатие и одно подтверждение</string>
-    <string name="sleep_ask_result">Запросил разрешение — система спросит подтверждение, ответьте «Разрешить»</string>
-    <string name="sleep_ask_result_list">Окна запроса на этой прошивке нет — открыл список оптимизации батареи: найдите BookVoice и выберите «Не ограничивать»</string>
+    <string name="sleep_ask_hint">Откроется системный запрос: одно нажатие и одно подтверждение.</string>
+    <string name="sleep_ask_result">Запросил разрешение — система спросит подтверждение, ответь «Разрешить»</string>
+    <string name="sleep_ask_result_list">Окна запроса на этой прошивке нет — открыл список оптимизации батареи: найди BookVoice и выбери «Не ограничивать»</string>
     <string name="sleep_autostart_title">Автозапуск</string>
     <string name="sleep_autostart_hint">Экран прошивки: там BookVoice надо перевести в разрешённые</string>
-    <string name="sleep_autostart_result">Открываю экран «Автозапуск» прошивки %1$s — найдите BookVoice и разрешите ему автозапуск</string>
+    <string name="sleep_autostart_result">Открываю экран «Автозапуск» прошивки %1$s — найди BookVoice и разреши ему автозапуск</string>
     <string name="sleep_autostart_none">Экрана автозапуска на этой прошивке нет — открываю настройки приложения: там те же переключатели лежат внутри</string>
     <string name="sleep_app_title">Настройки приложения</string>
     <string name="sleep_app_hint">Здесь на прошивке — «Автозапуск», «Разрешить фоновую активность» и «Батарея»</string>
-    <string name="sleep_app_result">Открываю настройки приложения — проверьте «Разрешить фоновую активность» и «Батарея»</string>
-    <string name="sleep_app_failed">Системный экран не открылся — зайдите вручную: Настройки, Приложения, BookVoice</string>
+    <string name="sleep_app_result">Открываю настройки приложения — проверь «Разрешить фоновую активность» и «Батарея»</string>
+    <string name="sleep_app_failed">Системный экран не открылся — зайди вручную: Настройки, Приложения, BookVoice</string>
     <string name="sleep_engine_title">Настройки движка речи</string>
-    <string name="sleep_engine_hint">Ограничение батареи снимается и с самого синтезатора — у тестера помогло именно это</string>
-    <string name="sleep_engine_result">Открываю системный раздел «Синтез речи» — снимите ограничение батареи с движка, которым читаете</string>
-    <string name="sleep_engine_failed">Системного раздела «Синтез речи» нет — найдите его в настройках телефона руками</string>
+    <string name="sleep_engine_hint">Ограничение батареи снимается и с самого синтезатора: иногда помогает именно это.</string>
+    <string name="sleep_engine_result">Открываю системный раздел «Синтез речи» — сними ограничение батареи с движка, которым читаешь</string>
+    <string name="sleep_engine_failed">Системного раздела «Синтез речи» нет — найди его в настройках телефона руками</string>
     <!-- 0.4.86 (msg7024): раньше было «Не давать звуку засыпать (Bluetooth)» и
          объяснение про «неслышимый сигнал» и «звуковой канал» — Сергей читал это
          как «включается звук для наушников, батарея садится быстрее» и не понимал,
          зачем галочка. Теперь сначала о том, что человек слышит (теряется начало
          фразы), потом цена. -->
-    <string name="sleep_silent_title">Не давать наушникам засыпать</string>
-    <string name="sleep_silent_hint">Помогает, если в Bluetooth-наушниках теряется начало фразы: гарнитура успевает уснуть между фразами. Звук идёт не прерываясь, поэтому батарея садится быстрее. Включается сам вместе с альтернативным способом озвучки: без него кнопки на наушниках уходят чужому плееру.</string>
+    <!-- 30.09.2026: галочка тихого потока. Название — «Не давать Bluetooth
+         засыпать» (Серж: «у нас не только наушники засыпают, но и колонки
+         Bluetooth»). Подсказки у неё больше нет: всё сказано в одной строке
+         («можно всё в одной строчке, просто коротко»), а про уровень — в
+         собственной строке ниже. -->
+    <string name="sleep_silent_title">Не давать Bluetooth засыпать</string>
+    <!-- 30.09.2026: уровень этого звука. Значения — просто цифры (Серж: «может
+         просто цифрами 1 2 3»): звук — тон 24 кГц, выше предела взрослого слуха,
+         ухом его не слышно ни на одном уровне, а «громкость» здесь — сила
+         сигнала. Слова «еле слышно», «тихо» и подобные убраны как неправда. -->
+    <string name="silent_level_title">Уровень этого звука</string>
+    <string name="silent_level_1">1</string>
+    <string name="silent_level_2">2</string>
+    <string name="silent_level_3">3</string>
+    <string name="silent_level_4">4</string>
+    <string name="silent_level_5">5</string>
     <!-- msg5067: галочка тихого потока переехала отсюда в «Настройки → Чтение».
          В этом окне остаётся след — иначе человек, помнящий её здесь, решит, что
-         её убрали совсем. -->
-    <string name="sleep_silent_moved">Галочка «Не давать звуку засыпать (Bluetooth)» переехала: она теперь в «Настройках», в разделе «Чтение» — там всё про то, как звучит чтение.</string>
-    <string name="sleep_lock_hint">Ещё помогает закрепить BookVoice в списке недавних: откройте недавние, вызовите меню карточки приложения и выберите замок. Тогда прошивка не выгружает его из памяти.</string>
-    <string name="sleep_log_hint">Пока идёт чтение, в журнал раз в минуту пишется отметка. Дыра во времени в журнале значит, что процесс был заморожен системой, а не ошибка программы.</string>
-    <string name="settings_chat">Группа BookVoice в Telegram</string>
-    <string name="settings_chat_hint">Вопросы, идеи, сообщения об ошибках. При сбое удобно сначала отправить лог</string>
+         её убрали совсем. 30.09.2026: название галочки в следе обновлено. -->
+    <string name="sleep_silent_moved">Галочка «Не давать Bluetooth засыпать» переехала в «Настройки» → «Чтение».</string>
+    <string name="sleep_lock_hint">Ещё помогает закрепить BookVoice в недавних: открой недавние, вызови меню карточки приложения и выбери замок. Тогда прошивка не выгрузит его из памяти.</string>
+    <string name="sleep_log_hint">Пока идёт чтение, в журнал раз в минуту пишется отметка. Пропуск во времени значит, что процесс заморозила система, а не ошибка программы.</string>
+    <string name="settings_chat">Группа в Telegram</string>
+    <string name="settings_chat_hint">Вопросы, идеи и ошибки. Автор поможет быстрее, если отправишь лог.</string>
     <!-- Настраиваемые свайпы вправо/влево в читалке (#77) -->
     <string name="gesture_right_title">Свайп вправо</string>
     <string name="gesture_left_title">Свайп влево</string>
@@ -465,7 +480,6 @@
     <string name="jump_back_title">Прыжок назад</string>
     <string name="jump_fwd_dialog">На сколько предложений вперёд</string>
     <string name="jump_back_dialog">На сколько предложений назад</string>
-    <string name="jump_hint">Прыжок ходит сразу на несколько предложений. Выбери его в списке действий кнопки или свайпа — там он называется числом, которое стоит здесь.</string>
     <string name="gesture_choose_title">Выберите действие</string>
     <!-- msg2547: заголовок диалога называет направление настраиваемого свайпа. -->
     <string name="gesture_choose_right">Действие свайпа вправо</string>
@@ -514,7 +528,6 @@
     <string name="a11y_para_word">Абзац</string>
     <!-- Карта прыжков в «Управлении»: чем «глава» отличается от «заголовка» и
          «разделителя» (26.09.2026, вопрос Сержа). -->
-    <string name="controls_jumps_hint">Прыжки: «глава» — по оглавлению книги; «заголовок» — по всем его уровням, включая вложенные; «разделитель» — по строкам вроде «* * *», которыми в сборниках отделяют рассказы и анекдоты, когда глав в файле нет; «абзац» и «предложение» — по тексту внутри главы.</string>
     <!-- msg5220: короткая видимая надпись на кнопке читалки — своя у каждого
          действия (влезает в прежнюю ширину кнопок). -->
     <string name="btn_short_prev_sent">Пред.</string>
@@ -554,7 +567,6 @@
     <!-- msg5707: галочка показа кнопки. Названа местом, а не действием:
          действие и так в двух строках ниже, рядом с ней. -->
     <string name="btn_visible_title">%1$s кнопка: видна</string>
-    <string name="reader_actions_hint">Четыре кнопки читалки. Галочка прячет и возвращает кнопку, две строки под ней — что кнопка делает по касанию и по удержанию; список действий тот же, что у свайпов.</string>
     <string name="btn_pos_top_left">верхняя левая</string>
     <string name="btn_pos_top_right">верхняя правая</string>
     <string name="btn_pos_bottom_left">нижняя левая</string>
@@ -562,7 +574,7 @@
     <string name="g_action_play">Начать чтение</string>
     <string name="g_action_pause">Пауза</string>
     <string name="g_action_repeat">Повторить текущее</string>
-    <string name="g_action_position">Сообщить позицию</string>
+    <string name="g_action_position">Сообщить место в книге</string>
     <string name="g_action_speed_up">Читать быстрее</string>
     <string name="g_action_speed_down">Читать медленнее</string>
     <string name="g_action_toc">Оглавление</string>
@@ -577,15 +589,25 @@
          Заголовки внутри подраздела служат картой: подсказка серая и мелкая,
          заголовок — крупнее и жирный, на слух они тоже разные. -->
     <string name="controls_group_title">Кнопки и жесты</string>
-    <string name="controls_group_hint">Свайпы, кнопки читалки, гарнитура и прыжок</string>
-    <!-- msg5711: заголовки внутри длинного раздела «Чтение» — по смыслу, как в
-         «Кнопках и жестах». Не экраны: незрячему не надо помнить, в каком из
-         пяти экранов что лежит. -->
-    <string name="reading_section_start">Начало книги</string>
-    <string name="reading_section_jumps">Переходы</string>
-    <string name="reading_section_sound">Звук и стыки</string>
-    <string name="reading_section_interrupts">Прерывания</string>
-    <string name="reading_section_scroll">Прокрутка</string>
+    <string name="controls_group_hint">Свайпы, кнопки, гарнитура, прыжок</string>
+    <!-- 30.09.2026: заголовков внутри раздела «Чтение» больше нет. Сначала убран
+         «Звук и стыки» (Серж: «дурацкая формулировка, вообще убирай»), потом по
+         его же слову «заголовки убираем отсюда» — «Старт и переходы»,
+         «Прерывания» и «Прокрутка». Строки идут одним списком. -->
+    <!-- 30.09.2026: строки-выборы раздела «Чтение». Прежде это были пачки
+         галочек: пять «читать сразу при переходе», три «останавливать чтение»,
+         две про прокрутку. Теперь у каждой пачки одна строка со значением и
+         окно, а «выбрать каждый случай отдельно» разворачивает галочки обратно.
+         Слова здесь простые нарочно (просьба Сержа: «по-простому, больше
+         человеческим языком»): нет ни «тапа», ни «перехода» — вместо них
+         «ткнул в текст», «выбрал место». -->
+    <string name="jump_play_title">Читать сразу, когда выбрал место</string>
+    <string name="jump_play_dialog">В каких случаях читать сразу</string>
+    <string name="jump_play_all">Всегда</string>
+    <string name="jump_play_tap_toc">Когда ткнул в текст или выбрал главу</string>
+    <string name="jump_play_none">Никогда</string>
+    <string name="jump_play_custom">Свой выбор</string>
+    <string name="jump_play_detail">Выбрать каждый случай отдельно</string>
     <string name="controls_section_swipes">Свайпы</string>
     <string name="controls_section_buttons">Кнопки на экране</string>
     <string name="controls_section_headset">Кнопки гарнитуры</string>
@@ -624,34 +646,29 @@
          расшифровки слабовидящему ничего не говорит. -->
     <string name="contrast_title">Высокая контрастность: чёрный фон, белый текст</string>
 
-    <!-- Простой экран (msg5730): готовый набор галочек «что видно на экране
-         книги» — разом, а не по одной. Строки-действия, а не галочка-состояние:
-         состояние разошлось бы с галочками ниже, как только человек тронул бы
-         одну из них. -->
-    <string name="reader_simple_title">Оставить только самое нужное</string>
-    <string name="reader_simple_hint">Кнопка чтения, ползунок, место в книге и «⋮» — остальное убрать с экрана книги</string>
-    <string name="reader_all_title">Вернуть все кнопки</string>
-    <string name="reader_all_hint">Показать на экране книги всё, что можно показать</string>
-    <string name="reader_simple_done">Простой экран: лишние кнопки убраны</string>
-    <string name="reader_all_done">Все кнопки возвращены</string>
+    <!-- Простой экран (msg5730) → 30.09.2026: строк «Оставить только самое нужное»
+         и «Вернуть все кнопки» больше нет (Серж: «в меню книги убери две настройки
+         — показывать только нужное и показывать все кнопки»). Они разом
+         проставляли галочки подраздела «Что показывать в книге»; теперь набор
+         человек собирает сам, и строки reader_simple_* и reader_all_* удалены. -->
 
-    <!-- Конструктор экрана чтения (#58): какие элементы показывать в читалке -->
-    <string name="reader_group_hint">Галочка показывает элемент на экране книги, без галочки элемент скрыт.</string>
+    <!-- Конструктор экрана чтения (#58): какие элементы показывать в читалке.
+         30.09.2026: подсказка сказана коротко (Серж: «Галочка — элемент видно,
+         без галочки — спрятан»), а заголовки внутри подраздела убраны. -->
+    <string name="reader_group_hint">Переключатель включён — элемент видно, выключен — спрятан.</string>
     <!-- 0.4.86 (msg7026): все галочки видимости собраны в один подраздел, а в
          разделе остаётся строка с числом спрятанного. -->
     <string name="show_group_title">Что показывать в книге</string>
     <string name="show_group_all">всё показано</string>
     <string name="show_group_hidden">скрыто %1$d</string>
-    <string name="show_panels_heading">Панели и кнопки</string>
-    <string name="show_buttons_heading">Четыре кнопки внизу</string>
     <!-- 0.4.86 (msg7026): пометка в строке действия: кнопка спрятана, а действие
          настраивается здесь. Нужна потому, что галочка «видна» уехала в другой
          подраздел, и без пометки связь потерялась бы. -->
     <string name="btn_action_hidden">%1$s, скрыта</string>
     <string name="ui_play_title">Кнопка «Читать / Пауза»</string>
     <string name="ui_voice_title">Кнопка «Голос чтения»</string>
-    <string name="ui_slider_title">Слайдер перемотки по книге</string>
-    <string name="ui_position_title">Строка позиции (глава, предложение)</string>
+    <string name="ui_slider_title">Ползунок перемотки по книге</string>
+    <string name="ui_position_title">Строка с местом в книге (глава, предложение)</string>
     <string name="ui_stats_title">Строка «Прочитано, осталось»</string>
     <string name="ui_toc_title">Кнопка «Оглавление»</string>
     <string name="ui_bookmark_title">Кнопка «Закладка»</string>
@@ -668,10 +685,10 @@
     <string name="search_field_hint">Слово для поиска</string>
     <string name="search_counter">Совпадение %1$d из %2$d</string>
     <string name="search_none">Ничего не найдено</string>
-    <string name="search_empty_hint">Сначала введите или продиктуйте слово для поиска</string>
-    <string name="search_voice_prompt">Продиктуйте слово для поиска</string>
+    <string name="search_empty_hint">Сначала введи или продиктуй слово для поиска</string>
+    <string name="search_voice_prompt">Продиктуй слово для поиска</string>
     <string name="search_voice_unavailable">Голосовой ввод на этом устройстве недоступен</string>
-    <string name="search_voice_retry">Не расслышал слово, попробуйте ещё раз</string>
+    <string name="search_voice_retry">Не расслышал слово, попробуй ещё раз</string>
 
     <string name="speed_down">Медленнее</string>
     <string name="speed_up">Быстрее</string>
@@ -682,55 +699,56 @@
     <string name="tone_value">Тон: %1$s</string>
     <string name="volume_value">Громкость: %1$d%%</string>
     <string name="volume_cd">Громкость</string>
-    <!-- Свои ползунки реплик (26.09.2026): появляются, когда «По ролям» включено.
-         Значения независимы от книжных: скорость и тон уходят в репликовый
-         синтезатор, громкость — нашему плееру на репликовой фразе. -->
-    <string name="reply_speed_value">Скорость реплик: %1$s</string>
-    <string name="reply_tone_value">Тон реплик: %1$s</string>
-    <string name="reply_volume_value">Громкость реплик: %1$d%%</string>
-    <string name="reply_speed_cd">Скорость реплик</string>
-    <string name="reply_tone_cd">Тон реплик</string>
-    <string name="reply_volume_cd">Громкость реплик</string>
-    <!-- Окно «Чтение по ролям» (26.09.2026): одно на оба входа — из Настроек и
-         из панели «Голос» в книге. Внутри: предупреждение, режим, голос реплик
-         и три ползунка. В общем списке «Голос» остаётся одна строка-переход. -->
-    <string name="reply_window_title">Чтение по ролям</string>
-    <!-- Знаки реплик (30.09.2026): как приложение понимает, что фраза — прямая
-         речь. Отдельной частью окна ролей, чтобы не сваливать настройки в один
-         экран. Вход — одна короткая строка со значением словами. -->
-    <string name="reply_marks_row">Как узнавать реплики</string>
+    <!-- Свои ползунки прямой речи (26.09.2026): значения независимы от книжных —
+         скорость и тон уходят в движок прямой речи, громкость нашему плееру на
+         её фразе. 30.09.2026: слово «реплики» заменено на «прямую речь». -->
+    <string name="reply_speed_value">Скорость прямой речи: %1$s</string>
+    <string name="reply_tone_value">Тон прямой речи: %1$s</string>
+    <string name="reply_volume_value">Громкость прямой речи: %1$d%%</string>
+    <string name="reply_speed_cd">Скорость прямой речи</string>
+    <string name="reply_tone_cd">Тон прямой речи</string>
+    <string name="reply_volume_cd">Громкость прямой речи</string>
+    <!-- Окно «Прямая речь» (26.09.2026): одно на оба входа — из Настроек и из
+         панели «Голос» в книге. Внутри: галочка, подсказка про второй движок,
+         строка знаков, движок, язык, голос и три ползунка. В общем списке
+         «Голос» остаётся одна строка-переход. 30.09.2026: «Чтение по ролям» →
+         «Прямая речь»; свой образец для пробы (reply_preview_sample). -->
+    <string name="reply_window_title">Прямая речь</string>
+    <!-- Знаки прямой речи (30.09.2026): как приложение понимает, что фраза —
+         прямая речь. Отдельной частью окна, чтобы не сваливать настройки в один
+         экран. Вход — одна короткая строка со значением словами.
+         30.09.2026: знаки в текстах для человека не показываем (скринридер их не
+         читает, пунктуация у него выключена) — примеры со знаками убраны,
+         говорим словами. -->
+    <string name="reply_marks_row">Как узнавать прямую речь</string>
     <string name="reply_marks_state">%1$s, %2$s</string>
-    <string name="reply_marks_common">общие</string>
-    <string name="reply_marks_for_book">для этой книги</string>
-    <string name="reply_marks_title">Как узнавать реплики</string>
-    <string name="reply_marks_hint">Репликой считается фраза с длинного тире в начале. Здесь можно добавить другие знаки — из озвучки они убираются, текст книги не меняется.</string>
-    <string name="reply_marks_number">Реплики после номера</string>
-    <string name="reply_marks_number_hint">прямая речь вида «#8.1. - …»: номер, пробел, тире, пробел</string>
-    <string name="reply_marks_own">Свои знаки реплики</string>
-    <string name="reply_marks_none">нет</string>
-    <string name="reply_marks_edit_hint">Знаки через пробел: дефис, звёздочка, кавычка, можно и слово. Пустое поле — своих знаков нет.</string>
-    <string name="reply_marks_field_hint">знаки через пробел</string>
-    <string name="reply_marks_nobook">Книга не открыта: сейчас набор общий. Свой набор для книги задаётся, когда книга открыта.</string>
+    <string name="reply_marks_common">набор общий</string>
+    <string name="reply_marks_for_book">набор для этой книги</string>
+    <string name="reply_marks_title">Как узнавать прямую речь</string>
+    <string name="reply_marks_number">Номер и тире</string>
+    <string name="reply_marks_nobook">Книга не открыта — набор общий</string>
     <string name="reply_marks_remember">Запомнить для этой книги</string>
-    <string name="reply_marks_remember_hint">свои знаки и правило про номер будут только у книги «%1$s»</string>
-    <string name="reply_count_row">Реплик в этой главе: %1$d из %2$d</string>
-    <string name="reply_heads_row">Чем начинаются фразы в этой главе</string>
-    <string name="reply_heads_row_hint">знаков найдено: %1$d</string>
+    <string name="reply_count_row">Прямой речи в главе: %1$d из %2$d</string>
+    <string name="reply_heads_row">Чем начинаются фразы</string>
     <string name="reply_heads_title">Чем начинаются фразы</string>
-    <string name="reply_heads_hint">Касание ставит знак в свои знаки реплики, второе касание снимает. Счёт — сколько фраз в этой главе с него начинается.</string>
-    <string name="reply_heads_empty">В этой главе фразы начинаются со слов: ведущих знаков нет.</string>
-    <string name="reply_head_row">%1$s — фраз: %2$d</string>
-    <string name="reply_head_in">в своих знаках реплики</string>
+    <string name="reply_heads_hint">Касание ставит знак в свои знаки, второе касание снимает. Число — сколько фраз в главе с него начинается.</string>
+    <string name="reply_heads_empty">В этой главе ни одна фраза не начинается со знака.</string>
+    <string name="reply_head_row">%1$s, фраз: %2$d</string>
+    <string name="reply_head_in">в своих знаках</string>
     <string name="reply_head_out">не в своих знаках</string>
     <string name="reply_head_added">Добавил знак: %1$s</string>
     <string name="reply_head_removed">Убрал знак: %1$s</string>
-    <string name="reply_mode_row">Реплики</string>
-    <!-- Кнопка в окне реплик — как «Читать» в читалке: читает пробу репликовым
-         голосом, чтобы услышать выбор (26.09.2026). -->
+    <string name="reply_sign_actions">Изменить или удалить</string>
+    <string name="reply_sign_edit">Изменить</string>
+    <string name="reply_sign_delete">Удалить</string>
+    <string name="reply_sign_delete_msg">Убрать знак «%1$s» из списка совсем?</string>
+    <string name="reply_sign_empty">Знак не вписан, оставил как было</string>
+    <!-- Кнопка в окне прямой речи — как «Читать» в читалке: читает пробу её
+         голосом, чтобы услышать выбор (26.09.2026). Свой образец (30.09.2026):
+         общий текст говорил про «чтение», и в окне прямой речи это путало. -->
     <string name="reply_read">Читать</string>
+    <string name="reply_preview_sample">Так звучит голос прямой речи, её скорость и тон</string>
     <string name="voice_reply_engine_fail">Не удалось запустить голосовой движок</string>
-    <string name="voice_engine_title">Голос и движок</string>
-    <string name="voice_engine_value">Голос и движок…</string>
     <!-- msg5632/msg5640: первая строка набора «Голос чтения» — одна и та же.
          Книга открыта — «Читать/Пауза», читает книгу. Книги нет (Настройки) —
          «Прослушать»: без книги выбор голоса послушать больше не на чем, а
@@ -738,10 +756,6 @@
     <string name="voice_preview">Прослушать</string>
     <string name="voice_preview_sample">Так звучит выбранный голос, скорость и тон чтения</string>
     <string name="voice_preview_failed">Голосовой движок не запустился — выбери его в «Голос и движок»</string>
-    <string name="voice_need_book">Чтобы сменить голос, открой любую книгу и нажми «Голос чтения» внизу экрана</string>
-    <string name="engine_step">1. Выберите движок синтеза</string>
-    <string name="engine_back">← К выбору движка</string>
-    <string name="voice_step">2. Выберите голос</string>
     <string name="no_engines">Движки не найдены</string>
     <string name="no_voices">В этом движке нет голосов</string>
     <!-- msg5503/5511: движок, язык и голос выбираются тремя строками-значениями
@@ -756,25 +770,24 @@
     <!-- Реплики другим голосом (26.09.2026). Строка режима и строка голоса
          стоят сразу под «Голосом»: реплики — это тот же выбор голоса, только
          для прямой речи. Голос реплик может быть у другого движка. -->
-    <string name="voice_reply_row">По ролям</string>
+    <string name="voice_reply_row">Прямая речь</string>
     <!-- 29.09.2026 (просьба Сержа): галочка стоит сразу под строкой «По ролям» —
          свайп со строки попадает на неё, и одно касание включает или выключает
          роли. Своего «включено» мы не добавляем: состояние называет сам флажок
          («отмечено» / «не отмечено»), как у правил словаря. -->
-    <string name="voice_reply_check">Чтение по ролям</string>
-    <string name="voice_reply_row_exp">По ролям (эксперимент)</string>
+    <!-- 30.09.2026: галочка «Чтение по ролям» стала «Читать прямую речь другим
+         голосом»: слово «роли» наше внутреннее, а «реплика» — узкое. -->
+    <string name="voice_reply_check">Читать прямую речь другим голосом</string>
+    <!-- 30.09.2026: подсказка сокращена до двух фраз. -->
+    <string name="voice_reply_hint">Читает второй движок. Не запустится — прямую речь прочитает основной голос.</string>
     <string name="voice_reply_off">выключено</string>
-    <string name="voice_reply_other">реплики другим голосом</string>
-    <string name="voice_reply_voice_row">Голос реплик</string>
-    <string name="voice_reply_engine_title">Движок для реплик</string>
-    <string name="voice_reply_voice_title">Голос реплик, язык %1$s</string>
-    <!-- Предупреждение под строками реплик: настройка опытная, обещать за неё
-         нельзя. Читается диктором там же, где её включают. -->
-    <string name="voice_reply_hint">Для реплик подключается второй движок. Если он не запустится, реплики прочитает основной голос.</string>
-    <!-- 26.09.2026: альтернативный способ озвучки (фразу целиком читает движок)
-         несовместим с репликами: у нас нет файла, значит нет ни второго движка,
-         ни обрезки паузы, ни выравнивания громкости. Говорим одной строкой. -->
-    <string name="reply_alt_voice_hint">Реплики другим голосом здесь не работают.</string>
+    <string name="voice_reply_other">другим голосом</string>
+    <!-- 26.09.2026 — 30.09.2026: здесь стояла строка «Реплики другим голосом
+         здесь не работают» про альтернативный способ озвучки. Она устарела:
+         с 26.09 реплики в этом способе читает второй движок, а с 30.09 работает
+         и случай «оба голоса в одном движке» (SpeechPlayer.queueDirect берёт
+         основной экземпляр в долг под реплику, как файловый способ). Строка
+         убрана вместе с предупреждением в окне ролей. -->
     <string name="voice_engine_system">системный</string>
     <string name="voice_lang_unset">не выбран</string>
     <string name="voice_pick_lang">Язык голосов</string>
@@ -800,16 +813,24 @@
         <item quantity="other">%1$d голосов</item>
     </plurals>
 
-    <string name="chapter_start_title">Озвучивать название главы в начале</string>
-    <string name="chapter_start_on">Озвучка названия главы включена</string>
-    <string name="chapter_start_off">Озвучка названия главы выключена</string>
+    <!-- 30.09.2026: галочки «Озвучивать название главы в начале» больше нет —
+         Серж: «а зачем эта галочка вообще нужна, пускай всегда включена».
+         Заголовок главы из текста вынимает разбор, поэтому название звучит перед
+         первой фразой главы всегда (ReaderEngine.spokenText). Строки про неё
+         убраны, чтобы в файле не осталось мёртвых. -->
 
     <!-- 29.09.2026 (просьба Сержа): одно слово на структуру текста — «Абзац» и
          «Разделитель». Правило про абзац из одного предложения живёт в коде
          (ParagraphView.sentenceCount): такое слово на каждой строке сборников
          анекдотов было шумом. -->
     <string name="line_names_title">Названия строк в тексте</string>
-    <string name="line_names_hint">Диктор говорит «Абзац», когда начинается абзац из нескольких предложений, и «Разделитель» на строках вроде «* * *». Выключи, если это лишнее: текст пойдёт без этих слов.</string>
+    <!-- 30.09.2026 (поправка Сержа к этой же правке): слова «Абзац» и
+         «Разделитель» произносит ЭКРАННЫЙ диктор при обходе текста (они стоят
+         в описании узла, см. ParagraphView), а не голос чтения: прежде в тексте
+         было просто «Диктор говорит», и это читалось как «скажет синтезатор».
+         Серж просил ещё и покороче, чтобы понял простой человек, — поэтому
+         осталось два коротких предложения без пояснений, зачем эти слова. -->
+    <string name="line_names_hint">«Абзац» и «Разделитель» говорит экранный диктор, когда ты идёшь по тексту, а не голос чтения. Не нужно — выключи.</string>
 
     <string name="start_screen_title">Стартовый экран</string>
     <string name="start_screen_dialog">При открытии приложения показывать</string>
@@ -818,23 +839,23 @@
     <string name="start_screen_library">Библиотека</string>
     <string name="start_screen_last">Последняя книга</string>
 
-    <!-- 0.4.86 (msg7023): три галочки прокрутки названы так, чтобы каждая
-         говорила за себя. Раньше над ними стояло объяснение на четыре строки
-         («что делает прокрутка книги рукой…»), и его слушали отдельной
-         остановкой; теперь объяснять нечего — видно из названий. -->
-    <string name="scroll_title">Лента сама едет к читаемому предложению</string>
-    <string name="scroll_place_title">Листаю на паузе — место едет за рукой</string>
-    <string name="scroll_follow_title">Листаю при чтении — голос идёт за рукой</string>
-    <string name="alt_voice_title">Альтернативный способ озвучки (читает движок)</string>
-    <!-- 0.4.86 (msg7025): объяснение было абзацем на девять строк и читалось
-         отдельной остановкой. Оставили суть: что делает, чем платим, что это
-         проба. -->
-    <string name="alt_voice_hint">Читает сам движок: быстрее, но с зазорами. Роли и выравнивание звука здесь не работают. Сетевой движок, который не отдаёт готовые файлы, переключается сюда сам. Вместе с ним включается тихий поток ниже — иначе кнопки на наушниках уходят чужому плееру.</string>
-    <string name="scroll_on">Прокрутка к читаемому включена</string>
-    <string name="scroll_off">Прокрутка к читаемому выключена</string>
+    <!-- msg5707/30.09.2026: строки про прокрутку. Строка-выбор «Что прокрутка
+         делает с местом и голосом» (scroll_what_*) убрана: вместо неё одна
+         галочка scroll_place_title — место и голос в коде и так ходят парой.
+         30.09.2026 вечером Серж просил убрать обе строки совсем, но уточнил, что
+         сказал не то, — строки на месте, с согласованными названиями. -->
+    <string name="scroll_title">Прокручивать экран за чтением</string>
+    <string name="scroll_place_title">Читать с того места, куда прокрутил</string>
+    <!-- 30.09.2026: галочка «Альтернативный способ озвучки (читает движок)» была
+         переименована в «Движок читает как обычно, без обрезки пауз», а вечером
+         того же дня Серж вернул прежнее название: «надо исправить на
+         альтернативный способ чтения всё-таки» — так его искать привычнее.
+         Подсказки у галочки нет: про тихий поток сказано в его собственной
+         строке. -->
+    <string name="alt_voice_title">Альтернативный способ чтения</string>
 
     <string name="net_permission_title">Нужен доступ в интернет</string>
-    <string name="net_permission_message">Интернет нужен BookVoice для сетевых библиотек, но доступ к нему у приложения отключён. Система сама об этом не спросит — откройте настройки приложения кнопкой ниже и включите переключатель «Интернет».</string>
+    <string name="net_permission_message">Интернет нужен BookVoice для сетевых библиотек, но доступ к нему у приложения отключён. Система сама об этом не спросит — открой настройки приложения кнопкой ниже и включи переключатель «Интернет».</string>
     <string name="net_permission_open">Открыть настройки</string>
 
     <!-- msg5220: строки «Кнопки назад и далее шагают по» (step_*) и «Кнопки глав
@@ -849,7 +870,7 @@
     <string name="play_long_title">Долгое нажатие ▶</string>
     <string name="play_long_dialog">Что делает долгое нажатие кнопки ▶?</string>
     <string name="play_long_sleep">Таймер сна</string>
-    <string name="play_long_off">Выключено</string>
+    <string name="play_long_off">Ничего</string>
 
     <string name="folder_title">Папка с книгами на телефоне</string>
     <!-- Нет «Доступа ко всем файлам» (30.09.2026): Android прячет от приложения
@@ -857,14 +878,11 @@
          разделе «Библиотека», пока доступа нет. -->
     <string name="all_files_missing_row">Нет доступа ко всем файлам</string>
     <string name="all_files_missing_hint">часть книг с полки не откроется: Android прячет их от приложения. Касание откроет системный экран, где доступ включают</string>
-    <!-- 0.4.86 (msg7022): пояснение в окне выбора папки. Раньше строки «Папка с
-         книгами» и «Куда скачивать книги» звучали почти одинаково, и по первой
-         нельзя было понять, что она делает. Теперь названия различаются с первого
-         слова, а объяснение живёт в окне, где папку выбирают, — в списке ему
-         делать нечего, там каждая строка это лишняя остановка. -->
-    <string name="folder_title_hint">BookVoice находит книги в этой папке и показывает их на полке. Файлы не копируются.</string>
+    <!-- 30.09.2026: подсказка `folder_title_hint` («Файлы не копируются.») убрана
+         из «Библиотеки» по просьбе Сержа. Она объясняла, что книги остаются
+         лежать в выбранной папке, а приложение их к себе не копирует, — но
+         человеку это знать не обязательно, а остановка была лишней. -->
     <string name="folder_none">Папка не выбрана</string>
-    <string name="folder_pick">Выбрать папку</string>
     <string name="folder_change">Сменить папку</string>
     <string name="folder_hint">Книги из папки добавятся при следующем открытии библиотеки</string>
     <string name="folder_saved">Папка выбрана</string>
@@ -923,7 +941,7 @@
     <string name="book_delete_yes">Удалить</string>
     <string name="book_deleted">Книга и файл удалены</string>
 
-    <string name="catalog_gesture_hint">В списке книг: короткий тап открывает страницу книги, долгий тап — сразу скачивает книгу. На странице книги: долгий тап по кнопке «Скачать» показывает все форматы, какие есть на сайте</string>
+    <string name="catalog_gesture_hint">В списке книг: короткое касание открывает страницу книги, долгое — сразу скачивает книгу. На странице книги: долгое касание по кнопке «Скачать» показывает все форматы, какие есть на сайте</string>
     <string name="catalog_book_open">Открыть в читалке</string>
     <!-- msg1389: озвучка «Открыть в читалке»/«Скачать» — без названия книги:
          оно уже прочитано заголовком страницы книги в каталоге. -->
@@ -940,8 +958,6 @@
     <string name="catalog_pick_format_action">Выбрать формат</string>
     <!-- msg7003: имя действия строки в меню «Действия» (долгий тап — скачать). -->
     <string name="catalog_dl_action">Скачать книгу</string>
-    <string name="catalog_format_btn">Формат</string>
-    <string name="catalog_format_cd">Выбрать формат скачивания. Сейчас %1$s</string>
     <string name="catalog_fmt_dialog">Форматы скачивания</string>
     <string name="catalog_pick_fmt_dialog">Выбери формат для скачивания</string>
     <string name="catalog_no_formats">У этой книги нет форматов для скачивания</string>
@@ -951,7 +967,6 @@
     <string name="catalog_series_link">Все книги серии</string>
     <string name="catalog_site_link">Книга на сайте</string>
     <string name="catalog_link_fail">Не получилось открыть ссылку: %1$s</string>
-    <string name="catalog_dl_settings_cd">Настройки скачивания: формат и папка для книг</string>
     <string name="catalog_dl_settings_title">Настройки скачивания</string>
     <string name="dl_folder_to_app">Скачивать в память приложения</string>
     <string name="dl_folder_internal">Книги будут скачиваться в память приложения</string>
@@ -962,7 +977,6 @@
     <string name="exit_library">В список книг</string>
 
     <string name="dl_folder_title">Куда сохранять скачанные книги</string>
-    <string name="dl_folder_title_hint">Сюда BookVoice кладёт книги из сетевых библиотек. Без выбора они остаются в памяти приложения и видны только ему.</string>
     <string name="dl_folder_none">в память приложения</string>
     <string name="dl_folder_saved">Папка для скачиваний выбрана</string>
     <string name="dl_folder_change">Сменить папку</string>
@@ -987,11 +1001,9 @@
     <string name="dl_format_title">Формат скачивания</string>
 
     <!-- 0.3.42: вкладки библиотеки — порядок и видимость (#97) -->
-    <string name="lib_tabs_title">Вкладки библиотеки</string>
-    <string name="lib_tabs_hint">Вкладки-фильтры сверху Библиотеки: «Читаю», «Новые», «Прочитанные», «Все». Кнопка каждой вкладки открывает действия: скрыть или показать, передвинуть выше или ниже. Вкладку «Все» скрыть нельзя.</string>
+    <string name="lib_tabs_hint">Фильтры сверху полки: «Читаю», «Новые», «Прочитанные», «Все». Кнопка вкладки открывает действия. Вкладку «Все» скрыть нельзя.</string>
     <string name="lib_tabs_visible">показана</string>
     <string name="lib_tabs_hidden">скрыта</string>
-    <string name="lib_tabs_row_cd">Вкладка «%1$s», %2$s</string>
     <string name="lib_tabs_dialog">Вкладка «%1$s»</string>
     <string name="lib_tabs_up">Передвинуть выше</string>
     <string name="lib_tabs_down">Передвинуть ниже</string>
@@ -1002,38 +1014,42 @@
     <string name="lib_tabs_cannot_all">Вкладку «Все» скрыть нельзя</string>
     <string name="lib_tabs_cannot_active">Эта вкладка сейчас открыта в Библиотеке — сначала выбери другую</string>
     <string name="lib_tabs_cannot_last">Нельзя скрыть последнюю видимую вкладку</string>
+    <!-- 30.09.2026: окно вкладки открывается только когда есть что делать. Если
+         делать нечего (в порядке одна вкладка) — говорим это словами, а не
+         молчанием. Так же отвечают и прежние три строки выше: они остались
+         страховкой — путь к ним теперь не ведёт (см. tabActions). -->
+    <string name="lib_tabs_nothing">Здесь менять нечего</string>
 
-    <!-- 0.3.42: после звонка (#98) -->
+    <!-- 0.3.42: после звонка (#98). 30.09.2026: одна строка со всеми случаями —
+         «Остановиться» и четыре «Продолжить…» с разным откатом (прежде было две
+         строки: режим и отдельно откат). -->
     <string name="after_call_title">После звонка</string>
-    <string name="after_call_dialog">Что делать, когда звонок закончился</string>
+    <string name="after_call_dialog">Что делать после звонка</string>
     <string name="after_call_stop">Остановиться</string>
+    <string name="after_call_go_same">Продолжить с этого же места</string>
+    <string name="after_call_go_2">Продолжить на 2 предложения раньше</string>
+    <string name="after_call_go_5">Продолжить на 5 предложений раньше</string>
+    <string name="after_call_go_10">Продолжить на 10 предложений раньше</string>
     <string name="after_call_continue">Продолжить чтение</string>
-    <string name="after_call_stop_value">Остановиться</string>
-    <string name="after_call_continue_value">Продолжить чтение</string>
-    <string name="after_call_rewind_title">Отматывать назад после звонка</string>
-    <string name="after_call_rewind_dialog">На сколько отмотать после звонка</string>
-    <string name="after_call_rewind_none">Не отматывать</string>
-    <string name="after_call_rewind_2">На 2 предложения</string>
-    <string name="after_call_rewind_5">На 5 предложений</string>
-    <string name="after_call_rewind_10">На 10 предложений</string>
     <string name="after_call_continue_announce">Звонок закончился. Отматываю и продолжаю чтение</string>
-    <string name="after_call_perm_message">Чтобы знать о звонках, BookVoice нужен доступ к состоянию телефона. Видны только начало и конец звонка — номера не читаются и не сохраняются.</string>
     <string name="after_call_perm_denied">Разрешение «Телефон» не выдано — продолжать после звонка не получится. Выдай разрешение или выбери «Остановиться»</string>
 
-    <!-- 0.3.42: пауза при отключении наушников (#99) -->
-    <string name="headphones_pause_title">Останавливать чтение, когда наушники отключаются</string>
+    <!-- 0.3.42: пауза при отключении наушников (#99). 30.09.2026: три галочки
+         «останавливать чтение» стоят прямо в разделе «Чтение», а не в окне. -->
+    <string name="headphones_pause_title">Останавливать чтение, если отключил наушники</string>
 
     <!-- #85 (msg5895/5899, возвращено 22.09.2026): пауза при включении экрана
          (и при разблокировке — она тоже зажигает экран). Галочка, по умолчанию
          снята. -->
-    <string name="pause_on_screen_title">Останавливать чтение при включении экрана</string>
+    <string name="pause_on_screen_title">Останавливать чтение, если включился экран</string>
 
     <!-- 23.09.2026: пауза, когда телефон лежит экраном вниз, и продолжение,
-         когда перевернули экраном вверх. Галочка, по умолчанию снята. В
-         подсказке обязательно сказано про таймер сна: пока он ждёт жест,
-         переворот принадлежит ему — иначе человек решит, что пауза сломалась. -->
-    <string name="pause_face_down_title">Останавливать чтение, когда телефон перевёрнут экраном вниз</string>
-    <string name="pause_face_down_hint">Экран погашен и телефон лёг экраном вниз — чтение встаёт на паузу. Перевернули экраном вверх — чтение продолжается само. Пока таймер сна ждёт жест, переворот принадлежит таймеру: им продлевают чтение, и паузы в эти секунды не будет.</string>
+         когда перевернули экраном вверх. Галочка, по умолчанию снята.
+         30.09.2026: подсказка сокращена до одного случая — про таймер сна; без
+         неё человек решит, что пауза сломалась (пока таймер ждёт жест, переворот
+         принадлежит ему). -->
+    <string name="pause_face_down_title">Останавливать чтение, если положил экраном вниз</string>
+    <string name="pause_face_down_hint">Пока таймер сна ждёт жест, переворот работает на таймер, а не на паузу.</string>
 
     <!-- msg5923/5931: строка-переключатель «Системные кнопки» — прятать ли
          полосу с «назад/домой/недавние» в окне книги. Три состояния, как у
@@ -1048,20 +1064,25 @@
 
 
     <!-- msg2093: «Отступать назад при старте» — начать чтение на N предложений
-         раньше места остановки, чтобы вспомнить, что было. Выключено по умолчанию. -->
-    <string name="start_rewind_title">Отступать назад при старте</string>
-    <string name="start_rewind_dialog">На сколько отступить при старте чтения</string>
-    <string name="start_rewind_none">Выключено</string>
-    <string name="start_rewind_2">На 2 предложения</string>
-    <string name="start_rewind_5">На 5 предложений</string>
+         раньше места остановки, чтобы вспомнить, что было. Выключено по умолчанию.
+         30.09.2026: названия переписаны понятнее («Выключено» не говорило, что
+         именно выключено), ключи те же. -->
+    <string name="start_rewind_title">С чего начинать чтение</string>
+    <string name="start_rewind_dialog">С чего начинать чтение с сохранённого места</string>
+    <string name="start_rewind_none">С места остановки</string>
+    <string name="start_rewind_2">На 2 предложения раньше</string>
+    <string name="start_rewind_5">На 5 предложений раньше</string>
 
-    <!-- msg5604: «Пауза между фразами» — сколько тишины, которую движок дописывает
-         по краям фразы, оставлять на стыке предложений. Значение в миллисекундах;
-         «Без паузы» срезает всё, что движок добавил сам. -->
-    <string name="pause_keep_title">Пауза между фразами</string>
-    <string name="pause_keep_0">Без паузы (самая плотная)</string>
-    <string name="pause_keep_130">Короткая (как было)</string>
-    <string name="pause_keep_300">Заметная</string>
+    <!-- msg5604: «Пауза между предложениями» — сколько тишины, которую движок
+         дописывает по краям фразы, оставлять на стыке предложений. Значение в
+         миллисекундах; «Нет паузы» срезает всё, что движок добавил сам.
+         30.09.2026: названия переписаны простыми словами (Серж: «сделай коротко,
+         чтобы из формулировки было понятно, что она делает»), подсказки у строки
+         нет вовсе. -->
+    <string name="pause_keep_title">Пауза между предложениями</string>
+    <string name="pause_keep_0">Нет паузы</string>
+    <string name="pause_keep_130">Короткая</string>
+    <string name="pause_keep_300">Средняя</string>
     <string name="pause_keep_600">Длинная</string>
 
     <!-- msg1254: тактильное подтверждение действий (единый рубильник, «Управление») -->
@@ -1075,72 +1096,53 @@
          остановок подряд, и слушать их каждый раз было тяжело. -->
     <string name="backup_group_title">Резервные копии</string>
     <string name="backup_group_hint">Восстановление после переустановки</string>
-    <string name="backup_diff_hint">Копия — это один файл со всеми настройками и книгами: из неё восстанавливаются после переустановки телефона. Продолжить чтение на другом устройстве — это синхронизация, она отдельным пунктом.</string>
+    <string name="backup_diff_hint">Копия — один файл со всеми настройками и книгами, из неё восстанавливаются после переустановки. На втором телефоне она тоже развернётся, но принесёт и настройки, и книги целиком; чтобы просто продолжить чтение с того же места, есть синхронизация — она отдельным пунктом.</string>
     <string name="backup_dir_title">Папка для резервных копий</string>
-    <string name="backup_dir_pick">Выбрать папку для копий</string>
-    <string name="backup_dir_change">Сменить папку для копий</string>
     <string name="backup_dir_none">папка не выбрана</string>
-    <string name="backup_blocks_create">Что включить в копию</string>
-    <string name="backup_blocks_restore">Что восстановить</string>
+    <string name="backup_blocks_restore">Восстановить из копии</string>
     <string name="backup_block_settings">Настройки программы</string>
-    <string name="backup_block_books">Книги, закладки и цитаты</string>
-    <string name="backup_create_go">Создать копию</string>
     <string name="backup_created">Резервная копия создана</string>
     <string name="backup_create_fail">Не получилось создать копию</string>
-    <string name="backup_restore_choose">Выбери файл копии (bvbak)</string>
     <string name="backup_bad_file">Это не похоже на копию BookVoice</string>
     <string name="backup_restore_go">Восстановить</string>
-    <string name="backup_restore_done">Резервная копия восстановлена</string>
     <string name="backup_restore_fail">Не получилось восстановить: %1$s</string>
-    <string name="backup_auto_title">Резервные копии автоматически</string>
+    <string name="backup_auto_title">Делать копии автоматически</string>
     <string name="backup_auto_off">Выключено</string>
-    <string name="backup_auto_last">последняя %1$s</string>
+    <string name="backup_auto_last">последняя копия %1$s</string>
     <string name="backup_auto_day">Каждый день</string>
     <string name="backup_auto_week">Каждую неделю</string>
     <string name="backup_auto_month">Каждый месяц</string>
-    <string name="backup_notification_title">Сделана резервная копия</string>
-    <string name="backup_notification_body">Книги и настройки сохранены. Нажми, чтобы поделиться копией</string>
-    <string name="backup_share_notification">Поделиться</string>
     <string name="backup_preview_title">Копия от %1$s</string>
     <string name="backup_line_books">Книг: %1$d, закладок: %2$d, цитат: %3$d</string>
     <string name="backup_restore_result">Восстановлено: добавлено книг %1$d, обновлено %2$d, добавлено цитат %3$d</string>
     <string name="backup_dir_saved">Папка для резервных копий выбрана</string>
-    <string name="backup_dir_unwritable">В эту папку приложение не может писать автоматически (так бывает с папками сторонних проводников, например MixPlorer). Выбери другую папку в системных «Файлах» или создавай копии кнопкой «Создать копию»</string>
-    <string name="backup_auto_dialog">Как часто создавать резервную копию при открытии приложения</string>
+    <string name="backup_dir_unwritable">Не могу записать копию в эту папку: нет разрешения на запись. Выбери папку заново в системных «Файлах» и разреши запись — или делай копии кнопкой.</string>
+    <string name="backup_auto_dialog">Как часто делать копию при открытии программы</string>
     <string name="backup_folder_copied">Копия сохранена в папку копий</string>
-    <string name="backup_folder_copy_fail">В папку копий сохранить не вышло — она не разрешает запись. Копия открыта в меню «Поделиться», её можно отправить себе в Telegram</string>
+    <string name="backup_folder_copy_fail">Не могу записать в папку копий: нет разрешения на запись. Копия открыта в «Поделиться» — отправь её себе в Телеграм.</string>
 
     <!-- msg6046…6078: синхронизация между устройствами -->
     <string name="sync_title">Синхронизация</string>
     <string name="sync_enable_title">Включить синхронизацию</string>
     <string name="sync_group_hint">Места чтения, закладки, цитаты и книги между устройствами</string>
     <string name="sync_on">включена</string>
-    <string name="sync_off">выключена</string>
     <string name="sync_dir_title">Папка синхронизации</string>
     <string name="sync_dir_none">не выбрана</string>
     <string name="sync_dir_cloud">в облаке</string>
     <string name="sync_dir_local">на телефоне</string>
     <string name="sync_dir_saved">Папка синхронизации выбрана</string>
-    <string name="sync_dir_pick">Выбрать папку для синхронизации</string>
-    <string name="sync_dir_change">Сменить папку синхронизации</string>
     <string name="sync_now">Синхронизировать сейчас</string>
     <string name="sync_send">Отправить файл</string>
     <string name="sync_get">Забрать файл</string>
-    <string name="sync_manual_hint">Без облака: отправь файл себе в Telegram, на втором устройстве сохрани его в «Загрузки» и нажми «Забрать файл».</string>
     <string name="sync_share_fail">Не вышло отправить файл синхронизации</string>
     <string name="sync_pick_fail">Файл не читается</string>
     <string name="sync_bad_file">Это не файл синхронизации BookVoice</string>
     <string name="sync_last_title">Последняя синхронизация</string>
     <string name="sync_last_never">ещё не было</string>
-    <string name="sync_hint">Переносятся места чтения, закладки, цитаты и избранное. Голоса не переносятся: у каждого телефона свои.</string>
     <string name="sync_counts">Отправил: %1$d, забрал: %2$d</string>
     <string name="sync_same">Всё уже совпадает</string>
     <string name="sync_err_no_dir">Папка синхронизации не выбрана</string>
     <string name="sync_err_write">Не получилось записать файл синхронизации в папку</string>
-    <string name="sync_need_folder">Сначала выбери папку синхронизации — ту же, что на втором устройстве</string>
-    <string name="sync_dir_yandex">Яндекс.Диск, папка приложения</string>
-    <string name="sync_dir_google">Google Диск, папка приложения</string>
-    <string name="sync_cloud_used">Синхронизация идёт через %1$s — папка не нужна</string>
     <!-- 28.09.2026: место синхронизации выбирает владелец. Раньше приложение
          решало само, а подсказки оставались яндексовыми — человек читал про
          Яндекс.Диск, а файл уезжал в Google. -->
@@ -1149,9 +1151,15 @@
     <string name="sync_place_mark"> — выбрано</string>
     <string name="sync_cloud_lost">%1$s: вход потерян, синхронизация не пошла — войди заново в настройках</string>
     <!-- Обмен файлом вручную: одна строка вместо двух кнопок и подсказки
-         (28.09.2026, просьба Сержа — подраздел компактнее). -->
-    <string name="sync_manual_row">Вручную файлом</string>
-    <string name="sync_manual_row_hint">если облака нет: отправить файл себе и забрать его на втором устройстве</string>
+         (28.09.2026, просьба Сержа — подраздел компактнее).
+         30.09.2026, просьба Сержа: «в синхронизации есть строчка „вручную файлом“,
+         а в резервных копиях — что-то такое же про отправку файла, надо что-то
+         одно оставить». Оставляем обе, но называем так, чтобы слышно было, что
+         это РАЗНЫЕ файлы: здесь файл чтения для второго телефона (места чтения,
+         закладки, цитаты — и он сливается с тем, что уже есть), а копия — для
+         восстановления после переустановки (см. backup_diff_hint). -->
+    <string name="sync_manual_row">Файл для второго телефона</string>
+    <string name="sync_manual_row_hint">Места чтения, закладки и цитаты: отправь файл себе и забери его на втором устройстве. Это не копия — копия для восстановления в «Резервных копиях».</string>
     <string name="yandex_title">Яндекс.Диск</string>
     <string name="yandex_on">подключён (%1$s)</string>
     <string name="yandex_on_plain">подключён</string>
@@ -1185,33 +1193,28 @@
     <string name="google_err">Google Диск: %1$s</string>
     <string name="google_consent_asking">Google просит подтвердить доступ — открываю его экран</string>
     <string name="yandex_err">Яндекс.Диск: %1$s</string>
-    <string name="yandex_used">Синхронизация идёт через Яндекс.Диск — папка не нужна</string>
 
     <!-- Перенос книг (msg6130). Отдельная галочка от мест чтения: книги — это
          мегабайты, и решать про них владелец должен сам. Строка «Книги на
          Диске» — забор; он всегда рукой владельца, автоматически не тянем. -->
     <string name="sync_books_title">Переносить и книги</string>
-    <string name="sync_books_hint">Книги уходят в служебную папку приложения в облаке (туда, куда выбрана синхронизация) и заливаются по одной — при слабой сети это долго. Книги из облака забираются строкой выше; места чтения подтянутся сами. Убранная с полки книга помечается в облаке удалённой: файл не стирается, и на втором устройстве книга тоже уходит с полки.</string>
-    <string name="sync_books_need_yandex">Сначала войди в Яндекс.Диск — без него книги не поедут</string>
     <string name="sync_books_need_cloud">Сначала войди в облако — в Яндекс.Диск или в Google Диск: без этого книги не поедут</string>
     <string name="sync_books_counting">Считаю книги…</string>
     <string name="sync_books_checking">Смотрю, что есть в облаке…</string>
     <string name="sync_books_check">Книги в облаке: нажми, чтобы проверить</string>
     <string name="sync_books_none">Книги в облаке: новых нет</string>
     <string name="sync_books_get">Книги в облаке: %1$d, забрать</string>
-    <string name="sync_books_all_there">Все твои книги уже в облаке — заливать нечего</string>
+    <string name="sync_books_all_there">Все твои книги уже в облаке — отправлять нечего</string>
     <string name="sync_books_none_toast">Новых книг в облаке нет</string>
     <string name="sync_books_list_fail">Список книг не получен: %1$s</string>
-    <string name="sync_books_ask">Залить книги в облако? Книги уходят по одной — при слабой сети это долго.</string>
-    <string name="sync_books_go">Залить</string>
+    <string name="sync_books_ask">Отправить книги в облако? Книги уходят по одной — при слабой сети это долго.</string>
+    <string name="sync_books_go">Отправить</string>
     <string name="sync_books_what">%1$s, всего %2$s</string>
-    <string name="sync_books_pushing">Заливаю книг: %1$d</string>
-    <string name="sync_books_pushed">Залито книг: %1$d</string>
-    <string name="sync_books_pushed_part">Залито книг: %1$d, не залилось: %2$d</string>
-    <string name="sync_books_failed">Не залилось книг: %1$d</string>
-    <string name="sync_books_push_fail">Не вышло залить: %1$s</string>
-    <string name="sync_books_up_fail">книга «%1$s»: %2$s</string>
-    <string name="sync_books_no_read">книга «%1$s» не читается с телефона</string>
+    <string name="sync_books_pushing">Отправляю книг: %1$d</string>
+    <string name="sync_books_pushed">Отправлено книг: %1$d</string>
+    <string name="sync_books_pushed_part">Отправлено книг: %1$d, не отправилось: %2$d</string>
+    <string name="sync_books_failed">Не отправилось книг: %1$d</string>
+    <string name="sync_books_push_fail">Не вышло отправить: %1$s</string>
     <string name="sync_books_pull_ask">Забрать из облака? %1$s</string>
     <string name="sync_books_size_unknown">размер неизвестен</string>
     <string name="sync_books_pull_go">Забрать</string>
@@ -1237,10 +1240,24 @@
         <item quantity="many">Убрал с полки %1$d записей без файлов: %2$s</item>
         <item quantity="other">Убрал с полки %1$d записей без файлов: %2$s</item>
     </plurals>
+    <!-- 30.09.2026: ручная уборка — пункт меню «Убрать записи без файлов»
+         (просьба Сержа: «если файла нет, пусть запись уходит»). Автоматическая
+         уборка при скане щадит полку, если мёртвой оказалась половина записей
+         (похоже на недоступное хранилище), а ручная команда — нет: человек
+         просит осознанно. Файлы на диске не трогаем. -->
+    <string name="shelf_dead_checking">Проверяю записи без файлов…</string>
+    <string name="shelf_dead_none">Записей без файлов нет</string>
+    <plurals name="shelf_dead_title">
+        <item quantity="one">%1$d запись без файла</item>
+        <item quantity="few">%1$d записи без файла</item>
+        <item quantity="many">%1$d записей без файла</item>
+        <item quantity="other">%1$d записей без файла</item>
+    </plurals>
+    <string name="shelf_dead_msg">Уберу эти записи с полки. Место чтения, закладки и цитаты будут потеряны. Сами файлы на диске не трогаю: книгу вернёт скан папки, а место чтения — нет.</string>
+    <string name="shelf_dead_yes">Убрать</string>
     <!-- 0.3.42: отмена перехода — меню «⋮ Ещё» в читалке (#101) -->
     <string name="reader_more_cd">Ещё</string>
     <string name="ui_more_title">Кнопка «Ещё»</string>
-    <string name="reader_more_title">Действия</string>
     <string name="reader_action_back">Вернуться на предыдущее место</string>
     <string name="reader_back_none">Нет предыдущего места — переходов ещё не было</string>
     <string name="reader_back_done">Вернулся: %1$s</string>
@@ -1260,23 +1277,26 @@
     <string name="sleep_timer_now">Уже стоит</string>
     <string name="sleep_timer_left">осталось %1$d мин</string>
     <string name="sleep_timer_left_chapter">ждёт конца главы</string>
-    <string name="sleep_timer_hint">Как ведёт себя таймер — сколько ждать жест, чем продлевать, какой сигнал — настраивается строкой выше.</string>
+    <!-- 30.09.2026: нижняя подсказка окна таймера убрана: строкой выше уже
+         сказано «Настройки таймера — Жесты, чувствительность, сигнал и проверки». -->
     <string name="sleep_settings_row">Настройки таймера</string>
     <string name="sleep_settings_hint">Жесты, чувствительность, сигнал и проверки</string>
 
-    <!-- msg4993: окно «Настройки таймера» — жесты, ступени, сигнал, проверки -->
+    <!-- msg4993: окно «Настройки таймера» — жесты, ступени, сигнал, проверки.
+         30.09.2026: вступление сокращено до одной фразы — что таймер делает,
+         подробно сказано внизу окна, в строке «Как это работает». -->
     <string name="sleep_settings_title">Настройки таймера</string>
-    <string name="sleep_settings_intro">Таймер подходит к концу — BookVoice подаёт сигнал и ждёт минуту: тряхнули телефон или положили его экраном вниз — чтение идёт дальше. Здесь видно, как именно он это делает, и можно проверить каждую часть не дожидаясь конца таймера.</string>
+    <string name="sleep_settings_intro">Здесь видно, как таймер себя ведёт, и можно проверить каждую часть, не дожидаясь конца таймера.</string>
 
-    <string name="sleep_wait_title">Подождать встряску в конце</string>
-    <string name="sleep_wait_hint">Включено: перед остановкой BookVoice подаёт сигнал и минуту ждёт жест. Выключите, если хотите, чтобы чтение просто вставало на паузу без сигнала и ожидания.</string>
+    <string name="sleep_wait_title">Перед остановкой ждать встряску</string>
+    <string name="sleep_wait_hint">Включено: перед остановкой BookVoice подаёт сигнал и минуту ждёт жест. Выключи, если хочешь, чтобы чтение просто вставало на паузу — без сигнала и ожидания.</string>
     <string name="sleep_flip_title">Продлевать переворотом</string>
     <string name="sleep_flip_hint">Второй жест: положить телефон экраном вниз и подержать. Выручает, когда трясти неудобно — телефон лежит на столе или в чехле.</string>
     <string name="sleep_extend_title">Продлевать на: %1$s</string>
-    <string name="sleep_extend_hint">На сколько продолжать чтение после жеста. Дальше таймер снова идёт с начала этого срока. «Столько же» — на сколько был выставлен таймер: завели на тридцать минут — продлится ещё на тридцать. Если таймер стоял на «до конца главы», продление дочитает следующую главу.</string>
+    <string name="sleep_extend_hint">Сколько читать после жеста. Потом таймер идёт заново с этого срока. «Столько же» — как был выставлен: завёл на тридцать минут — продлится ещё на тридцать. Если таймер стоял «до конца главы», дочитает следующую главу.</string>
     <string name="sleep_extend_same">столько же</string>
     <string name="sleep_sense_title">Чувствительность: %1$s</string>
-    <string name="sleep_sense_hint">Нажмите строку, чтобы сменить ступень. Не отзывается на встряску — поднимите ступень выше. Срабатывает от каждого движения — опустите ниже.</string>
+    <string name="sleep_sense_hint">Нажми строку, чтобы сменить ступень. Не отзывается на встряску — подними выше. Срабатывает от каждого движения — опусти ниже.</string>
     <string name="sleep_sense_low">низкая</string>
     <string name="sleep_sense_mid">средняя</string>
     <string name="sleep_sense_high">высокая</string>
@@ -1293,21 +1313,21 @@
     <string name="sleep_check_none">Проверок ещё не было</string>
     <string name="sleep_check_none_hint">Результат появится здесь после любой проверки ниже</string>
     <string name="sleep_check_all_title">Проверить таймер целиком</string>
-    <string name="sleep_check_all_hint">Двадцать секунд чтения, потом сигнал и десять секунд ожидания — тряхните телефон или положите экраном вниз. Скажу словами, что поймал. Книга при проверке не останавливается, место чтения не сбивается.</string>
+    <string name="sleep_check_all_hint">Двадцать секунд чтения, потом сигнал и десять секунд ожидания — тряхни телефон или положи экраном вниз. Скажу словами, что поймал. Книга не останавливается, место чтения не сбивается.</string>
     <string name="sleep_check_gesture_title">Проверить жест отдельно</string>
     <string name="sleep_check_gesture_hint">Десять секунд слушаю сразу, без чтения и без сигнала. Этой проверкой удобно подбирать ступень чувствительности.</string>
     <string name="sleep_check_signal_title">Проверить сигнал</string>
     <string name="sleep_check_signal_hint">Проиграть сигнал сейчас</string>
     <string name="sleep_check_vibra_title">Проверить вибрацию</string>
     <string name="sleep_check_vibra_hint">Дать толчок выбранной силы сейчас</string>
-    <string name="sleep_check_signal_done">Проверка сигнала: подал сигнал. Если не слышно — проверьте громкость и беззвучный режим.</string>
-    <string name="sleep_check_vibra_done">Проверка вибрации: подал толчок выбранной силы. Если не чувствуется — поднимите силу вибрации.</string>
+    <string name="sleep_check_signal_done">Проверка сигнала: подал сигнал. Если не слышно — проверь громкость и беззвучный режим.</string>
+    <string name="sleep_check_vibra_done">Проверка вибрации: подал толчок выбранной силы. Если не чувствуется — подними силу вибрации.</string>
 
     <string name="sleep_how_title">Как это работает</string>
     <string name="sleep_how_hint">Короткое объяснение словами</string>
     <string name="sleep_how_title_open">Как это работает: свернуть</string>
     <string name="sleep_how_hint_open">Объяснение раскрыто ниже</string>
-    <string name="sleep_how_text">Таймер сна останавливает чтение, чтобы книга не читала всю ночь. Когда время подходит к концу, BookVoice подаёт сигнал — звук и толчок — и минуту ждёт. Если за эту минуту вы тряхнули телефон или положили его экраном вниз, чтение продолжается ещё на выбранный срок: так можно не просыпаться до конца, а просто повернуть телефон. Если не тронули — чтение встаёт на паузу и запоминает место. Сигнал работает при погашенном экране, а если экран выключен системой и звук молчит — проверьте, что BookVoice не ограничен в работе в фоне (окно «Не засыпать» в Настройках).</string>
+    <string name="sleep_how_text">Таймер сна останавливает чтение, чтобы книга не читала всю ночь. Если сигнал не слышен, проверь, что BookVoice не ограничен в фоне — окно «Не засыпать».</string>
 
     <!-- 0.3.42: свой голос для книги (#102) -->
     <string name="voice_remember_book">Запомнить для этой книги</string>
@@ -1324,7 +1344,7 @@
     <string name="book_finished">Книга прочитана.</string>
     <string name="voice_book_saved">Запоминаю для этой книги</string>
     <string name="voice_book_cleared">Читаю обычным голосом</string>
-    <string name="voice_remember_hint">С галочкой голос запомнится только для этой книги. Без галочки голос станет общим для всех книг без своего голоса.</string>
+    <string name="voice_remember_hint">Включён — голос запомнится только для этой книги. Выключен — голос станет общим для всех книг без своего голоса.</string>
 
     <!-- 0.4.14 (#54): полноэкранная панель голоса — кнопка проверки голоса -->
     <!-- msg5632: образцов голоса больше нет — кнопка набора «Голос чтения»
@@ -1343,10 +1363,6 @@
 
     <!-- 0.3.42: выделение фрагмента и цитаты (#104/#105/#106) -->
     <string name="sel_anchor_start">Начало отмечено. Дойди до конца и нажми и удержи предложение снова</string>
-    <string name="sel_anchor_start_short">Начало отмечено</string>
-    <string name="sel_anchor_start_cd">Начало выделения: %1$s</string>
-    <string name="sel_done">Выделено предложений: %1$d</string>
-    <string name="sel_done_quote">Выделено: „%1$s“ — „%2$s“</string>
     <string name="sel_title">Выделено предложений: %1$d</string>
     <string name="sel_read">Прочитать выделенное</string>
     <string name="sel_copy">Копировать</string>
@@ -1355,10 +1371,14 @@
     <string name="sel_cancel">Отменить</string>
     <string name="sel_copied">Скопировано</string>
     <string name="sel_empty">Выделять нечего — сначала начни выделение</string>
-    <string name="sel_long_hint">долгое нажатие — выделить или прочитать отсюда</string>
     <!-- Умные замены (28.09.2026): владелец показывает мусорную строку, приложение
          ищет по книге похожие и собирает правило, которое их убирает. -->
     <string name="sel_action_drop">Убрать такие строки</string>
+    <!-- Вернуть убранное (30.09.2026, вопрос Сержа «а если захочется вернуть
+         назад?»). Пункт появляется в меню «Действия» ТОЛЬКО у строки, которую
+         сейчас убирает книжное правило: у остальных его нет, чтобы меню не
+         пухло пустыми пунктами. -->
+    <string name="sel_action_undrop">Вернуть такие строки</string>
     <!-- Ссылка в тексте книги (29.09.2026, просьба Сержа): адреса вида
          «http://…» и «www.…» в тексте становятся ссылками — их видно и слышно
          как ссылку, а этим пунктом меню «Действия» их открывают вслух и без
@@ -1366,13 +1386,15 @@
     <string name="sel_action_link">Открыть ссылку</string>
     <!-- Реплика из книги (30.09.2026, просьба Сержа): знаки диктор не читает, а
          вслепую их не угадать — этим пунктом «Действий» владелец показывает на
-         строку, а приложение само берёт её ведущие знаки в свои знаки реплики. -->
-    <string name="sel_action_reply">Считать такие строки репликами</string>
-    <string name="reply_from_sentence_added">Свои знаки реплики: %1$s</string>
-    <string name="reply_from_sentence_has">Эти знаки уже стоят в своих знаках реплики</string>
-    <string name="reply_from_sentence_none">Эта строка начинается со слова — ведущего знака нет</string>
-    <string name="reply_from_sentence_number">Уже работает: включены «Реплики после номера»</string>
-    <string name="reply_from_sentence_dash">Такие строки и так читаются голосом реплик</string>
+         строку, а приложение само берёт её ведущие знаки в свои знаки прямой
+         речи. 30.09.2026: слово «реплики» заменено на «прямую речь», а тире
+         внутри строк убрано — скринридер его не читает. -->
+    <string name="sel_action_reply">Считать такие строки прямой речью</string>
+    <string name="reply_from_sentence_added">Свои знаки прямой речи: %1$s</string>
+    <string name="reply_from_sentence_has">Эти знаки уже стоят в своих знаках прямой речи</string>
+    <string name="reply_from_sentence_none">Эта строка начинается со слова: ведущего знака нет</string>
+    <string name="reply_from_sentence_number">Уже работает: включена «Прямая речь после номера»</string>
+    <string name="reply_from_sentence_dash">Такие строки и так читаются голосом прямой речи</string>
     <string name="reply_from_sentence_nobook">Книга не открыта — знак некуда записать</string>
     <string name="dict_drop_title">Убрать такие строки</string>
     <string name="dict_drop_searching">Ищу похожие строки в книге…</string>
@@ -1382,7 +1404,19 @@
     <string name="dict_drop_go">Убрать</string>
     <string name="dict_drop_more">Показать строки</string>
     <string name="dict_drop_examples">Найденные строки, всего %1$d</string>
-    <string name="dict_drop_done">Убрал таких строк: %1$d</string>
+    <string name="dict_drop_done">Убрал таких строк: %1$d. Вернуть — в меню действий строки</string>
+    <!-- Возврат убранного (30.09.2026): правило НЕ удаляем, а выключаем — так его
+         можно потом включить обратно в словаре, разделе «Правила из книг». -->
+    <string name="dict_undrop_title">Вернуть такие строки</string>
+    <string name="dict_undrop_ask">Эту строку убирает книжное правило «%1$s».\n\nВыключить его, чтобы такие строки снова читались? Правило останется в словаре — включить обратно можно там же, в разделе «Правила из книг».</string>
+    <string name="dict_undrop_go">Вернуть</string>
+    <string name="dict_undrop_none">Эту строку ничего не убирает — правила для неё нет</string>
+    <plurals name="dict_undrop_done">
+        <item quantity="one">Вернул: выключил правило, таких строк %1$d — снова читаются</item>
+        <item quantity="few">Вернул: выключил правила, таких строк %1$d — снова читаются</item>
+        <item quantity="many">Вернул: выключил правила, таких строк %1$d — снова читаются</item>
+        <item quantity="other">Вернул: выключил правила, таких строк %1$d — снова читаются</item>
+    </plurals>
     <!-- 0.4.52: именованные действия узла предложения — видны в меню TalkBack, пункт «Действия» -->
     <string name="sel_action_mark">Выделить фрагмент отсюда</string>
     <string name="sel_action_read">Читать отсюда</string>
@@ -1444,8 +1478,8 @@
     <string name="quick_pinned_to">Книга закреплена за кнопкой %1$d</string>
     <string name="quick_unpinned">Книга снята с кнопки</string>
     <string name="quick_already_open">Эта книга уже открыта</string>
-    <string name="quick_full">Все кнопки заняты — снимите одну долгим нажатием</string>
-    <string name="quick_empty">Нет недавних книг — откройте книгу из библиотеки</string>
+    <string name="quick_full">Все кнопки заняты — сними одну долгим нажатием</string>
+    <string name="quick_empty">Нет недавних книг — открой книгу из библиотеки</string>
     <string name="quick_panel_cd">Панель недавних книг</string>
 
     <!-- Словарь произношения (27.09.2026): правила подмены текста перед синтезом.
@@ -1511,8 +1545,6 @@
     <string name="dict_export_done">Словарь выгружен, правил: %1$d</string>
     <string name="dict_export_fail">Не удалось сохранить словарь</string>
     <string name="dict_empty">в этой части правил нет</string>
-    <string name="dict_is_regex">регулярное выражение</string>
-    <string name="dict_is_off">выключено</string>
     <string name="dict_rule_hint">Правило меняет найденный текст как он написан, без границ слова: правило «Иванов» поймает и «Иванова», и «Иванову». Проверить можно на слух — кнопкой «Проверить».</string>
     <string name="dict_rule_title">Правило словаря</string>
     <string name="dict_rule_new">Новое правило</string>
@@ -1531,7 +1563,6 @@
     <string name="dict_rule_check">Проверить</string>
     <string name="dict_rule_check_hint">произносит замену и говорит, сколько таких мест в книге</string>
     <string name="dict_save">Сохранить</string>
-    <string name="dict_rule_edit">Изменить</string>
     <string name="dict_rule_delete">Удалить</string>
     <string name="dict_rule_delete_action">Удалить правило</string>
     <string name="dict_rule_deleted">Правило удалено</string>
@@ -1540,8 +1571,6 @@
     <string name="dict_scope_all_hint">коснитесь, чтобы правило работало только в книге «%1$s»</string>
     <string name="dict_scope_book_hint">коснитесь, чтобы правило работало во всех книгах; правило одной книги уходит вместе с ней</string>
     <string name="dict_books_all">все книги</string>
-    <string name="dict_rule_on">Включить</string>
-    <string name="dict_rule_off">Выключить</string>
     <string name="dict_need_find">Сначала напишите, что искать</string>
     <string name="dict_need_word">В правиле нет ни одного слова</string>
     <string name="dict_pick_word">Какое слово подбирать</string>
@@ -1554,8 +1583,8 @@
     <string name="dict_speak_fail">движок не отозвался</string>
     <string name="dict_from_sentence">Слова из предложения</string>
     <string name="dict_from_sentence_all">Всё предложение</string>
-    <string name="dict_from_sentence_hint">целая строка уже стоит в поле «Что искать»; отметьте слова флажками, если нужно сузить: %1$s</string>
-    <string name="dict_not_in_row">Между отмеченными словами есть пропуск — отметьте и его, иначе правило не найдёт текст в книге</string>
+    <string name="dict_from_sentence_hint">целая строка уже стоит в поле «Что искать»; отметь слова флажками, если нужно сузить: %1$s</string>
+    <string name="dict_not_in_row">Между отмеченными словами есть пропуск — отметь и его, иначе правило не найдёт текст в книге</string>
     <string name="sel_action_dict">Добавить в словарь</string>
 
 </resources>

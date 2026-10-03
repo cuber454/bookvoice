@@ -27,6 +27,13 @@ import android.media.AudioTrack
  *  Аудиофокус НЕ запрашиваем: поток ни на что не претендует и не глушит чужое.
  *  Цена — занятый тракт и поднятый Bluetooth-канал, поэтому галочка по умолчанию
  *  выключена (msg4721) и поток живёт только пока идёт чтение (см. [KeepAwake]).
+ *
+ *  30.09.2026 (настройка по образцу @Voice Aloud Reader). Галочка переехала
+ *  в «Чтение» → «Звук и стыки» отдельной строкой и включается САМА, когда звук
+ *  произносит движок, а не наш плеер: и в альтернативном способе, и когда
+ *  сетевой движок не отдаёт файлы ([KeepAwake.enableSilenceAuto]). Рядом строка
+ *  «Громкость тихого потока» — на случай гарнитуры, которая и этот поток считает
+ *  тишиной.
  */
 object SilentKeepAlive {
 
@@ -36,10 +43,26 @@ object SilentKeepAlive {
      *  нацело — стык петли без щелчка). Мало — тракту достаточно. */
     private const val WANT_FRAMES = 2048
 
+    /** Уровни тихого звука — амплитуда в отсчётах. Первый (по умолчанию) — младший
+     *  разряд 16-битного отсчёта, около −90 дБ: ухо не слышит, но и цифровой
+     *  тишиной поток не считается. Выше — только для гарнитур, которые и такой
+     *  поток принимают за тишину и всё равно засыпают (30.09.2026, настройка
+     *  «Громкость тихого потока»: у @Voice Aloud Reader такая строка есть давно).
+     *  Частота узора при любой амплитуде одна и та же (24 кГц), поэтому слышимого
+     *  тона не появляется; на верхних уровнях в наушниках возможен еле слышный шум. */
+    private val LEVELS = intArrayOf(1, 8, 32, 128, 512)
+
     private var track: AudioTrack? = null
 
     /** Включён ли поток сейчас — для лога и для [KeepAwake.syncSilence]. */
     val isOn: Boolean get() = track != null
+
+    /** Уровень из настроек: 1..5 (см. [LEVELS]). Читаем сами prefs — экран настроек
+     *  пишет туда же, а движку об этой настройке знать незачем. */
+    private fun level(c: Context): Int = runCatching {
+        c.getSharedPreferences("reader", Context.MODE_PRIVATE)
+            .getInt(MainActivity.KEY_SILENT_LEVEL, MainActivity.SILENT_LEVEL_DEFAULT)
+    }.getOrDefault(MainActivity.SILENT_LEVEL_DEFAULT).coerceIn(1, LEVELS.size)
 
     /** Запустить тихий поток. Повторный вызов безвреден.
      *
@@ -48,14 +71,27 @@ object SilentKeepAlive {
      *  нет» не отличить отказ трека от засыпания гарнитуры. */
     fun start(c: Context) {
         if (track != null) return
-        val res = runCatching { build() }
+        val lvl = level(c)
+        val amp = LEVELS[lvl - 1]
+        val res = runCatching { build(amp) }
         val t = res.getOrNull()
         if (t == null) {
             Diag.log(c, "power", "тихий поток НЕ построился: ${res.exceptionOrNull()}")
             return
         }
         track = t
-        Diag.log(c, "power", "тихий поток включён (звуковой канал не засыпает)")
+        Diag.log(c, "power", "тихий поток включён (уровень $lvl, амплитуда $amp): звуковой канал не засыпает")
+    }
+
+    /** Уровень поменяли на ходу (строка «Громкость тихого потока»): поток уже
+     *  играет — пересобираем его с новой амплитудой. Чтение при этом не трогаем. */
+    fun levelChanged(c: Context) {
+        if (track == null) {
+            Diag.log(c, "power", "уровень тихого потока запомнен (уровень ${level(c)}), поток сейчас не идёт")
+            return
+        }
+        stop(c)
+        start(c)
     }
 
     fun stop(c: Context) {
@@ -68,7 +104,7 @@ object SilentKeepAlive {
         Diag.log(c, "power", "тихий поток выключен")
     }
 
-    private fun build(): AudioTrack {
+    private fun build(amp: Int): AudioTrack {
         // Буфер не меньше системного минимума: на части устройств статический
         // трек короче минимума просто не запускается.
         val minBytes = AudioTrack.getMinBufferSize(
@@ -77,7 +113,7 @@ object SilentKeepAlive {
             AudioFormat.ENCODING_PCM_16BIT,
         )
         val frames = maxOf(WANT_FRAMES, ((minBytes + 1) / 2)).let { if (it % 2 == 0) it else it + 1 }
-        val buf = ShortArray(frames) { (if (it % 2 == 0) 1 else -1).toShort() }
+        val buf = ShortArray(frames) { (if (it % 2 == 0) amp else -amp).toShort() }
 
         val t = AudioTrack.Builder()
             .setAudioAttributes(

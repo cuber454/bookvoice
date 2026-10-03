@@ -5,7 +5,7 @@ import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.CheckBox
+import androidx.appcompat.widget.SwitchCompat
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -346,7 +346,7 @@ class DictActivity : RowsActivity() {
         bookRule: Boolean = false,
         prefix: String? = null,
     ) {
-        val box = CheckBox(this).apply {
+        val box = SwitchCompat(this).apply {
             val name = prefix?.let { "$it: " } ?: ""
             text = "${index + 1}. $name${ruleText(r, bookRule)}"
             textSize = 17f
@@ -435,9 +435,9 @@ class DictActivity : RowsActivity() {
      *  отмечен, когда включены все, снят, когда выключено хоть одно. Второй строкой
      *  держим счёт «включено N из M»: по нему слышно, что вышло после касания, и
      *  видно, что часть отмечена не полностью. */
-    private fun addAllCheck(g: String, onCount: Int, total: Int): CheckBox {
+    private fun addAllCheck(g: String, onCount: Int, total: Int): SwitchCompat {
         val title = getString(R.string.dict_all_mark)
-        val box = CheckBox(this).apply {
+        val box = SwitchCompat(this).apply {
             text = withHint(title, getString(R.string.dict_all_mark_hint, onCount, total))
             textSize = 17f
             isChecked = onCount == total

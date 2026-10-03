@@ -80,6 +80,9 @@ object KeepAwake {
             // Засечка в diag.log: по ней видно, что блокировка взята, — иначе в
             // следующем логе не отличить «не держали» от «держали, но не помогло».
             Diag.log(c, "power", "держу процессор (чтение идёт)")
+            // 30.09.2026: отметка «читали» — чтобы после убийства процесса окно
+            // «Не засыпать» могло сказать, что нас оборвали на чтении.
+            setAlive(c, true)
             // msg4709: с этой минуты — отметки «бьюсь» раз в минуту (см. beat).
             beats = 0
             main.removeCallbacks(beat)
@@ -101,6 +104,10 @@ object KeepAwake {
         // msg5931: чтение встало — системные кнопки возвращаются (режим
         // «скрывать во время чтения» отпускает их именно здесь).
         ReaderBars.readingStopped()
+        // 30.09.2026: чтение встало по-хорошему — след «нас оборвали на чтении»
+        // снимаем ЗДЕСЬ, до выхода по отсутствию блокировки: иначе след прошлого
+        // запуска остался бы висеть после первой же паузы в новом.
+        appCtx?.let { setAlive(it, false) }
         val l = lock ?: return
         val c = appCtx ?: return
         runCatching {
@@ -123,10 +130,56 @@ object KeepAwake {
         else SilentKeepAlive.stop(c)
     }
 
+    /** Включить тихий поток сами, без галочки: чтение пошло способом, в котором
+     *  звук играет движок, а не наш плеер (альтернативный способ либо сетевой
+     *  движок, не отдающий файлы) — там система перестаёт видеть нас играющими и
+     *  кнопки на наушниках уходят чужому плееру.
+     *
+     *  Раньше это делала только галочка альтернативного способа в настройках
+     *  (msg4721). Но прямой режим включается и сам, по опыту: сетевой движок
+     *  дважды не отдал файл — читаем напрямую ([SpeechPlayer.netDirect]). Тогда
+     *  галочка оставалась снятой, и человек терял кнопки, ничего не меняя.
+     *  30.09.2026, по образцу @Voice Aloud Reader: у них тихий звук — обычная
+     *  настройка, а нам важно, чтобы он вставал в прямом режиме всегда.
+     *
+     *  Снимаем галочку по-прежнему только руками: закончился прямой режим — поток
+     *  остаётся (обратно его никто не гасит, галочка видна в «Чтении»). */
+    fun enableSilenceAuto(c: Context, reason: String) {
+        val p = runCatching { c.getSharedPreferences("reader", Context.MODE_PRIVATE) }.getOrNull()
+            ?: return
+        if (p.getBoolean(MainActivity.KEY_SILENT_KEEPALIVE, false)) return
+        p.edit().putBoolean(MainActivity.KEY_SILENT_KEEPALIVE, true).apply()
+        Diag.log(c, "power", "тихий поток включён сам: $reason (галочка в «Чтении» → «Звук и стыки»)")
+        syncSilence()
+    }
+
     /** Включён ли тихий поток в настройках. Читаем сами prefs: экран «Не засыпать»
      *  пишет туда же, а движку знать об этой настройке незачем. */
     private fun silentPref(c: Context): Boolean = runCatching {
         c.getSharedPreferences("reader", Context.MODE_PRIVATE)
             .getBoolean(MainActivity.KEY_SILENT_KEEPALIVE, false)
+    }.getOrDefault(false)
+
+    // ---------------- «Читали ли, когда нас оборвали» (30.09.2026) ----------------
+
+    /** Признак «чтение в ходу». Живёт в настройках, а не в памяти, именно потому,
+     *  что при убийстве процесса `release()` не вызывается: оставшийся флаг и есть
+     *  след «нас оборвали на чтении». Читает его окно «Не засыпать» вместе с
+     *  причиной последнего выхода процесса ([SleepGuard.lastExit]) — вдвоём они
+     *  отвечают, сама ли система остановила приложение и было ли оно занято
+     *  чтением. Ключ внутренний: в настройках его не видно. */
+    private const val KEY_READING_ALIVE = "reading_in_progress"
+
+    private fun setAlive(c: Context, on: Boolean) {
+        runCatching {
+            c.getSharedPreferences("reader", Context.MODE_PRIVATE).edit()
+                .putBoolean(KEY_READING_ALIVE, on).apply()
+        }
+    }
+
+    /** Шло ли чтение, когда приложение закончилось в прошлый раз. */
+    fun wasReadingAtLastExit(c: Context): Boolean = runCatching {
+        c.getSharedPreferences("reader", Context.MODE_PRIVATE)
+            .getBoolean(KEY_READING_ALIVE, false)
     }.getOrDefault(false)
 }
