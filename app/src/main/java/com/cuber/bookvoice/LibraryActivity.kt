@@ -21,6 +21,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.IntentCompat
+import androidx.core.view.ViewCompat
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.cuber.bookvoice.databinding.ActivityLibraryBinding
@@ -213,6 +214,19 @@ class LibraryActivity(private val act: SectionActivity) {
         }
         binding.bookList.setHasFixedSize(true)
         binding.bookList.adapter = adapter
+        // Конец полки на ощупь (08.10.2026, просьба Сержа — «и в каталогах»):
+        // свайп вниз за последней книгой и вверх перед первой отвечает толчком.
+        // Второй путь (09.10.2026): часть дикторов действий прокрутки не шлёт,
+        // поэтому край ловим ещё и по фокусу на последней/первой строке.
+        // Касания слушает ВСЁ окно полки (09.10.2026): и жест с шапки, и жест с
+        // нижних кнопок до слушателя списка не доходили вовсе.
+        A11y.edgeVibrate(
+            binding.bookList,
+            "полка",
+            rows = binding.bookList,
+            touch = false,
+            watch = { w -> act.watchTouches(w) },
+        )
         applyViewMode()
 
         // msg646/649: в шапке остались «Продолжить» (2/3 ряда) и «⋮» — «Ещё».
@@ -346,12 +360,33 @@ class LibraryActivity(private val act: SectionActivity) {
         if (returnFromReader && shelfReady) {
             val readUri = pendingBookFocusUri
             pendingBookFocusUri = null
-            Diag.log(act, "focus", "L1b: возврат из ридера — полку не трогаю")
-            // msg4356: полку не пересобираем, но значения в строках обновляем —
-            // иначе после чтения в строке висит старый процент (в книге 5%, на
-            // полке 17%): записи-то книга перезаписала, а строка осталась от
-            // прошлой сборки. Порядок и позиции не меняем, фокус не трогаем.
-            refreshRowsInPlace()
+            // 09.10.2026, просьба Сержа: «открываю вторую книгу, выхожу — а она не
+            // встала первой, список не пересобирается». Порядок «недавно читанные»
+            // держится на `lastOpenedAt`, но пока полку на возврате НЕ пересобирали
+            // (эксперимент L1b, msg1565), строка оставалась на старом месте —
+            // пересортировки не происходило вовсе. Теперь пересобираем: `refresh()`
+            // пересортирует список и обновит проценты, а фокус СТАВИМ САМИ на книгу,
+            // из которой вышли, — она уже может стоять первой (для этого и
+            // [focusReadBook], а не наблюдение, как в L1b: у Сержа TestMan, наши
+            // переносы он выполняет).
+            // ОТКАТ: вернуть `refreshRowsInPlace()` и логи L1b — тогда полка снова
+            // не двигается, но и книга наверх не встаёт.
+            Diag.log(
+                act, "focus",
+                "L1b: возврат из ридера — пересобираю полку (сортировка $sortMode)",
+            )
+            refresh()
+            val pos = readUri?.let { u -> shownRecords.indexOfFirst { it.uri == u } } ?: -1
+            if (pos >= 0) {
+                Diag.log(
+                    act, "focus",
+                    "возврат из книги: она теперь строка ${pos + 1} из ${shownRecords.size}",
+                )
+            } else {
+                Diag.log(act, "focus", "возврат из книги: книги нет в этой вкладке — фокус на заголовок")
+            }
+            // Пересборка сдвинула ряды — прежний перенос фокуса больше не в силе.
+            readerFocusDone = false
             binding.bookList.postDelayed({
                 val f = TabNav.focusedNow(binding.root)
                 Diag.log(act, "focus", "L1b ИТОГ(+0.6с): фокус на ${f ?: "нигде/неизвестно"}")
@@ -405,6 +440,13 @@ class LibraryActivity(private val act: SectionActivity) {
                 // «кусочек названия, потом BookVoice»). Даём полке появиться и
                 // объявить своё имя (в окне — setTitle «Библиотека»), потом
                 // открываем книгу — оба объявления звучат целиком.
+                //
+                // 11.10.2026: пробовали и по-другому — открывать книгу сразу, без
+                // паузы, и обрывать речь полки (`A11y.hush`). Не помогло: диктор
+                // называет полку ДВАЖДЫ (при появлении окна и ещё раз, когда книга
+                // его перекрывает), и вместо двух объявлений выходило три. Убрать
+                // это можно только переделав запуск (полка перестаёт быть корневым
+                // окном задачи) — на это Серж не пошёл. Разбор — `docs/HISTORY.md`.
                 if (!coldAutoOpenPending) {
                     coldAutoOpenPending = true
                     // msg1853 (0.3.89): «управление мультимедиа» TalkBack объявляет
@@ -1538,8 +1580,8 @@ class LibraryActivity(private val act: SectionActivity) {
         // Папку книг в виде пути и её document id ищем один раз на весь скан:
         // по ним узнаём, за какой мёртвой записью тот же файл (см. ниже).
         val tp = treeResolver()
-        val hidden = prefs.getStringSet(KEY_HIDDEN, null) ?: emptySet()
-        val hiddenPaths = prefs.getStringSet(KEY_HIDDEN_PATHS, null) ?: emptySet()
+        val hidden = prefs.getStringSet(BookDelete.KEY_HIDDEN, null) ?: emptySet()
+        val hiddenPaths = prefs.getStringSet(BookDelete.KEY_HIDDEN_PATHS, null) ?: emptySet()
         // Сколько раз каждое имя встречается в папке: по имени чиним адрес только
         // когда оно одно на всю папку (см. takeDeadTwin).
         val nameCounts = HashMap<String, Int>()
@@ -1560,13 +1602,17 @@ class LibraryActivity(private val act: SectionActivity) {
                 var upd = existing
                 val fixedTitle = existing.title?.let { BookParser.unmojibake(it) }
                 val fixedAuthor = existing.author?.let { BookParser.unmojibake(it) }
-                if (fixedTitle != null) upd = upd.copy(title = fixedTitle)
+                // 09.10.2026: мусорное название из метаданных («(=^..^=)») чиним на
+                // null тем же правилом, что и показ строки (BookRecord.usableTitle).
+                if (fixedTitle != null) {
+                    upd = upd.copy(title = fixedTitle.takeIf { BookRecord.usableTitle(it) })
+                }
                 if (fixedAuthor != null) upd = upd.copy(author = fixedAuthor)
                 if (upd.title.isNullOrBlank() && upd.author.isNullOrBlank() && needsBookMeta(name)) {
                     val meta = readMeta(uri, name)
                     if (meta != null) {
                         upd = upd.copy(
-                            title = meta.title ?: upd.title,
+                            title = meta.title?.takeIf { BookRecord.usableTitle(it) } ?: upd.title,
                             author = meta.author ?: upd.author,
                             // Файл прочитан — фиксируем и аннотацию: "" = прочитан,
                             // аннотации в нём нет (не путать с null «не проверялось»).
@@ -1688,7 +1734,7 @@ class LibraryActivity(private val act: SectionActivity) {
      *  внутреннюю память своими метками («0A99-3BD7:Books/flibusta.is/…»), и
      *  такая метка нам ничего не говорит, а путь после неё — говорит. null —
      *  по адресу пути не понять (тогда скан сравнивает по имени файла). */
-    private fun shelfRelPath(uriStr: String, tp: TreePaths): String? {
+    private fun shelfRelPath(uriStr: String, tp: BookDelete.TreePaths): String? {
         val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return null
         return try {
             when (uri.scheme) {
@@ -1732,7 +1778,7 @@ class LibraryActivity(private val act: SectionActivity) {
         deadTwins: MutableList<BookRecord>,
         rel: String?,
         name: String,
-        tp: TreePaths?,
+        tp: BookDelete.TreePaths?,
         nameUniqueInFolder: Boolean,
     ): BookRecord? {
         if (deadTwins.isEmpty()) return null
@@ -2003,11 +2049,14 @@ class LibraryActivity(private val act: SectionActivity) {
             val author = r.author?.takeIf { it.isNotBlank() }
             if (author == null) r.displayTitle else r.displayTitle + " — " + author
         }
-        MaterialAlertDialogBuilder(act)
+        val dlg = MaterialAlertDialogBuilder(act)
             .setTitle(R.string.recent_books_title)
             .setItems(names.toTypedArray()) { _, which -> openReader(recent[which]) }
             .setNegativeButton(R.string.toc_close, null)
-            .show()
+            .create()
+        dlg.show()
+        // Конец списка на ощупь (09.10.2026): недавних книг бывает много.
+        A11y.edgeVibrateDialog(dlg, "недавние книги")
     }
 
     private fun queryDisplayName(uri: Uri): String? =
@@ -2278,12 +2327,20 @@ class LibraryActivity(private val act: SectionActivity) {
         }
         scroll.addView(content)
 
+        // Строка текста в окне информации. ФОКУСИРУЕМОЙ её делает не только
+        // isFocusable: TalkBack по «правилу первенства» садится на первую КНОПКУ
+        // окна (у нас это «Закрыть» внизу), а «пассивный» текст пропускает — и
+        // тогда фокус в окне не встаёт НИ НА ЧТО (жалоба Сержа 09.10.2026:
+        // «открываю информацию о книге, фокус ни на что не падает, скринридер
+        // молчит»). screenReaderFocusable делает текст полноправной целью — тот же
+        // приём, что у строк Настроек и окон-секций ([TabNav.focusHeader]).
         fun makeRow(text: String, muted: Boolean = false): TextView = TextView(act).apply {
             this.text = text
             textSize = 16f
             setTextColor(if (muted) Palette.DIM else Palette.INK)
             setLineSpacing(0f, 1.15f)
             isFocusable = true
+            ViewCompat.setScreenReaderFocusable(this, true)
             setPadding(0, dp(8), 0, dp(4))
         }
 
@@ -2293,6 +2350,7 @@ class LibraryActivity(private val act: SectionActivity) {
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setTextColor(Palette.ACCENT)
             isFocusable = true
+            ViewCompat.setScreenReaderFocusable(this, true)
             setPadding(0, dp(14), 0, dp(4))
         }
 
@@ -2309,6 +2367,15 @@ class LibraryActivity(private val act: SectionActivity) {
             }
         }
 
+        // ПЕРВОЙ строкой — название книги (09.10.2026): заголовок окна диктор Сержа
+        // не читает, а без него непонятно, о какой книге речь. Заголовок окна при
+        // этом называем коротко («Информация о книге»), чтобы у тех дикторов, кто
+        // его читает, не звучало дважды одно и то же.
+        val titleRow = makeRow(rec.displayTitle).apply {
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        content.addView(titleRow)
         rec.author?.takeIf { it.isNotBlank() }
             ?.let { content.addView(makeRow(getString(R.string.book_info_author, it))) }
         content.addView(makeRow(getString(R.string.book_info_file, rec.name)))
@@ -2321,11 +2388,16 @@ class LibraryActivity(private val act: SectionActivity) {
         if (!fileCheckPending) renderAnnotationArea()
 
         val dialog = MaterialAlertDialogBuilder(act)
-            .setTitle(rec.displayTitle)
+            .setTitle(R.string.library_menu_info)
             .setView(scroll)
             .setPositiveButton(getString(R.string.dialog_close), null)
             .create()
         dialog.show()
+        // Фокус диктора ставим САМИ: сам он в это окно не садится (строки —
+        // пассивный текст, а первым кандидатом идёт кнопка «Закрыть» внизу), и
+        // человек слышал тишину. Тот же перенос, что при входе в окна-секции:
+        // одна попытка, без повторов, с паузой на раскладку окна.
+        TabNav.focusHeader(titleRow, 400)
 
         if (fileCheckPending) {
             val loading = makeRow(getString(R.string.book_info_annotation_loading), muted = true)
@@ -2338,18 +2410,25 @@ class LibraryActivity(private val act: SectionActivity) {
                 runOnUiThread {
                     if (act.isFinishing || act.isDestroyed || !dialog.isShowing) return@runOnUiThread
                     val idx = content.indexOfChild(loading)
+                    // Если человек стоял на строке «читаю…», после замены фокус
+                    // обязан переехать на новую строку: удалённая цель — это опять
+                    // тишина, ровно та жалоба, с которой начали (09.10.2026).
+                    val wasFocused = loading.isAccessibilityFocused()
                     content.removeView(loading)
                     rec = rec.copy(annotation = found ?: "")
                     BookStore.upsert(act, rec)
                     // Строку «читаю…» заменяем: нашли — аннотацией, нет — строкой «нет».
-                    if (found != null) {
-                        content.addView(makeHeader(), idx)
+                    val firstNew = if (found != null) {
+                        val head = makeHeader()
+                        content.addView(head, idx)
                         content.addView(makeRow(found), idx + 1)
+                        head
                     } else {
-                        content.addView(
-                            makeRow(getString(R.string.book_info_annotation_none), muted = true), idx
-                        )
+                        val none = makeRow(getString(R.string.book_info_annotation_none), muted = true)
+                        content.addView(none, idx)
+                        none
                     }
+                    if (wasFocused) TabNav.a11yFocus(firstNew)
                 }
             }.start()
         }
@@ -2378,66 +2457,11 @@ class LibraryActivity(private val act: SectionActivity) {
         refresh()
     }
 
-    /** Ядро удаления (msg1351, msg5947): стереть файл, если [withFiles], и убрать
-     *  запись с полки. Без тостов и озвучки — их зовёт вызывающий: одиночное
-     *  удаление говорит про одну книгу, очистка категории — про пачку одним
-     *  итогом. Возвращает «файл действительно стёрт».
-     *
-     *  [withFiles] = false — файл остаётся на диске, но книгу ВСЁ РАВНО прячем
-     *  от скана (и запись, и путь): иначе автоскан папки вернёт её на полку
-     *  следующей же строкой, и «очистка» окажется пустой. */
-    private fun removeBook(rec: BookRecord, withFiles: Boolean): Boolean {
-        var deleted = false
-        val uri = runCatching { Uri.parse(rec.uri) }.getOrNull()
-        val tp = treeResolver()
-        if (withFiles && uri != null && uri.scheme == "file") {
-            deleted = try {
-                uri.path?.let { File(it).delete() } ?: false
-            } catch (_: Exception) {
-                false
-            }
-        }
-        if (withFiles && !deleted && uri != null && uri.scheme == "content") {
-            if (tp != null) {
-                val p = diskPathOf(rec.uri, tp)
-                if (p != null) {
-                    deleted = try { File(p).delete() } catch (_: Exception) { false }
-                }
-            }
-            if (!deleted) {
-                deleted = try {
-                    DocumentsContract.deleteDocument(contentResolver, uri)
-                } catch (_: Exception) {
-                    false
-                }
-            }
-        }
-        val path = tp?.let { diskPathOf(rec.uri, it) }
-        // Убираем саму запись и её близнеца-дубль (другой адрес того же файла),
-        // чтобы после удаления файла не осталось записи-сироты.
-        BookStore.remove(act, rec.uri)
-        // Синхронизация (msg6142): «здесь книги нет» само по себе между
-        // устройствами не едет — оставляем метку удаления, по ней книга уйдёт с
-        // полки второго устройства. Синхронизация выключена — метка не ставится.
-        SyncStore.recordDelete(act, rec.name)
-        // msg3081+: разобранный кэш книги больше не нужен — книги на полке нет
-        // (при withFiles = false файл остаётся, но запись тоже уходит).
-        BookCache.remove(act, Uri.parse(rec.uri))
-        if (path != null) {
-            BookStore.all(act).forEach { r ->
-                if (r.uri != rec.uri && diskPathOf(r.uri, tp) == path) {
-                    BookStore.remove(act, r.uri)
-                    hideFromScan(r.uri)
-                }
-            }
-        }
-        hideFromScan(rec.uri)
-        // Файл остался на диске — не стёрся (нет прав/чужой провайдер) или его
-        // и не трогали (withFiles = false): прячем и путь, чтобы автоскан не
-        // вернул книгу под другим адресом.
-        if ((!withFiles || !deleted) && path != null) hidePathFromScan(path)
-        return deleted
-    }
+    /** Ядро удаления (msg1351, msg5947) переехало в [BookDelete] 07.10.2026: тот
+     *  же вопрос понадобился читалке («книга дочитана — удалить?»), а две копии
+     *  такого кода однажды разошлись бы. Здесь только вызов. */
+    private fun removeBook(rec: BookRecord, withFiles: Boolean): Boolean =
+        BookDelete.book(act, rec, withFiles)
 
     /** Проигравший дубль (msg1333/1336): файл-копию убираем с диска, а uri
      *  прячем в скрытый список — если файл ещё подхватил авто-скан папки, запись
@@ -2462,12 +2486,8 @@ class LibraryActivity(private val act: SectionActivity) {
 
     // ——— Дубли «один файл — два адреса» (msg1345/1346) ———
 
-    /** Сопоставление выбранной папки-дерева с реальным каталогом на диске.
-     *  Нужно, чтобы распознать одну книгу под двумя адресами: file:// реального
-     *  пути (запасная запись скачивания AllFiles) и content://-документа дерева
-     *  (авто-скан той же папки). Работает только с включённым «Доступом ко всем
-     *  файлам» и сопоставимой папкой; иначе null — склейку не делаем. */
-    private class TreePaths(val dir: File, val treeDocId: String)
+    // Сопоставление папки-дерева с каталогом на диске живёт в [BookDelete]
+    // (см. ниже); им же распознаём одну книгу под двумя адресами.
 
     /** Обновить данные строк полки по месту (msg4356): после возврата из книги
      *  записи в реестре уже свежие, а строки — от прошлой сборки. Пересборка
@@ -2489,58 +2509,14 @@ class LibraryActivity(private val act: SectionActivity) {
         return "${u.scheme}:…/" + (u.lastPathSegment ?: "?").takeLast(40)
     }
 
-    private fun treeResolver(): TreePaths? {
-        val treeStr = treeUri() ?: return null
-        if (!AllFiles.granted(act)) return null
-        val tree = runCatching { Uri.parse(treeStr) }.getOrNull() ?: return null
-        val dir = AllFiles.resolveDir(tree) ?: return null
-        val docId = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull()
-            ?: return null
-        return TreePaths(dir, docId)
-    }
+    // Сопоставление папки книг с каталогом на диске и реальный путь файла по uri
+    // переехали в [BookDelete] 07.10.2026 (нужны и удалению, и читалке).
+    private fun treeResolver(): BookDelete.TreePaths? = BookDelete.treeResolver(act)
 
-    /** Реальный путь файла на диске по uri записи, если файл лежит в выбранной
-     *  папке: file:// — путь как есть; content://-документ дерева — дерево +
-     *  относительный путь документа. Чужой uri (не наша папка, сторонний
-     *  провайдер) — null, такой файл сравнить с другими нельзя. */
-    private fun diskPathOf(uriStr: String, tp: TreePaths): String? {
-        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return null
-        return try {
-            when (uri.scheme) {
-                "file" -> uri.path?.let { File(it).canonicalPath }
-                "content" -> {
-                    val doc = DocumentsContract.getDocumentId(uri) ?: return null
-                    val prefix = tp.treeDocId + "/"
-                    if (!doc.startsWith(prefix)) return null
-                    var rel = doc.substring(prefix.length)
-                    if (rel.contains("%")) rel = Uri.decode(rel)
-                    File(tp.dir, rel).canonicalPath
-                }
-                else -> null
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
+    private fun diskPathOf(uriStr: String, tp: BookDelete.TreePaths): String? =
+        BookDelete.diskPathOf(uriStr, tp)
 
-    /** Спрятать uri от авто-скана папки: запись удалена или склеена, но сам
-     *  файл остаётся в папке — без скрытия скан вернул бы его строкой. */
-    private fun hideFromScan(uriStr: String) {
-        val set = (prefs.getStringSet(KEY_HIDDEN, null) ?: emptySet()).toMutableSet()
-        if (set.add(uriStr)) {
-            prefs.edit().putStringSet(KEY_HIDDEN, set).apply()
-        }
-    }
-
-    /** Спрятать от авто-скана сам файл (по реальному пути на диске): пригодится,
-     *  когда запись могла быть под одним адресом, а скан встречает файл под
-     *  другим (content://-документ вместо удалённой file://-записи). */
-    private fun hidePathFromScan(path: String) {
-        val set = (prefs.getStringSet(KEY_HIDDEN_PATHS, null) ?: emptySet()).toMutableSet()
-        if (set.add(path)) {
-            prefs.edit().putStringSet(KEY_HIDDEN_PATHS, set).apply()
-        }
-    }
+    private fun hideFromScan(uriStr: String) = BookDelete.hideFromScan(act, uriStr)
 
     /** Пропустить ли документ при скане: uri уже в скрытом списке, либо реальный
      *  путь файла спрятан (книгу удаляли под другим адресом). */
@@ -2557,7 +2533,7 @@ class LibraryActivity(private val act: SectionActivity) {
      *  — ту, что с прогрессом чтения и sourceUrl), остальные убираем из реестра и
      *  прячем от скана. Файл один — с диска ничего не удаляем. Возвращает
      *  актуальный список записей. */
-    private fun mergeSameFileCopies(tp: TreePaths): List<BookRecord> {
+    private fun mergeSameFileCopies(tp: BookDelete.TreePaths): List<BookRecord> {
         val byPath = HashMap<String, MutableList<BookRecord>>()
         BookStore.all(act).forEach { r ->
             val p = diskPathOf(r.uri, tp)
@@ -2712,10 +2688,7 @@ class LibraryActivity(private val act: SectionActivity) {
         }
 
         private const val MAX_SCAN_DEPTH = 5
-        private const val KEY_HIDDEN = "hidden_uris"
-        // msg1347: спрятанные от скана файлы по реальному пути (удалены под
-        // file://-адресом, а скан встречает их как content://-документы).
-        private const val KEY_HIDDEN_PATHS = "hidden_paths"
+        // Спрятанные от скана адреса и пути переехали в [BookDelete] 07.10.2026.
         private const val KEY_LIB_FILTER = "lib_filter"
         private const val KEY_LIB_VIEW = "lib_view"
 

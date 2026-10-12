@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Строка-заголовок главы в сплошной ленте книги (msg4308). Текст — название
      главы ровно так, как оно написано в книге; доступна скринридеру как
-     заголовок (accessibilityHeading), а двойной тап уводит в начало главы. -->
+     заголовок (accessibilityHeading), а двойной тап уводит в начало главы.
+
+     05.10.2026 (просьба Сержа): focusable убран. Он был причиной того, что при
+     прокрутке ленты двумя пальцами диктор проговаривал название главы, едва та
+     въезжала в экран. Заголовок остаётся в дереве доступности (важно для
+     доступа, и это важная пометка заголовка сохраняется), но больше не хватает
+     фокус сам — потому при прокрутке молчит, а при обходе свайпами читается. -->
 <TextView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tvChapterHeader"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:accessibilityHeading="true"
-    android:focusable="true"
     android:importantForAccessibility="yes"
     android:lineSpacingExtra="4dp"
     android:paddingStart="4dp"

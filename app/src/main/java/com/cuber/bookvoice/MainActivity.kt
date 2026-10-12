@@ -120,6 +120,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  назад, к прежней главе. Читатель листал вперёд — книга уезжала назад. */
     private var scrollRequestRow = -1
     private var scrollRequestUntil = 0L
+
+    /** Касание, в котором лента поехала под пальцем (downTime), и такое же
+     *  касание предыдущего раза. По ним видно, ОДНО это касание с листанием или
+     *  читатель уже отпустил ленту и делает новый жест: только первое считаем
+     *  листанием. */
+    private var scrollDragDown = 0L
+    private var lastScrollDragDown = 0L
+
+    /** Касание, которое сейчас обрабатывает слушатель жестов (downTime). */
+    private var gestureDown = 0L
     /** Последний процент, показанный на экране чтения (msg4377) — чтобы не
      *  писать в журнал одну и ту же строку на каждое обновление статистики. */
     private var lastLoggedPct = -1
@@ -313,6 +323,52 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         updateStats()
     }
 
+    // ——— «Книга дочитана — удалить?» (07.10.2026, просьба Сержа) ———
+
+    /** Вопрос уже показан (или показывается) — второй раз не поднимаем. */
+    private var endAskShowing = false
+
+    /** Движок дочитал книгу до конца. Показываем вопрос только когда окно
+     *  читалки на экране и в фокусе: с погашенным экраном (чтение живёт и без
+     *  окна) диктор всё равно ничего не прочитает. Ответа нет — вопрос остаётся
+     *  у движка ([ReaderEngine.endAskRecord]) и всплывёт, когда владелец вернётся
+     *  в читалку: [onWindowFocusChanged] спросит снова. */
+    override fun onBookEndAsk() = maybeShowEndAsk()
+
+    private fun maybeShowEndAsk() {
+        if (endAskShowing || isFinishing || isDestroyed) return
+        if (!hasWindowFocus()) return
+        val rec = ReaderEngine.endAskRecord() ?: return
+        endAskShowing = true
+        Diag.log(this, "lib", "книга дочитана: спрашиваю про удаление «${rec.name}»")
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.book_end_ask_title)
+            .setMessage(getString(R.string.book_end_ask_msg, rec.displayTitle))
+            .setPositiveButton(R.string.book_delete_yes) { _, _ -> deleteFinishedBook(rec) }
+            .setNegativeButton(R.string.book_end_keep) { _, _ -> ReaderEngine.endAskDone() }
+            .setOnCancelListener { ReaderEngine.endAskDone() }
+            .setOnDismissListener { endAskShowing = false }
+            .show()
+    }
+
+    /** «Удалить» в вопросе о дочитанной книге: стираем файл и убираем запись с
+     *  полки (то же ядро, что у удаления с полки, — [BookDelete]), после чего
+     *  читалка закрывается: читать больше нечего. */
+    private fun deleteFinishedBook(rec: BookRecord) {
+        ReaderEngine.endAskDone()
+        val deleted = BookDelete.book(this, rec, withFiles = true)
+        Diag.log(
+            this, "lib",
+            "дочитанная книга удалена: ${rec.name}; файл ${if (deleted) "стёрт" else "не стёрт — скрыт от скана"}"
+        )
+        Vibra.confirm(this)
+        toast(getString(R.string.book_deleted))
+        // Книга стёрта из-под открытой читалки: гасим чтение и уходим на полку,
+        // где её строки уже нет.
+        ReaderEngine.close()
+        startLibrary()
+    }
+
     private var currentUri: String?
         get() = ReaderEngine.currentUri
         set(v) { ReaderEngine.currentUri = v }
@@ -351,6 +407,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         Palette.applyTo(this)
         super.onCreate(savedInstanceState)
         Diag.header(this)
+        // 06.10.2026: включён ли опытный режим (секретный раздел настроек, см.
+        // [ExpertPrefs]) — пишем сразу после шапки. Иначе при разборе жалобы не
+        // понять, почему у человека читалка ведёт себя не как у всех: ручки
+        // скрытые, и вопросами это не выяснить.
+        if (ExpertPrefs.isOn(this)) {
+            Diag.log(
+                this, "app",
+                "экспериментальные настройки: включены (заготовок впрок ${ExpertPrefs.prefetch(this)})"
+            )
+        }
         // 30.09.2026: чем закончился прошлый запуск — сразу в журнал, не дожидаясь
         // окна «Не засыпать». Причина от системы плюс наша отметка «читали» — это
         // и есть ответ на «читал, и встало», причём даже тогда, когда журнал
@@ -381,6 +447,20 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.sentenceList.layoutManager = layoutManager
         binding.sentenceList.adapter = adapter
         binding.sentenceList.setHasFixedSize(true)
+        // Конец книги на ощупь (08.10.2026, просьба Сержа — «и в читалке»):
+        // свайп вниз в самом конце ленты отвечает толчком, вверх в самом начале —
+        // двойным. Середину не трогаем: там прокрутку ведёт TalkBack.
+        // Второй путь (09.10.2026): диктор Сержа (`com.nirenr.talkman`) действий
+        // прокрутки не шлёт вовсе, поэтому край ловим ещё и по фокусу — как
+        // только диктор встаёт на последнюю строку книги, отвечаем толчком.
+        // Третий путь — само касание — встроен в installSwipe (у списка уже есть
+        // свой слушатель касаний, поэтому здесь touch = false).
+        A11y.edgeVibrate(
+            binding.sentenceList,
+            "читалка",
+            rows = binding.sentenceList,
+            touch = false,
+        )
         // Наблюдение за фокусом диктора (29.09.2026, жалоба «фокус улетает на
         // кнопку Ещё или Читать»): пишем, кто получает доступностный фокус.
         // Поведение не меняем — только журнал; по нему видно, уходит ли диктор из
@@ -398,7 +478,21 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             }
 
             override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
-                if (newState == RecyclerView.SCROLL_STATE_IDLE) applyScrollPlace()
+                // 09.10.2026: помним ТОЛЬКО руку — состояние DRAGGING значит, что
+                // ленту сейчас тянет палец. Пометка «лента ехала» нужна ровно
+                // затем, чтобы не принять за выбор места касание или свайп,
+                // пришедшее в ТОМ ЖЕ касании, что и листание. Ставить её и на
+                // SETTLING нельзя: лента доезжает сама и после наших переходов, и
+                // тогда настоящий свайп по главам отбрасывался бы (жалоба Сержа
+                // «свайпами не ходит вправо-влево по главам» — у всех его свайпов
+                // в журнале стояло «после прокрутки=true (20-50 мс)»).
+                if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
+                    lastScrollDragDown = scrollDragDown
+                }
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    scrollDragDown = 0L
+                    applyScrollPlace()
+                }
             }
         })
 
@@ -652,6 +746,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // Возврат из экрана настроек: там могли поменять, какие элементы
         // читалки показывать, скорость и голос — применяем к живой книге.
         applyReaderUi()
+        // 07.10.2026: и режим системных кнопок — его тоже могли переключить в
+        // настройках. Зовём с проверкой факта: полосу система вправе была вернуть
+        // сама, пока окна не было (см. ReaderBars.apply).
+        ReaderBars.sync()
         // 29.09.2026: панель «Голос» остаётся открытой, пока режим ролей
         // переключают в окне «Чтение по ролям» (оно встаёт поверх читалки).
         // Строки и галочку берём из настроек заново: иначе панель показывала бы
@@ -729,6 +827,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             // msg5931: система вправе вернуть системные кнопки сама (уход в фон и
             // возврат) — решение принимаем заново, а не помним с прошлого раза.
             ReaderBars.reapply()
+            // 07.10.2026: книга могла дочитаться, пока экран был погашен, — вопрос
+            // «удалить?» ждал именно этого момента.
+            maybeShowEndAsk()
         }
     }
 
@@ -837,6 +938,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         ReaderEngine.attach(this)
         ReaderEngine.host = this
         headerAnnouncedAtOpen = true
+        // 07.10.2026, жалоба Сержа «стоит „скрывать системные кнопки, пока
+        // открыта книга“, а они всё равно показываются». Окно вернулось к ЖИВОЙ
+        // книге — а книга в нём открыта, значит и признак обязан встать. Прежде
+        // [ReaderBars.bookOpened] звался только на холодном открытии
+        // ([openBook]), и на возврате к книге (шторка, настройки, авто-открытие
+        // последней книги) режим «пока открыта книга» молча ничего не прятал.
+        ReaderBars.bookOpened()
         val explicit = intent.getBooleanExtra(EXTRA_EXPLICIT_PLACE, false)
         val eCh = intent.getIntExtra(EXTRA_CHAPTER, 0)
         val eS = intent.getIntExtra(EXTRA_SENTENCE, 0)
@@ -1188,6 +1296,25 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                             setReaderHeader(docDisplayTitle() ?: getString(R.string.no_book), book?.author)
                         }
                     }, 300)
+                }
+                // 09.10.2026, просьба Сержа: «когда книга загрузилась, чтобы я
+                // скринридером читал название книжки — а он заходит и молчит».
+                // У книги ИЗ БИБЛИОТЕКИ название стоит в шапке и в имени окна с
+                // первого кадра, поэтому озвучки при показе окна нет, а разбор
+                // тяжёлого PDF занимает секунды — всё это время диктор молчит.
+                // Говорим сами: готовность книги = имя панели и название вслух
+                // ([View.announceForAccessibility] — тем же способом, каким окно
+                // читалки объявляет фразу «Идёт подготовка книги…»). Ждём паузу,
+                // чтобы объявление не легло на звук только что открытого окна.
+                val titleForReady = docDisplayTitle()
+                if (!titleForReady.isNullOrBlank()) {
+                    binding.tvHeader.postDelayed({
+                        if (book != null && !isFinishing && !playing) {
+                            Diag.log(this, "focus", "книга догрузилась — говорю название: «$titleForReady»")
+                            setReaderHeader(titleForReady, book?.author)
+                            binding.tvHeader.announceForAccessibility(titleForReady)
+                        }
+                    }, 450)
                 }
                 // Окно открытия закрыто: дальше goTo — только настоящие действия.
                 openingWindow = false
@@ -1814,6 +1941,20 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         )
     }
 
+    /** Толчок у края ленты — наблюдатель касаний (09.10.2026).
+     *
+     *  Живёт ПОЛЕМ, а события ему отдаёт [dispatchTouchEvent] окна: у касания один
+     *  адресат, и жест, начавшийся на кнопках под лентой или на шапке, до
+     *  слушателя самой ленты не доходит (вопросы Сержа: «спускаюсь пальцем с
+     *  заголовка книги на первую — не вибрирует?», «и на нижних также сделал
+     *  элементах?»). Смотрим при этом ВСЕ касания окна, но никому их не отбираем. */
+    private var readerEdge: A11y.EdgeGesture? = null
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        readerEdge?.onTouch(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
     /** Настраиваемые свайпы влево/вправо по тексту (#77). Без TalkBack жест —
      *  одним пальцем; с включённым TalkBack один палец он забирает себе, поэтому
      *  свайпать нужно двумя пальцами (их скринридер не трогает). И то, и другое
@@ -1825,12 +1966,17 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         var downX = 0f
         var downY = 0f
         var multi = false
+        // Толчок у края ленты (09.10.2026): наблюдатель живёт между событиями
+        // касания и даёт толчок прямо в движении пальца за краем. Касания ему
+        // отдаёт окно ([dispatchTouchEvent]), а не сама лента.
+        readerEdge = A11y.EdgeGesture(binding.sentenceList, "читалка")
         binding.sentenceList.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.x
                     downY = e.y
                     multi = false
+                    gestureDown = e.downTime
                     vt.clear()
                     vt.addMovement(e)
                     false
@@ -1839,6 +1985,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 MotionEvent.ACTION_POINTER_DOWN,
                 MotionEvent.ACTION_POINTER_UP -> {
                     if (e.pointerCount >= 2) multi = true
+                    // Лента поехала под пальцем — запоминаем, в каком касании.
+                    if (e.actionMasked == MotionEvent.ACTION_MOVE &&
+                        binding.sentenceList.scrollState == RecyclerView.SCROLL_STATE_DRAGGING
+                    ) {
+                        scrollDragDown = e.downTime
+                    }
                     vt.addMovement(e)
                     false
                 }
@@ -1846,18 +1998,45 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     vt.addMovement(e)
                     vt.computeCurrentVelocity(1000)
                     val vx = vt.xVelocity
+                    val vy = vt.yVelocity
                     val dx = e.x - downX
                     val dy = e.y - downY
                     vt.clear()
                     // Горизонтальный быстрый свайп. Одним пальцем — только когда
                     // экранный диктор выключен (включённый сам забирает одиночные
                     // свайпы, и до нас они не дойдут как полноценный жест).
+                    //
+                    // 09.10.2026: свайп не считается, если лента ехала В ЭТОМ ЖЕ
+                    // касании. Жалоба Сержа «крутил ленту, и начал читать со слова
+                    // „Чокнулись“» (23:51:23.703): рука листала ленту, но у пальцев
+                    // набралась и горизонтальная скорость — жест ушёл как «свайп
+                    // влево». И наоборот: сравнивать со ВРЕМЕНЕМ нельзя — лента
+                    // доезжает сама после наших переходов, и настоящие свайпы по
+                    // главам отбрасывались (жалоба «свайпами не ходит вправо-влево
+                    // по главам»). Поэтому смотрим на КАСАНИЕ: то же самое — не
+                    // свайп, новое — свайп.
+                    val afterScroll = scrollDragDown != 0L && scrollDragDown == lastScrollDragDown &&
+                        gestureDown == lastScrollDragDown
                     val singleOk = !screenReaderOn()
                     val horiz = abs(dx) > 60 && abs(dx) > abs(dy) && abs(vx) > 300
-                    if (horiz && (multi || singleOk)) {
+                    if (horiz && !afterScroll && (multi || singleOk)) {
+                        Diag.log(
+                            this, "activity",
+                            "свайп ${if (vx < 0) "влево" else "вправо"}: dx=${dx.toInt()} " +
+                                "dy=${dy.toInt()} vx=${vx.toInt()} vy=${vy.toInt()} пальцев " +
+                                "${e.pointerCount}${if (multi) " (двумя)" else ""}",
+                        )
                         fireSwipe(if (vx < 0) -1 else +1)
                         true
                     } else {
+                        // Почему жест не сработал — в журнал: без этого не отличить
+                        // «свайп не дошёл» от «дошёл, но не признан свайпом».
+                        Diag.log(
+                            this, "activity",
+                            "жест не свайп: dx=${dx.toInt()} dy=${dy.toInt()} " +
+                                "vx=${vx.toInt()} vy=${vy.toInt()} пальцев ${e.pointerCount}, " +
+                                "лента ехала в этом же касании=$afterScroll",
+                        )
                         false
                     }
                 }
@@ -1980,20 +2159,37 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun moveBySentence(delta: Int) {
         val bk = book ?: return
-        // Назад — считаем от прошлой цели, пока нажатия идут подряд (см. [backBase]),
-        // вперёд — всегда от нынешнего места чтения.
+        // 05.10.2026 (жалоба Сержа «фраза повторяется, когда листаю», журнал
+        // 20:27). Фраза склеена из нескольких предложений ([ReaderEngine.chunkSpan],
+        // до четырёх), а кнопки «След.» и «Пред.» шагают по ОДНОМУ — поэтому шаг
+        // вперёд вставал в СЕРЕДИНУ звучащей фразы, и уже услышанное звучало
+        // снова. Пока фраза звучит, идём ЗА ЕЁ КОНЕЦ.
+        // ВАЖНО: правило нужно в ДВУХ шагах — здесь и в [moveBySentences]
+        // («Прыжок» и «Вперёд на N»): в 240 я поправил только второй, и повтор
+        // остался, потому что «След.» ходит сюда.
+        val step = if (delta > 0) ReaderEngine.playingPhraseUnits().coerceAtLeast(1) else 1
         val base = if (delta < 0) backBase(bk) else chapterIdx to sentenceIdx
         var ch = base.first
-        var s = base.second + delta
-        if (s < 0) {
-            if (ch <= 0) return
-            ch--
-            s = bk.chapters[ch].sentences.size - 1
-        } else if (s >= bk.chapters[ch].sentences.size) {
-            if (ch + 1 >= bk.chapters.size) return
-            ch++
-            s = 0
+        var s = base.second
+        var left = step
+        var moved = false
+        while (left > 0) {
+            val ns = s + delta
+            if (ns < 0) {
+                if (ch <= 0) break
+                ch--
+                s = bk.chapters[ch].sentences.size - 1
+            } else if (ns >= bk.chapters[ch].sentences.size) {
+                if (ch + 1 >= bk.chapters.size) break
+                ch++
+                s = 0
+            } else {
+                s = ns
+            }
+            moved = true
+            left--
         }
+        if (!moved) return
         goTo(ch, s)
         if (delta < 0) rememberBackStep(ch, s)
         startAfterStep()
@@ -2017,10 +2213,18 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  повторила бы то же место как результат перемотки). */
     private fun moveBySentences(delta: Int, count: Int) {
         val bk = book ?: return
+        // 05.10.2026 (жалоба Сержа: «фразы повторяются, когда листаю»). Фраза
+        // склеена из нескольких предложений (до четырёх, см. ReaderEngine.chunkSpan),
+        // а шаг вперёд был ровно на одно — и мы вставали в СЕРЕДИНУ звучащей фразы,
+        // перечитывая уже услышанное (журнал 18:53: «Тяжело! Тоска!» дважды).
+        // Пока фраза звучит, шаг вперёд идёт ЗА ЕЁ КОНЕЦ. Назад — по-прежнему по
+        // одному предложению: вернуться и переслушать одну фразу так и надо.
+        val span = if (delta > 0) ReaderEngine.playingPhraseUnits() else 0
+        val steps = count + (span - 1).coerceAtLeast(0)
         val base = if (delta < 0) backBase(bk) else chapterIdx to sentenceIdx
         var ch = base.first
         var s = base.second
-        var left = count
+        var left = steps
         while (left > 0) {
             var nextCh = ch
             var nextS = s + delta
@@ -2037,7 +2241,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             s = nextS
             left--
         }
-        if (left == count) return
+        if (left == steps) return
         goTo(ch, s)
         if (delta < 0) rememberBackStep(ch, s)
         startAfterStep()
@@ -2363,6 +2567,27 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  озвучивать отсюда (см. [KEY_TAP_TO_PLAY]). */
     private fun onSentenceTapped(chapter: Int, sentence: Int) {
         if (book == null) return
+        // 09.10.2026, просьба Сержа: «когда прокручиваю двумя пальцами книгу
+        // снизу вверх, иногда начинается автоматическое чтение». В журнале это
+        // видно прямо: рука тянет ленту, а диктор присылает ACTION_CLICK на
+        // предложение под пальцем — и чтение стартует с него (23:39:59,
+        // «действие #1: предложение 0, action=16» → «переход: глава 1, предл. 7»).
+        //
+        // ВАЖНО (урок того же вечера): сравнивать со ВРЕМЕНЕМ нельзя. Лента
+        // доезжает сама после наших переходов и после речи, и настоящий выбор
+        // места попадал в «окно после прокрутки»: Серж листает ленту и сразу
+        // тыкает в нужное место — а касание пропускалось. Смотрим на КАСАНИЕ:
+        // пропускаем лишь то, что пришло в ТОМ ЖЕ касании, в котором лента ехала
+        // под пальцем. Отпустил и ткнул заново — это выбор места, он работает.
+        val afterScroll = lastScrollDragDown != 0L && gestureDown == lastScrollDragDown
+        if (afterScroll) {
+            Diag.log(
+                this, "a11y",
+                "касание в тексте пропущено: это то же касание, что листало ленту — " +
+                    "глава $chapter, предл. $sentence",
+            )
+            return
+        }
         // Место в книге приходит уже разобранным (msg6322): у абзаца это
         // нажатое предложение, у заголовка главы — её начало.
         goTo(chapter, sentence)
@@ -2620,8 +2845,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             prefs.getInt(KEY_PAUSE_KEEP, PAUSE_KEEP_DEFAULT)
     }
 
-    /** Кнопки «Медленнее/Быстрее» (#58): шаг 0.1 по всему диапазону 0.5–4.0
-     *  (RateSteps.SPEED, msg3929/msg3933) — ровно как у слайдера в диалоге
+    /** Кнопки «Медленнее/Быстрее» (#58): шаг 0.1 по всему диапазону
+     *  (`RateSteps.SPEED`, msg3929/msg3933; с 05.10.2026 он 0.5–10.0) — ровно как
+     *  у слайдера в диалоге
      *  голоса. Если у книги запомнена своя
      *  скорость (#102) — меняем именно её, глобальную не трогаем.
      *  Если книга на паузе, новую скорость озвучиваем (во время чтения её
@@ -2840,6 +3066,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             if (row in items.indices) list.setSelection(row)
         }
         dlg.show()
+        // Конец списка на ощупь (09.10.2026): в учебнике глав сотни, и, дойдя до
+        // конца, понять нечем — главы кончились или палец не сработал.
+        A11y.edgeVibrateDialog(dlg, "оглавление")
     }
 
     /** Перепрыгнуть на глобальное предложение (слайдер перемотки). [announce] —
@@ -2874,7 +3103,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private fun announcePosition(kindRes: Int? = null, withTitle: Boolean = false) {
         val place = binding.tvPosition.text?.toString().orEmpty()
         val title = if (withTitle) {
-            book?.chapters?.getOrNull(chapterIdx)?.title?.trim().orEmpty()
+            // 0.4.71: название, которое придумали МЫ («Стр. N» у PDF без закладок),
+            // вслух не читаем. У PDF каждая страница — глава, поэтому здесь и
+            // звучал номер страницы на каждом переходе (09.10.2026: Серж слышал
+            // его в книге «Звонок для родителя»).
+            val ch = book?.chapters?.getOrNull(chapterIdx)
+            if (ch == null || ch.autoTitle) "" else ch.title?.trim().orEmpty()
         } else {
             ""
         }
@@ -3296,6 +3530,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             setPadding(dp2px(4f), dp2px(8f), dp2px(4f), dp2px(8f))
         }
         scroll.addView(content)
+        // Конец списка на ощупь (09.10.2026): закладок бывает много, а список
+        // собран руками — вешаем наблюдателя на него самого.
+        A11y.edgeVibrate(scroll, "закладки", rows = content)
         var dialog: androidx.appcompat.app.AlertDialog? = null
 
         fun jump(bm: Bm) {
@@ -3839,6 +4076,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                         p.selectVoice(gVoice)
                         voiceName = gVoice
                     }
+                    // 07.10.2026: пара «движок + голос» сменилась — всё, что
+                    // записано прежней (паузная фраза, кэш сыгранных, заготовки),
+                    // больше не годится, и в паузе это тоже надо выбросить.
+                    if (ok) ReaderEngine.restartAfterSwitch()
                     onDone?.invoke()
                 }
             }
@@ -3846,6 +4087,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             if (gVoice != null && gVoice != voiceName) {
                 player.selectVoice(gVoice)
                 voiceName = gVoice
+                ReaderEngine.restartAfterSwitch()
             }
             onDone?.invoke()
         }
@@ -4179,11 +4421,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     /** Показать найденные строки списком — прослушать перед согласием. */
     private fun showDropExamples(found: DictSmart.Found) {
         val items = found.examples.mapIndexed { i, t -> "${i + 1}. $t" }.toTypedArray()
-        MaterialAlertDialogBuilder(this)
+        // Диалог создаём сами (а не цепочкой .show()): после показа вешаем толчок
+        // у края — найденных строк бывает много (09.10.2026).
+        val dlg = MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.dict_drop_examples, found.count))
             .setItems(items, null)
             .setNegativeButton(R.string.toc_close, null)
-            .show()
+            .create()
+        dlg.show()
+        A11y.edgeVibrateDialog(dlg, "строки словаря")
     }
 
     /** «Вернуть такие строки» (30.09.2026, вопрос Сержа «а если захочется вернуть
@@ -4261,7 +4507,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // ---------- Диалог «Голос чтения»: ползунки + движок → голоса (#1099/#1102/#1141) ----------
 
     /** Ползунок скорости/тона в диалогах ридера — те же значения (список [values]
-     *  из RateSteps: у скорости 0.5..4.0, у тона 0.5..2.0) и та же озвучка
+     *  из RateSteps: у скорости 0.5..10.0, у тона 0.5..2.0) и та же озвучка
      *  (stateDescription с SDK 30), что у ползунков Настройки → «Голос»
      *  (SettingsActivity.addRateSlider). Встраивается в переданный контейнер;
      *  [apply] сам решает, куда писать значение (плеер/настройки/запись книги) —
@@ -4272,10 +4518,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         cd: String,
         start: Float,
         values: List<Float>,
+        stepOf: ((Float) -> Int)? = null,
         apply: (Float) -> Unit,
     ) {
         // msg3929: значения приходят списком (RateSteps) — у скорости он длиннее
-        // (до 4.0), у тона прежний (до 2.0).
+        // (0.5–10.0 с 05.10.2026), у тона прежний (до 2.0).
         val ticks = values.lastIndex
         fun valueOf(p: Int): Float = values[p.coerceIn(0, ticks)]
         fun progressOf(v: Float): Int = RateSteps.indexOf(values, v)
@@ -4291,10 +4538,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
         container.addView(label)
 
-        val seek = SeekBar(this).apply {
+        val seek = RateSeekBar(this).apply {
             max = ticks
             progress = startP
             contentDescription = cd
+            // 06.10.2026: свайп скринридером — свой шаг на каждом участке шкалы
+            // (у скорости 0.1 внизу, 0.2 в середине, 0.5 наверху) вместо пятой
+            // части диапазона, как даёт платформа. Ползунок без [stepOf] (тон)
+            // идёт по одной ступени списка — 0.1, как и раньше.
+            if (stepOf == null) a11yStep = 1 else a11yStepOf = { p -> stepOf(valueOf(p)) }
         }
         fun announce(v: Float) {
             val txt = rateLabel(v)
@@ -4341,10 +4593,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         container.addView(label)
 
         val cd = getString(R.string.volume_cd)
-        val seek = SeekBar(this).apply {
+        val seek = RateSeekBar(this).apply {
             max = 200
             progress = startP
             contentDescription = cd
+            // Громкость меряем процентами: свайп — пять процентов, а не десять,
+            // как даёт платформа (см. [RateSeekBar]).
+            a11yStep = 5
         }
         fun announce(p: Int) {
             val txt = "$p%"
@@ -4537,7 +4792,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // не должен заражать общие настройки. Куда писать решает hideVoicePanel
         // (галочка → запись книги, без → глобальные). В отличие от тон/громкость,
         // которые всегда общие, скорость может быть своя у книги (#102).
-        addRateSliderTo(body, R.string.speed_value, "Скорость", currentSpeed(), RateSteps.SPEED) { v ->
+        addRateSliderTo(
+            body, R.string.speed_value, "Скорость", currentSpeed(), RateSteps.SPEED,
+            stepOf = RateSteps::speedSwipeStep,
+        ) { v ->
             voicePanelDirty = true
             if (player.isReady) player.speed = v
             refreshSpeedValue()

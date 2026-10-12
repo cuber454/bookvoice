@@ -24,6 +24,12 @@ class AboutWindowActivity : SectionActivity() {
 
     private lateinit var binding: ActivityAboutBinding
 
+    /** Счёт нажатий по строке версии и время последнего — вход в опытные
+     *  настройки (см. [onVersionTap]). Живут в окне: ушли с экрана — счёт
+     *  начался заново. */
+    private var versionTaps = 0
+    private var lastVersionTapAt = 0L
+
     override fun buildSection(intent: Intent?) {
         // msg1756-паттерн: имя окна = «О программе», фокус при появлении ляжет
         // на заголовок окна ниже (resumeSection), как у Каталога/Настроек.
@@ -173,10 +179,44 @@ class AboutWindowActivity : SectionActivity() {
         tv.setTextColor(Palette.DIM)
         tv.textSize = 14f
         tv.setPadding(4.dp(), 16.dp(), 4.dp(), 4.dp())
-        // Не цель навигации свайпами, но озвучивается тапом (importantForAccessibility
-        // по умолчанию = yes). Это подпись внизу, а не содержимое справки.
-        tv.isFocusable = false
+        // 06.10.2026: строка версии стала нажимаемой — на ней спрятан вход в
+        // опытные настройки (семь нажатий подряд, см. [onVersionTap]). Ради этого
+        // она теперь ЦЕЛЬ навигации свайпами: иначе TalkBack до неё не доберётся
+        // и нажать было бы нечем. Других действий у строки нет, случайное
+        // касание ничего не делает — счёт обнуляется паузой больше пяти секунд.
+        tv.isFocusable = true
+        tv.isClickable = true
+        tv.setOnClickListener { onVersionTap(tv) }
         root.addView(tv)
+    }
+
+    /** Секретный вход в экспериментальные настройки (см. [ExpertPrefs]): семь
+     *  нажатий по строке версии, пауза больше [TAP_WINDOW_MS] сбрасывает счёт.
+     *  Столько же нажатий выключают режим обратно.
+     *
+     *  Голосом подтверждаем только ИТОГ: на каждом нажатии болтать нельзя — это
+     *  раздражает и мешает считать. А вот без итогового слова человек не поймёт,
+     *  получилось ли: незрячий не видит, что раздел появился. */
+    private fun onVersionTap(tv: TextView) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        versionTaps = if (now - lastVersionTapAt > TAP_WINDOW_MS) 1 else versionTaps + 1
+        lastVersionTapAt = now
+        if (versionTaps < TAPS_TO_UNLOCK) return
+        versionTaps = 0
+        val on = !ExpertPrefs.isOn(this)
+        ExpertPrefs.setOn(this, on)
+        val word = if (on) {
+            "Экспериментальные настройки включены. Раздел «Экспериментальные " +
+                "настройки» появился в конце списка настроек."
+        } else {
+            "Экспериментальные настройки выключены."
+        }
+        Diag.log(
+            this, "ui",
+            if (on) "экспериментальные настройки: включены (семь нажатий по строке версии)"
+            else "экспериментальные настройки: выключены (семь нажатий по строке версии)"
+        )
+        tv.announceForAccessibility(word)
     }
 
     private fun addSection(root: LinearLayout, section: Section) {
@@ -208,5 +248,14 @@ class AboutWindowActivity : SectionActivity() {
     private companion object {
         /** Ссылка на репозиторий — та, что человек открывает из «О программе». */
         const val GITHUB_URL = "https://github.com/cuber454/bookvoice"
+
+        /** Сколько нажатий по строке версии открывают опытные настройки — как
+         *  семь нажатий по номеру сборки в самом Android. */
+        const val TAPS_TO_UNLOCK = 7
+
+        /** Пауза, после которой счёт нажатий начинается заново. Пять секунд —
+         *  чтобы нажать семь раз спокойно, но чтобы случайные касания по строке
+         *  за сеанс ничего не открыли. */
+        const val TAP_WINDOW_MS = 5_000L
     }
 }

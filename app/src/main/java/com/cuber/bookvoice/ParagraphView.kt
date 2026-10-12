@@ -379,6 +379,12 @@ class ParagraphView @JvmOverloads constructor(
             if (i >= 0 && !handledRecently(i)) {
                 logSparse("нажатие", ++seenTap) { "предложение $i (жест)" }
                 onSentenceClick?.invoke(i)
+            } else {
+                // Тап прошёл, а предложение под ним не нашлось — видно в журнале,
+                // почему «нажал на текст, а чтение не началось» (04.10.2026).
+                logSparse("мимо", ++seenMiss) {
+                    "тап мимо предложений: x=${downX.toInt()}, y=${downY.toInt()}"
+                }
             }
         }
         setOnLongClickListener {
@@ -409,13 +415,25 @@ class ParagraphView @JvmOverloads constructor(
     private var downY = 0f
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            downX = event.x
-            downY = event.y
-            // msg6354: видно в diag.log, доходит ли до текста настоящее касание
-            // (и включён ли обход касанием в этот момент).
-            seenTouch++
-            logSparse("палец", seenTouch) { "обход касанием: ${touchExploration()}" }
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x
+                downY = event.y
+                // msg6354: видно в diag.log, доходит ли до текста настоящее касание
+                // (и включён ли обход касанием в этот момент).
+                seenTouch++
+                logSparse("палец", seenTouch) { "обход касанием: ${touchExploration()}" }
+            }
+            // 04.10.2026: координаты тапа брали только из ACTION_DOWN. Если диктор
+            // теряет нажатие (журнал Сержа — после возврата из настроек тап по
+            // тексту не начинал чтение), DOWN до нас не доходит, downX/downY
+            // остаются нулевыми и «читать отсюда» не срабатывает. Обновляем их и
+            // на движении, и на отпускании: к моменту клика (performClick после
+            // ACTION_UP) координаты уже свежие.
+            MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP -> {
+                downX = event.x
+                downY = event.y
+            }
         }
         return super.onTouchEvent(event)
     }
@@ -538,6 +556,7 @@ class ParagraphView @JvmOverloads constructor(
     private var seenTap = 0
     private var seenHold = 0
     private var seenLink = 0
+    private var seenMiss = 0
 
     private fun logSparse(tag: String, n: Int, msg: () -> String) {
         if (n > 3 && n % 100 != 0) return

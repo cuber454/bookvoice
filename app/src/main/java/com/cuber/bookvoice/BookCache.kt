@@ -47,10 +47,25 @@ object BookCache {
     private const val SLOW_MS = 2000L
 
     /** Метка формата. 0.4.80: BV1 → BV2 — в строку флагов главы добавлен третий
-     *  признак (autoTitle). Старый файл кэша с этой меткой не совпадёт, запись
-     *  снимется, книга разберётся заново — это лучше, чем прочитать старую
-     *  запись и снова услышать «Стр. 1, Стр. 2…». */
-    private const val MAGIC = "BV2"
+     *  признак (autoTitle). 09.10.2026: BV2 → BV3 — PDF разбирается по-новому
+     *  (переносы, разряженные колонтитулы, мягкие переносы), и старый разбор
+     *  обязан уступить место новому: иначе Серж услышал бы прежние «качествен-
+     *  ное». Разбор от этого не меняется, только текст внутри.
+     *  09.10.2026: BV3 → BV4 — правило разрядки стало строже (кусок не длиннее
+     *  двух знаков, номер страницы кончает набор, считаются все начала набора):
+     *  в «Звонке для родителя» колонтитул «З во но к дл я р од ит ел я» стоял на
+     *  каждой странице и читался вслух. Кэш BV3 хранит ещё не чищенный текст,
+     *  поэтому его тоже надо разобрать заново.
+     *  09.10.2026: BV4 → BV5 — разбор по геометрии: склейка разрядки по зазорам,
+     *  чтение страницы по колонкам (см. PDF: ПЕРЕНОСЫ, РАЗРЯДКА в AGENTS.md).
+     *  09.10.2026, вечер: BV5 → BV6 — правило разряженных колонтитулов доработано, и
+     *  МЕТКУ ТЕПЕРЬ ПРОВЕРЯЕМ ПРИ ЧТЕНИИ ([readDoc]): прежде файл чужой метки
+     *  просто отбрасывался как «битый», но до этой проверки доходило не всегда —
+     *  книга поднималась из старого кэша, и правка разбора не доезжала до
+     *  человека (Серж поставил 253i, а «З во но к дл я р од ит ел я» звучал снова).
+     *  ПРАВИЛО: меняешь разбор — поднимай MAGIC, и запись прежней метки уходит
+     *  сама, без «Очистить кэш» руками. */
+    private const val MAGIC = "BV7"
 
     /** Кэш-запись: uri книги → файл с разбором + сигнатура оригинала. */
     private data class Entry(
@@ -61,6 +76,13 @@ object BookCache {
         var used: Long,
         /** Объём кэш-файла в байтах (0 у записей старых версий — считаем с диска). */
         var bytes: Long,
+        /** Отпечаток чисток разбора PDF ([ExpertPrefs.pdfStamp], 09.10.2026):
+         *  сменили галочку в опытных настройках — разбор книги не годится. */
+        val stamp: Long,
+        /** Версия ПРАВИЛ разбора ([PdfParser.RULES], 09.10.2026): правила правят —
+         *  прежний текст не годится, и книга разбирается заново сама. Без этого
+         *  поля (записи до 253l) считаем 0 — то есть «правила неизвестны». */
+        val rules: Int,
     )
 
     private fun dir(context: Context): File =
@@ -84,6 +106,8 @@ object BookCache {
                         o.optLong("mt"),
                         o.optLong("used"),
                         o.optLong("b"),
+                        o.optLong("st"),
+                        o.optInt("rv"),
                     )
                 )
             }
@@ -102,6 +126,8 @@ object BookCache {
                     put("mt", e.mtime)
                     put("used", e.used)
                     put("b", e.bytes)
+                    put("st", e.stamp)
+                    put("rv", e.rules)
                 }
             )
         }
@@ -137,20 +163,55 @@ object BookCache {
             drop(context, idx, u)
             return null
         }
+        // Галочки разбора PDF сменились — прежний разбор книги не годится
+        // (09.10.2026): книгу разберут заново с новым набором чисток.
+        if (e.stamp != ExpertPrefs.pdfStamp(context)) {
+            drop(context, idx, u)
+            return null
+        }
+        // ПРАВИЛА разбора изменились — прежний текст книги больше не годится
+        // (09.10.2026, урок сборок 253i и 253k): правку правил человек иначе не
+        // увидит, книга поднимется из кэша со старым текстом. Версию правил
+        // поднимает разработчик ([PdfParser.RULES]) — здесь она только читается.
+        if (e.rules != PdfParser.RULES) {
+            Diag.log(
+                context, "cache",
+                "правила разбора изменились (${e.rules} → ${PdfParser.RULES}) — " +
+                    "разбираю книгу заново: ${e.file}",
+            )
+            drop(context, idx, u)
+            return null
+        }
         val f = File(dir(context), e.file)
         if (!f.isFile) {
             drop(context, idx, u)
             return null
         }
-        val doc = readDoc(f)
-        if (doc == null) {
-            drop(context, idx, u)
-            return null
+        when (val r = readDoc(f)) {
+            is Read.Ok -> {
+                // Обращение к кэшу — свежая дата использования (LRU).
+                e.used = System.currentTimeMillis()
+                saveIndex(context, idx)
+                return r.doc
+            }
+            // Файл помечен ПРЕЖНЕЙ меткой формата: его писал разбор старой
+            // сборки. Снимаем запись и разбираем книгу заново — иначе правка
+            // правил разбора не доедет до книги (09.10.2026, сборка 253i: Серж
+            // поставил сборку с починенными колонтитулами, а книга поднялась из
+            // кэша BV5, и «З во но к дл я р од ит ел я» звучал снова).
+            Read.Old -> {
+                Diag.log(
+                    context, "cache",
+                    "разобранный текст прежней метки — разбираю книгу заново: ${e.file}",
+                )
+                drop(context, idx, u)
+                return null
+            }
+            Read.Broken -> {
+                drop(context, idx, u)
+                return null
+            }
         }
-        // Обращение к кэшу — свежая дата использования (LRU).
-        e.used = System.currentTimeMillis()
-        saveIndex(context, idx)
-        return doc
     }
 
     /** Сохранить разобранную книгу. Прежняя запись того же uri перезаписывается;
@@ -168,7 +229,12 @@ object BookCache {
         val name = Integer.toHexString(u.hashCode()) + ".bv"
         val f = File(dir(context), name)
         if (!writeDoc(f, doc)) return
-        idx.add(Entry(u, name, sz, mt, System.currentTimeMillis(), f.length()))
+        idx.add(
+            Entry(
+                u, name, sz, mt, System.currentTimeMillis(), f.length(),
+                ExpertPrefs.pdfStamp(context), PdfParser.RULES,
+            )
+        )
         idx.sortByDescending { it.used }
         evict(context, idx)
         saveIndex(context, idx)
@@ -248,6 +314,14 @@ object BookCache {
 
     // ---------------- Сериализация BookDocument ----------------
 
+    /** Что вышло из чтения кэш-файла. [Old] — файл писал разбор другой сборки
+     *  (метка формата не наша): это не поломка, книгу просто разбираем заново. */
+    private sealed class Read {
+        class Ok(val doc: BookDocument) : Read()
+        object Old : Read()
+        object Broken : Read()
+    }
+
     private fun writeDoc(f: File, doc: BookDocument): Boolean = runCatching {
         FileWriter(f).use { w ->
             w.write(MAGIC)
@@ -281,33 +355,36 @@ object BookCache {
         true
     }.getOrElse { false }
 
-    private fun readDoc(f: File): BookDocument? = runCatching {
+    private fun readDoc(f: File): Read = runCatching {
         BufferedReader(FileReader(f)).use { r ->
-            if (r.readLine() != MAGIC) return null
+            val magic = r.readLine()
+            // Метка не наша — файл писал разбор другой сборки. Это НЕ «битый»
+            // файл: разница только в формате, и книгу надо разобрать заново.
+            if (magic != MAGIC) return Read.Old
             val title = r.readLine()?.takeIf { it.isNotEmpty() }
             val author = r.readLine()?.takeIf { it.isNotEmpty() }
-            val n = r.readLine()?.toIntOrNull() ?: return null
-            if (n < 0) return null
+            val n = r.readLine()?.toIntOrNull() ?: return Read.Broken
+            if (n < 0) return Read.Broken
             val chapters = ArrayList<Chapter>(n)
             repeat(n) {
                 val chTitle = r.readLine()?.takeIf { it.isNotEmpty() }
-                val flags = r.readLine() ?: return null
-                val nS = r.readLine()?.toIntOrNull() ?: return null
-                if (nS < 0) return null
+                val flags = r.readLine() ?: return Read.Broken
+                val nS = r.readLine()?.toIntOrNull() ?: return Read.Broken
+                if (nS < 0) return Read.Broken
                 val major = flags.isNotEmpty() && flags[0] == '1'
                 val nested = flags.length > 1 && flags[1] == '1'
                 val autoTitle = flags.length > 2 && flags[2] == '1'
                 val sents = ArrayList<Sentence>(nS)
                 repeat(nS) {
-                    val line = r.readLine() ?: return null
+                    val line = r.readLine() ?: return Read.Broken
                     val ps = line.isNotEmpty() && line[0] == '1'
                     sents.add(Sentence(if (line.length > 1) line.substring(1) else "", ps))
                 }
                 chapters.add(Chapter(chTitle, sents, major, nested, autoTitle))
             }
-            BookDocument(title, author, chapters)
+            Read.Ok(BookDocument(title, author, chapters))
         }
-    }.getOrNull()
+    }.getOrElse { Read.Broken }
 
     private fun clean(t: String): String {
         if (t.indexOf('\n') < 0 && t.indexOf('\r') < 0) return t

@@ -43,6 +43,10 @@ private enum class Group(@param:StringRes val titleRes: Int, @param:StringRes va
     START(R.string.settings_group_start, R.string.settings_group_start_hint),
     LIBRARY(R.string.settings_group_library, R.string.settings_group_library_hint),
     DIAG(R.string.settings_group_diag, R.string.settings_group_diag_hint),
+    // Скрытый раздел (06.10.2026): в корне его видно, только когда включён
+    // экспериментальный режим ([ExpertPrefs], семь нажатий по строке версии в
+    // «О программе»). Стоит последним — обычному человеку он не мешает.
+    EXPERIMENTAL(R.string.settings_group_experiment, R.string.settings_group_experiment_hint),
 }
 
 /**
@@ -131,6 +135,26 @@ class SettingsActivity(private val act: SectionActivity) {
     // msg5604: строка-значение «Пауза между фразами» — сколько тишины движка
     // оставлять на стыке предложений (раздел «Чтение»).
     private var pauseKeepRow: Button? = null
+    // 06.10.2026: строки-значения раздела «Экспериментальные настройки». Держим
+    // ссылки, чтобы после выбора в диалоге переписать ТОЛЬКО текст строки: при
+    // пересборке раздела фокус диктора улетал (жалоба Сержа: «нажал, значение
+    // изменилось, а фокус куда-то улетел»).
+    private var experimentDepthRow: Button? = null
+    private var experimentOneRow: Button? = null
+    // 06.10.2026: строка-ответ «каким способом читаю» (см. [ReadingMode]) и сама
+    // галочка альтернативного способа: у неё второй строкой стоит тот же ответ.
+    // Серж не мог понять, каким способом идёт чтение, по одной галочке: прямой
+    // режим включается и сам, когда движок не отдаёт файлы.
+    private var experimentModeRow: Button? = null
+    private var altVoiceBox: SwitchCompat? = null
+    // 06.10.2026: профиль способа чтения у КАЖДОГО движка свой (решение Сержа:
+    // «давай что-то одно» — обшей ручки на всех нет). Здесь строки движков:
+    // пара «имя движка → строка» плюс подпись для резюме.
+    private val forceRows = ArrayList<Triple<String?, String, Button>>()
+    // 06.10.2026: папка «Движки» внутри опытных настроек — открыта ли сейчас, и
+    // строка-дверь в неё (для возврата фокуса после «назад»).
+    private var enginesSubOpen = false
+    private var enginesGroupRow: Button? = null
     // 30.09.2026: строка «Громкость тихого потока» — уровень того самого
     // неслышного звука, который держит звуковой тракт открытым (раздел «Чтение»).
     private var silentLevelRow: Button? = null
@@ -194,6 +218,12 @@ class SettingsActivity(private val act: SectionActivity) {
     // Фокус на контент уже поставлен после первого показа (вход по нижней полосе
     // или из читалки). Дальше возвраты из пикеров фокус не трогают (msg1652).
     private var contentFocusedOnce = false
+
+    /** Был ли включён опытный режим, когда строился нынешний список корня.
+     *  null — список ещё не строился. Нужно, чтобы при возврате из окна
+     *  «О программе» (там режим включают семью нажатиями) корень перестроился и
+     *  строки «Опытные» появились сразу (см. [resume]). */
+    private var expertListed: Boolean? = null
 
     // Пункты конструктора экрана чтения (#58) — порядок показа в разделе.
     private val readerUi: List<Pair<Int, String>> = listOf(
@@ -266,6 +296,19 @@ class SettingsActivity(private val act: SectionActivity) {
 
         binding.btnMore.setOnClickListener { showSettingsMoreMenu() }
 
+        // Конец списка настроек на ощупь (08.10.2026): свайп вниз у последней
+        // строки или вверх у первой отвечает толчком, а не тишиной. Второй путь
+        // (09.10.2026) — по фокусу на крайней строке: диктор Сержа действий
+        // прокрутки не шлёт вовсе. Касания слушает всё окно (09.10.2026): жест,
+        // начавшийся на шапке, до слушателя списка не доходил.
+        A11y.edgeVibrate(
+            binding.scroll,
+            "настройки",
+            rows = binding.content,
+            touch = false,
+            watch = { w -> act.watchTouches(w) },
+        )
+
         // msg1712/1718: шапка как в FBReader — кнопка «Назад» слева от заголовка
         // (в Настройках — по желанию Сергея, как в Каталоге). Работает как
         // системный «назад»: внутри раздела — на уровень выше (список групп),
@@ -286,6 +329,16 @@ class SettingsActivity(private val act: SectionActivity) {
     fun resume(byTab: Boolean) {
         val firstShow = !contentFocusedOnce
         contentFocusedOnce = true
+        // Экспериментальный режим включают в другом окне (семь нажатий в
+        // «О программе»), а нынешний список построен по прежнему состоянию —
+        // тогда раздела «Экспериментальные настройки» в нём нет: Серж 06.10.2026
+        // включил режим и не нашёл строк. Перестраиваем корень, если состояние
+        // поменялось.
+        val expertNow = ExpertPrefs.isOn(act)
+        if (group == null && expertListed != null && expertListed != expertNow) {
+            Diag.log(act, "ui", "экспериментальные настройки: состояние изменилось — перестраиваю список")
+            showMenu()
+        }
         // Возврат из браузера после входа в Яндекс (msg6114): строка «Яндекс.Диск»
         // обязана показать новое состояние сразу, а не после перезахода в раздел.
         if (group == Group.LIBRARY) refreshRows()
@@ -321,10 +374,22 @@ class SettingsActivity(private val act: SectionActivity) {
             backupSubOpen -> "в подразделе «Резервные копии» (Библиотека)"
             syncSubOpen -> "в подразделе «Синхронизация» (Библиотека)"
             showSubOpen -> "в подразделе «Что показывать в книге» (Экран книги)"
+            enginesSubOpen -> "в подразделе «Движки» (Экспериментальные)"
             group == null -> "В КОРНЕ (список разделов)"
             else -> "в разделе ${group!!.name}"
         })
-        if (controlsSubOpen) {
+        if (enginesSubOpen) {
+            // 06.10.2026: из папки «Движки» — назад в список «Экспериментальных»,
+            // фокусом на строку, из которой вошли (как в других подразделах).
+            enginesSubOpen = false
+            forgetSubRows()
+            screenTitle(getString(Group.EXPERIMENTAL.titleRes))
+            content().removeAllViews()
+            buildExperimentalGroup()
+            refreshRows()
+            scrollTop()
+            enginesGroupRow?.let { TabNav.refocusAfterRebuild(binding.content, it) }
+        } else if (controlsSubOpen) {
             controlsSubOpen = false
             // msg2527: вернуться из подраздела в список «Управления». Перестроить
             // раздел и поставить фокус на строку «Кнопки и жесты»
@@ -419,7 +484,12 @@ class SettingsActivity(private val act: SectionActivity) {
     private fun showMenu(focusGroup: Group? = null, noFocus: Boolean = false) {
         screenTitle(getString(R.string.settings_title))
         content().removeAllViews()
-        Group.values().forEach { g -> addGroupButton(g) }
+        // Разделы идут по порядку Group.values(), а скрытый «Экспериментальные
+        // настройки» показываем только при включённом режиме (06.10.2026):
+        // обычному человеку его в корне не видно вовсе.
+        Group.values().forEach { g ->
+            if (g != Group.EXPERIMENTAL || ExpertPrefs.isOn(act)) addGroupButton(g)
+        }
         // msg4476: энергетические запреты — первой из «не разделов». Тестеры на
         // Poco и realme жаловались, что с заблокированным экраном чтение
         // замирает: система душит приложение, а разрешение «не ограничивать
@@ -445,11 +515,297 @@ class SettingsActivity(private val act: SectionActivity) {
         addMenuRow(getString(R.string.about_title), getString(R.string.settings_about_hint)) {
             startActivity(Intent(act, AboutWindowActivity::class.java))
         }
+        // Экспериментальные настройки (06.10.2026) из корня убраны в свой раздел
+        // ([Group.EXPERIMENTAL], см. [buildExperimentalGroup]): Серж попросил
+        // «сложить все мои опытные настройки в папку». Режим по-прежнему
+        // включается семью нажатиями по строке версии в «О программе».
+        expertListed = ExpertPrefs.isOn(act)
         scrollTop()
         if (focusGroup != null) {
             focusGroupButton(focusGroup)
         } else if (!noFocus) {
             focusFirst()
+        }
+    }
+
+    /** Раздел «Экспериментальные настройки» (06.10.2026). Складываем сюда всё,
+     *  что нужно владельцу и интересующимся, а не всем: глубина заготовок впрок,
+     *  «по одной фразе», проба движка, сброс пометок движка и выключение самого
+     *  режима. Раздел в корне видно только при включённом режиме ([ExpertPrefs]),
+     *  включается он семью нажатиями по строке версии в «О программе».
+     *
+     *  Имена строк — БЕЗ слова «Экспериментальные» (07.10.2026, жалоба Сержа:
+     *  «в них захожу, и перед каждой настройкой синтезатор пишет „Экспериментальная
+     *  такая-то, Экспериментальная такая-то“»). Прежняя просьба 06.10.2026
+     *  («чтобы они так и назывались») выполнена иначе: слово теперь стоит ОДИН раз —
+     *  в названии самой папки в корне настроек ([Group.EXPERIMENTAL]) и в заголовке
+     *  раздела, а строки внутри называются коротко. НЕ возвращать приставку. */
+    private fun buildExperimentalGroup() {
+        // 06.10.2026 (просьба Сержа «хочу понимать, каким способом читается»):
+        // первой строкой — ответ, чем читаю и почему. Значение видно прямо в
+        // строке, а касание читает вслух весь разбор ([ReadingMode.long]).
+        experimentModeRow = addValueButton { speakReadingMode() }
+        // 06.10.2026: профиль способа чтения — СВОЙ У КАЖДОГО ДВИЖКА (Серж:
+        // «давай что-то одно»), и живёт он в отдельной папке — «Движки», чтобы
+        // строки движков не разбрасывались по разделу (просьба Сержа 06.10.2026:
+        // «хорошо бы движки были в отдельной папке, чтобы не было разброса»).
+        enginesGroupRow = addMenuRow(
+            "Движки",
+            "каким способом читает каждый движок: файлом или его голосом",
+        ) { openEnginesSub() }
+        // Две строки-значения выбираются ДИАЛОГОМ, как во всех остальных
+        // настройках (Серж 06.10.2026: «лучше всего, чтобы значение выбиралось
+        // как-то диалогом, окошком поверх — короче, как у нас во всех настройках»).
+        // Прежде значение листалось касанием по кругу, и после этого приходилось
+        // перестраивать раздел целиком — фокус диктора улетал.
+        experimentDepthRow = addValueButton { pickPrefetch() }
+        experimentOneRow = addValueButton { pickOnePhrase() }
+        // 08.10.2026: строку «Прежний порядок чтения» убрали вместе с прежним
+        // путём — новый порядок по единицам речи отстоялся на живом чтении
+        // (Серж читал час с лишним, журнал чистый). Два порядка одновременно и
+        // были причиной, по которой жалобы на порядок возвращались.
+        // 06.10.2026: проба движка — говорит вслух, применяет ли движок наш темп.
+        // 07.10.2026: проба расширена — отвечает ли, даёт ли файлы, применяет ли
+        // скорость и успевает ли писать быстрее, чем фразы звучат (см. [EngineProbe]).
+        addMenuRow(
+            "Проверить движок",
+            "проверю движок контрольной фразой: отвечает ли, даёт ли файлы, " +
+                "слушается ли нашей скорости, не рвётся ли стык. Он может заговорить " +
+                "вслух — так и надо. Делать, когда чтение стоит",
+        ) {
+            runEngineProbe()
+        }
+        addMenuRow(
+            "Забыть пометки движка",            "движок снова считается обычным — ни «медленный», ни «файлов не отдаёт»",
+        ) {
+            val wasDirect = ReaderEngine.player?.directWhy != null
+            ExpertPrefs.clearMarks(act)
+            Diag.log(act, "ui", "экспериментальные: пометки движка стёрты вручную")
+            // Строка «каким способом читаю» переписывается на месте: пометки
+            // стёрты, и ответ изменился.
+            refreshRows()
+            binding.tvTitle.announceForAccessibility(
+                if (wasDirect) {
+                    // Живой плеер держит решение до нового запуска чтения: не
+                    // обещаем, что способ сменится сейчас же.
+                    "Пометки движка стёрты. Сейчас читаю по-прежнему альтернативным — " +
+                        "обычным станет со следующего запуска чтения, если снята галочка " +
+                        "альтернативного способа"
+                } else {
+                    "Пометки движка стёрты"
+                }
+            )
+        }
+        // 09.10.2026, просьба Сержа: разбор PDF стал умнее (разрядка склеивается
+        // по зазорам, страница читается по колонкам, колонтитулы убираются), и на
+        // каждую правку — своя галочка. Снял галочку — книга разберётся заново и
+        // останется как до правки; это же и способ проверить, не наша ли чистка
+        // съела нужное.
+        addCheck(
+            R.string.experiment_pdf_headers, ExpertPrefs.KEY_PDF_HEADERS, true,
+            R.string.experiment_pdf_headers_hint,
+        ) { pdfCleanChanged(it, "Чистка колонтитулов") }
+        addCheck(
+            R.string.experiment_pdf_spacing, ExpertPrefs.KEY_PDF_SPACING, true,
+            R.string.experiment_pdf_spacing_hint,
+        ) { pdfCleanChanged(it, "Склейка разрядки") }
+        addCheck(
+            R.string.experiment_pdf_columns, ExpertPrefs.KEY_PDF_COLUMNS, true,
+            R.string.experiment_pdf_columns_hint,
+        ) { pdfCleanChanged(it, "Чтение по колонкам") }
+        addMenuRow(
+            "Выключить экспериментальные настройки",
+            "раздел исчезнет из настроек; включить снова — семь нажатий по строке " +
+                "версии в окне «О программе»",
+        ) {
+            ExpertPrefs.setOn(act, false)
+            Diag.log(act, "ui", "экспериментальные настройки: выключены из настроек")
+            showMenu()
+            binding.tvTitle.announceForAccessibility("Экспериментальные настройки выключены")
+        }
+    }
+
+    /** Переключили галочку разбора PDF: обновляем набор чисток ([PdfParser.options]),
+     *  пишем в журнал и говорим вслух, что книга разберётся заново. Иначе выглядит,
+     *  будто галочка не работает: текст книги берётся из кэша разбора
+     *  (09.10.2026). */
+    private fun pdfCleanChanged(on: Boolean, what: String) {
+        PdfParser.options = ExpertPrefs.pdfOptions(act)
+        Diag.log(
+            act,
+            "ui",
+            "экспериментальные: чистка PDF «$what» — ${if (on) "включена" else "выключена"}",
+        )
+        binding.tvTitle.announceForAccessibility(
+            "$what: ${if (on) "включено" else "выключено"}. " +
+                "Книга разберётся заново при следующем открытии"
+        )
+    }
+
+    /** Сколько фраз держать готовыми впрок ([ExpertPrefs.prefetch]).
+     *  07.10.2026: запас считается ещё и знаками, поэтому и в диалоге, и в строке
+     *  называем оба числа — иначе «5 заготовок» ничего не говорит о запасе. */
+    private fun pickPrefetch() {
+        val cur = ExpertPrefs.prefetch(act)
+        val values = (1..6).toList()
+        val labels = values.map {
+            "$it — около ${ExpertPrefs.prefetchChars(it)} знаков впереди"
+        }.toTypedArray()
+        MaterialAlertDialogBuilder(act)
+            .setTitle("Заготовок впрок")
+            .setSingleChoiceItems(labels, values.indexOf(cur)) { d, which ->
+                val next = values[which]
+                ExpertPrefs.setPrefetch(act, next)
+                Diag.log(act, "ui", "экспериментальные: заготовок впрок теперь $next")
+                d.dismiss()
+                // Строку переписываем на месте, раздел не пересобираем: фокус
+                // диктора остаётся на этой же строке.
+                refreshRows()
+                binding.tvTitle.announceForAccessibility(
+                    "Заготовок впрок: $next, это около ${ExpertPrefs.prefetchChars(next)} знаков впереди"
+                )
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Отдавать ли движку по одной фразе ([ExpertPrefs.onePhrase]). */
+    private fun pickOnePhrase() {
+        val cur = ExpertPrefs.onePhrase(act)
+        val labels = arrayOf(
+            getString(R.string.experiment_one_auto),
+            getString(R.string.experiment_one_always),
+            getString(R.string.experiment_one_never),
+        )
+        val values = intArrayOf(ExpertPrefs.ONE_AUTO, ExpertPrefs.ONE_ALWAYS, ExpertPrefs.ONE_NEVER)
+        MaterialAlertDialogBuilder(act)
+            .setTitle("По одной фразе")
+            .setSingleChoiceItems(labels, values.indexOf(cur)) { d, which ->
+                val next = values[which]
+                ExpertPrefs.setOnePhrase(act, next)
+                Diag.log(act, "ui", "экспериментальные: по одной фразе — ${onePhraseLabel(next)}")
+                d.dismiss()
+                refreshRows()
+                binding.tvTitle.announceForAccessibility("По одной фразе: ${onePhraseLabel(next)}")
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Папка «Движки» в опытных настройках: каким способом читает КАЖДЫЙ движок
+     *  ([ExpertPrefs.forceMode] — у каждого свой профиль). «Назад» отсюда ведёт в
+     *  список «Экспериментальных» (см. [onBackKey]), фокус — на строку-дверь. */
+    private fun openEnginesSub() {
+        enginesSubOpen = true
+        screenTitle("Движки")
+        content().removeAllViews()
+        forceRows.clear()
+        // Движок по умолчанию помечаем: он же и читает, когда свой не выбран.
+        val defaultEngine = ExpertPrefs.defaultEngine(act)
+        val engines = Dict.installedEngines(act)
+        for (e in engines.entries.sortedBy { it.value.lowercase() }) {
+            val pkg = e.key
+            val label = if (pkg == defaultEngine) "${e.value} (по умолчанию)" else e.value
+            val row = addValueButton { pickForceMode(pkg, label) }
+            forceRows.add(Triple(pkg, label, row))
+        }
+        if (engines.isEmpty()) {
+            // Движков не видно — сказать об этом, а не оставлять папку пустой.
+            addMenuRow("Движки синтеза не найдены", "похоже, на телефоне их нет") { }
+        }
+        refreshRows()
+        scrollTop()
+    }
+
+    /** Каким способом читать — принудительно, против автоматики. Ручка у КАЖДОГО
+     *  движка своя ([ExpertPrefs.forceMode]): прослойке ставим «только движком»,
+     *  локальному — «только файлом», и дальше просто меняем движок. */
+    private fun pickForceMode(engine: String?, engineLabel: String) {
+        val cur = ExpertPrefs.forceMode(act, engine)
+        // У движка без сетевых голосов положение «сетевые — движком, локальные —
+        // файлом» пустое — не показываем его вовсе (просьба Сержа 06.10.2026).
+        // Пока движок ни разу не читал, мы про него ничего не знаем и показываем
+        // все положения: лишняя строка лучше пропавшей нужной.
+        val knownLocal = ExpertPrefs.engineHasNetwork(act, engine) == false
+        val values = if (knownLocal) {
+            intArrayOf(ExpertPrefs.MODE_AUTO, ExpertPrefs.MODE_FILE, ExpertPrefs.MODE_DIRECT)
+        } else {
+            intArrayOf(
+                ExpertPrefs.MODE_AUTO, ExpertPrefs.MODE_FILE,
+                ExpertPrefs.MODE_DIRECT, ExpertPrefs.MODE_NET_DIRECT,
+            )
+        }
+        val labels = if (knownLocal) {
+            arrayOf(
+                "Сам, по опыту (сетевых голосов нет)",
+                "Только файлом (обычный способ, без проб и пометок)",
+                "Только движком (альтернативный способ, файл не заказываю)",
+            )
+        } else {
+            arrayOf(
+                "Сам, по опыту (файлом, а если движок не даёт — его голосом)",
+                "Только файлом (обычный способ, без проб и пометок)",
+                "Только движком (альтернативный способ, файл не заказываю)",
+                "Сетевые — движком, локальные — файлом",
+            )
+        }
+        MaterialAlertDialogBuilder(act)
+            .setTitle("Каким способом читать: $engineLabel")
+            .setSingleChoiceItems(labels, values.indexOf(cur)) { d, which ->
+                val next = values[which]
+                ExpertPrefs.setForceMode(act, engine, next)
+                Diag.log(
+                    act, "ui",
+                    "экспериментальные: способ чтения для $engineLabel — " +
+                        ExpertPrefs.forceModeLabel(next)
+                )
+                d.dismiss()
+                // Строку переписываем на месте, раздел не пересобираем: фокус
+                // диктора остаётся на этой же строке.
+                refreshRows()
+                binding.tvTitle.announceForAccessibility(
+                    "$engineLabel: ${ExpertPrefs.forceModeLabel(next)}. " +
+                        "Применится, когда начнёшь читать заново"
+                )
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Каким способом читаю и почему — сказать вслух (просьба Сержа 06.10.2026).
+     *  По одной галочке «Альтернативный способ чтения» этого не видно: прямой
+     *  режим включается и сам, когда движок не отдаёт файлы ([ReadingMode]). */
+    private fun speakReadingMode() {
+        val text = ReadingMode.long(act)
+        Diag.log(act, "ui", "экспериментальные: каким способом читаю — $text")
+        binding.tvTitle.announceForAccessibility(text)
+    }
+
+    /** Как называется положение ручки «по одной фразе» ([ExpertPrefs.onePhrase]). */
+    private fun onePhraseLabel(v: Int): String = when (v) {
+        ExpertPrefs.ONE_ALWAYS -> "всегда"
+        ExpertPrefs.ONE_NEVER -> "никогда"
+        else -> "авто"
+    }
+
+    /** Проба движка ([EngineProbe]): применяет ли он нашу скорость. Из окна
+     *  настроек, когда чтение стоит: во время чтения проба бессмысленна и мешает
+     *  ему (свой экземпляр синтезатора заберёт звук у живого плеера). */
+    private fun runEngineProbe() {
+        if (ReaderEngine.player?.sounding == true) {
+            Diag.log(act, "ui", "опытные: проба движка не запущена — идёт чтение")
+            binding.tvTitle.announceForAccessibility("Сначала останови чтение")
+            return
+        }
+        val pkg = prefs.getString(MainActivity.KEY_ENGINE, null)
+        Diag.log(act, "ui", "опытные: проба движка ${pkg ?: "системный"}")
+        binding.tvTitle.announceForAccessibility(
+            "Проверяю движок: файлы, скорость, стык. Это займёт полминуты. " +
+                "Он может заговорить вслух — так и надо."
+        )
+        EngineProbe(act, pkg).start { text ->
+            Diag.log(act, "ui", "опытные: проба движка — $text")
+            binding.tvTitle.announceForAccessibility(text)
         }
     }
 
@@ -469,6 +825,9 @@ class SettingsActivity(private val act: SectionActivity) {
         backupSubOpen = false
         syncSubOpen = false
         showSubOpen = false
+        // 06.10.2026: свежий вход в раздел показывает его список, а не папку
+        // «Движки» (она живёт внутри опытных настроек).
+        enginesSubOpen = false
         forgetSubRows()
         group = g
         // Имя панели — имя раздела: диктор объявляет его, когда панель меняется
@@ -483,6 +842,7 @@ class SettingsActivity(private val act: SectionActivity) {
             Group.START -> buildStartGroup()
             Group.LIBRARY -> buildLibraryGroup()
             Group.DIAG -> buildDiagGroup()
+            Group.EXPERIMENTAL -> buildExperimentalGroup()
         }
         refreshRows()
         scrollTop()
@@ -507,7 +867,10 @@ class SettingsActivity(private val act: SectionActivity) {
         voicePicker = picker
         picker.build(content())
 
-        addRateSlider(MainActivity.KEY_SPEED, R.string.speed_value, "Скорость", RateSteps.SPEED) {
+        addRateSlider(
+            MainActivity.KEY_SPEED, R.string.speed_value, "Скорость", RateSteps.SPEED,
+            stepOf = RateSteps::speedSwipeStep,
+        ) {
             MainActivity.active?.player?.speed = it
         }
         addRateSlider(MainActivity.KEY_PITCH, R.string.tone_value, "Тон", RateSteps.PITCH) {
@@ -698,11 +1061,14 @@ class SettingsActivity(private val act: SectionActivity) {
         // альтернативный способ чтения всё-таки») — под этим именем он её и
         // ищет. Про тихий поток сказано в его собственной строке ниже.
         var silentBox: SwitchCompat? = null
-        addCheck(
+        altVoiceBox = addCheck(
             R.string.alt_voice_title, MainActivity.KEY_ALT_VOICE, false,
         ) { on ->
             ReaderEngine.player?.altDirect = on
             silentBox?.isChecked = on
+            // Второй строкой у галочки стоит настоящий способ чтения, а не
+            // выбранный: после переключения он мог не измениться (см. [ReadingMode]).
+            refreshRows()
         }
         // msg5067: тихий звуковой поток переехал сюда из окна «Не засыпать»
         // (Сергей искал его как звуковую настройку и не нашёл: окно про батарею).
@@ -896,7 +1262,8 @@ class SettingsActivity(private val act: SectionActivity) {
 
     /** Ползунок скорости/тона по списку значений [values] (RateSteps): свайп
      *  TalkBack двигает ровно на одну десятую (0.6 → 0.7 → 0.8), а не на сотые
-     *  (1.06). У скорости список длиннее — до 4.0 (msg3933), у тона прежний, до
+     *  (1.06). У скорости список длиннее — 0.5–10.0 (msg3933, с 05.10.2026), у
+     *  тона прежний, до
      *  2.0. Подпись-значение обновляется над ползунком, [apply] применяет
      *  значение к плееру сразу. */
     private fun addRateSlider(
@@ -904,6 +1271,7 @@ class SettingsActivity(private val act: SectionActivity) {
         labelRes: Int,
         cd: String,
         values: List<Float>,
+        stepOf: ((Float) -> Int)? = null,
         apply: (Float) -> Unit,
     ) {
         val ticks = values.lastIndex
@@ -921,10 +1289,15 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         content().addView(label)
 
-        val seek = SeekBar(act).apply {
+        val seek = RateSeekBar(act).apply {
             max = ticks
             progress = startP
             contentDescription = cd
+            // 06.10.2026: свайп скринридером — свой шаг на каждом участке шкалы
+            // (у скорости 0.1 внизу, 0.2 в середине, 0.5 наверху) вместо пятой
+            // части диапазона, как даёт платформа. Без [stepOf] (тон) — одна
+            // ступень списка, то есть 0.1.
+            if (stepOf == null) a11yStep = 1 else a11yStepOf = { p -> stepOf(valueOf(p)) }
         }
         fun announce(v: Float) {
             val txt = rateLabel(v)
@@ -964,10 +1337,11 @@ class SettingsActivity(private val act: SectionActivity) {
         content().addView(label)
 
         val cd = getString(R.string.volume_cd)
-        val seek = SeekBar(act).apply {
+        val seek = RateSeekBar(act).apply {
             max = 200
             progress = startP
             contentDescription = cd
+            a11yStep = 5 // проценты: свайп — 5%, а не 10% (см. [RateSeekBar])
         }
         fun announce(p: Int) {
             val txt = "$p%"
@@ -1410,6 +1784,15 @@ class SettingsActivity(private val act: SectionActivity) {
                 getString(R.string.all_files_missing_hint),
             ) { AllFiles.ask(act, getString(R.string.all_files_explain)) }
         }
+        // 07.10.2026, просьба Сержа: книга дочитана — читалка предлагает удалить
+        // её (см. ReaderEngine.armEndAsk). Галочка выключает этот вопрос; читается
+        // она на каждом конце книги, поэтому применяется сразу. Стоит первой
+        // строкой раздела — новое ищут сверху.
+        addCheck(
+            R.string.ask_delete_end_title,
+            ReaderEngine.KEY_ASK_DELETE_END,
+            ReaderEngine.ASK_DELETE_END_DEFAULT,
+        )
         // Обложки карточек-сетки (23.09.2026): владелец просил и обложки, и
         // галочку, чтобы их выключать. Стоит первой в разделе — новое ищут
         // сверху. Работает только в виде «Сетка»; список остаётся строками,
@@ -1626,6 +2009,10 @@ class SettingsActivity(private val act: SectionActivity) {
         syncLastRow = null
         booksRow = null
         booksBox = null
+        // 06.10.2026: строки движков живут в папке «Движки» — вне неё ссылки на
+        // них мертвы, а [refreshRows] ходит по этому списку.
+        forceRows.clear()
+        enginesGroupRow = null
         // 0.4.86 (msg7026): галочки «что показывать» живут в подразделе — вне его
         // ссылки на них мертвы. Списка галочек для «простого экрана» больше нет:
         // сами строки «простой экран» убраны 30.09.2026.
@@ -1926,6 +2313,45 @@ class SettingsActivity(private val act: SectionActivity) {
 
     /** Обновить тексты строк-резюме (стартовый экран, шаг, папка, сортировка). */
     private fun refreshRows() {
+        // 06.10.2026: каким способом читаю — ответ и в своей строке раздела
+        // «Экспериментальные настройки», и второй строкой у галочки
+        // «Альтернативный способ чтения» в «Чтении». Одна и та же строка из
+        // [ReadingMode]: галочка отвечает только за выбор человека, а прямой
+        // режим включается и сам, когда движок не отдаёт файлы (просьба Сержа:
+        // «не могу определять по галочке, каким способом читается»).
+        val modeNow = ReadingMode.short(act)
+        experimentModeRow?.text = valueLine("Каким способом читаю", modeNow)
+        // Строки движков: у каждого свой профиль способа чтения.
+        for ((pkg, label, row) in forceRows) {
+            row.text = valueLine(
+                label,
+                ExpertPrefs.forceModeLabel(ExpertPrefs.forceMode(act, pkg)),
+            )
+        }
+        altVoiceBox?.text = valueLine(getString(R.string.alt_voice_title), modeNow)
+        // Экспериментальные настройки (06.10.2026): две строки-значения. Текст
+        // переписываем на месте — тогда после выбора в диалоге фокус диктора
+        // остаётся на той же строке (жалоба Сержа: «фокус куда-то улетел»).
+        experimentDepthRow?.text = valueLine(
+            "Заготовок впрок",
+            // 07.10.2026: запас считается знаками — показываем и их, иначе
+            // «2» ничего не говорит о том, сколько звука впереди.
+            "${ExpertPrefs.prefetch(act)} (около ${ExpertPrefs.prefetchChars(ExpertPrefs.prefetch(act))} знаков)",
+        )
+        experimentOneRow?.text = valueLine(
+            "По одной фразе",
+            getString(
+                when (ExpertPrefs.onePhrase(act)) {
+                    ExpertPrefs.ONE_ALWAYS -> R.string.experiment_one_always
+                    ExpertPrefs.ONE_NEVER -> R.string.experiment_one_never
+                    else -> R.string.experiment_one_auto
+                }
+            ),
+        )
+        // 08.10.2026: галочку «Прежний порядок чтения» в [refreshRows] НЕ трогаем:
+        // она ставится при сборке раздела из настроек, а программное переключение
+        // дёрнуло бы слушателя и заставило окно объявлять смену режима на ровном
+        // месте.
         // msg5730: резюме строки размера текста — выбранное значение. Строки
         // может и не быть в этом разделе (тогда ссылка с прошлой сборки мертва,
         // это безвредно).

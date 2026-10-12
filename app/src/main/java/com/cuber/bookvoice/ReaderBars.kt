@@ -1,6 +1,7 @@
 package com.cuber.bookvoice
 
 import android.content.Context
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -85,16 +86,17 @@ object ReaderBars {
 
     private fun apply() {
         val act = MainActivity.active ?: return
-        val hide = when (mode(act)) {
-            MainActivity.BARS_HIDE_BOOK -> bookOpen
-            MainActivity.BARS_HIDE_READING -> reading
-            else -> false
-        }
-        if (hidden == hide) return
+        val want = wantHide(act)
+        // 07.10.2026, жалоба Сержа: «стоит „скрывать, пока открыта книга“, а
+        // кнопки всё равно показываются». Своей памяти тут мало: система
+        // возвращает полосу САМА (смахивание от края, работа диктора, переходы
+        // окна), и если решать по одному лишь прошлому запросу, мы больше её не
+        // спрячем. Сверяемся с фактическим положением дел в окне.
+        if (hidden == want && actualHidden(act) == want) return
         runCatching {
             val w = act.window
             val c = WindowCompat.getInsetsController(w, w.decorView)
-            if (hide) {
+            if (want) {
                 // Липкое погружение: смахивание от нижнего края показывает полосу
                 // поверх на время, дальше она уходит сама.
                 c.systemBarsBehavior =
@@ -103,12 +105,33 @@ object ReaderBars {
             } else {
                 c.show(WindowInsetsCompat.Type.navigationBars())
             }
-            hidden = hide
+            hidden = want
+            // Пишем в журнал КАЖДУЮ перемену: по жалобе «не скрывается» иначе не
+            // понять, просили мы вообще или режим не тот (журнал Серж не читает,
+            // он для разбора).
+            Diag.log(
+                act, "a11y",
+                "системные кнопки: ${if (want) "прячу" else "показываю"} " +
+                    "(режим ${mode(act)}, книга открыта=$bookOpen, чтение=$reading)"
+            )
         }
     }
 
+    /** Видна ли навигационная полоса ФАКТИЧЕСКИ (null — окно ещё не отвечало
+     *  инсетами, тогда судим по своей памяти). */
+    private fun actualHidden(act: MainActivity): Boolean? = runCatching {
+        val insets = ViewCompat.getRootWindowInsets(act.window.decorView) ?: return null
+        !insets.isVisible(WindowInsetsCompat.Type.navigationBars())
+    }.getOrNull()
+
     /** Прятать ли полосу в этом режиме. «Пока открыта книга» включает в себя и
      *  время чтения: книга открыта тогда, когда её читают, тоже. */
+    private fun wantHide(c: Context): Boolean = when (mode(c)) {
+        MainActivity.BARS_HIDE_BOOK -> bookOpen
+        MainActivity.BARS_HIDE_READING -> reading
+        else -> false
+    }
+
     private fun mode(c: Context): Int = runCatching {
         c.getSharedPreferences("reader", Context.MODE_PRIVATE)
             .getInt(MainActivity.KEY_READER_BARS, MainActivity.BARS_SHOW)

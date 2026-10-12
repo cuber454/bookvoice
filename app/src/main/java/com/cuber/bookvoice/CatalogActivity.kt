@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.DocumentsContract
@@ -61,6 +62,27 @@ class CatalogActivity(private val act: SectionActivity) {
         /** Флаг в интенте окна (msg2723/2730): полка попросила открыть каталог сразу
          *  в голосовом поиске (долгое нажатие «Каталоги»). */
         const val EXTRA_VOICE_SEARCH = "extra_voice_search"
+
+        /** Пауза перед переносом диктора на первую строку ленты (08.10.2026):
+         *  базовая часть плюс время на чтение сводки, знаков × этот множитель. */
+        private const val FEED_FOCUS_BASE_MS = 900L
+        private const val FEED_SUMMARY_MS_PER_CHAR = 55L
+        private const val FEED_FOCUS_MAX_MS = 4000L
+
+        /** Автоповтор неудачной догрузки страницы (09.10.2026, просьба Сержа:
+         *  «чтобы вместо этого сообщения автоматически обновлялась»).
+         *  Решение Сержа 09.10.2026 — ТРИ попытки всего: пауза 2 с, потом 5 с,
+         *  и всё. Число выбрано по времени, а не «на глаз»: одна неудачная
+         *  попытка занимает у каталога до 45 с (столько ждём молчания сервера),
+         *  поэтому шесть повторов растягивались на минуты с висящей строкой
+         *  «пробую ещё раз». Три укладываются примерно в минуту. */
+        private val RETRY_DELAYS_MS = longArrayOf(2000L, 5000L)
+        private const val RETRY_MAX = 2
+
+        /** Фразу «связь пропала» говорим не чаще раза в минуту: при быстрых
+         *  свайпах попытки начинаются заново, и без этого она звучала бы на
+         *  каждый заход. */
+        private const val RETRY_SPEAK_EVERY_MS = 60_000L
     }
 
     // Страница живёт В СВОЁМ окне-секции SectionActivity (редизайн msg1676+:
@@ -108,6 +130,19 @@ class CatalogActivity(private val act: SectionActivity) {
 
     /** Служебная нижняя строка ленты («Догружаю…» / кнопка повтора) — её убираем. */
     private var pendingRow: View? = null
+
+    /** Строка состояния первой загрузки («Загружаю библиотеку…», 08.10.2026).
+     *  Держим ссылкой: на неё переносим диктора, чтобы её услышали, и по ней же
+     *  видим, что лента ещё не перерисована. */
+    private var statusRow: View? = null
+
+    /** Когда вслух говорили «связь пропала» (09.10.2026): не чаще раза в минуту,
+     *  иначе при быстрых свайпах фраза звучит на каждый заход. */
+    private var retrySpokenAt = 0L
+
+    /** Строка-подсказка текущего экрана («Здесь пусто…»): на неё переносим
+     *  диктора, когда в ленте не оказалось ни одной строки. */
+    private var hintRow: View? = null
 
     private val currentButtons = ArrayList<Button>()
 
@@ -225,6 +260,10 @@ class CatalogActivity(private val act: SectionActivity) {
         var loadedOnce = false
         var loadingMore = false
         var failMsg: String? = null
+        /** Сколько раз подряд не получилась догрузка страницы (09.10.2026, просьба
+         *  Сержа: «сделай, чтобы вместо этого сообщения автоматически
+         *  обновлялась»). По нему берём паузу до следующей попытки. */
+        var retryCount = 0
         var foldersShown = false
         var booksShown = false
         var scrollY = 0
@@ -305,6 +344,28 @@ class CatalogActivity(private val act: SectionActivity) {
         binding.btnCatLibrary.setOnClickListener { leaveToLibrary() }
 
         setupAutoLoad()
+        // Конец списка на ощупь (08.10.2026) — ПОСЛЕ автодогрузки: наш перехват
+        // стоит поверх её делегата. Пока впереди есть страницы, жест забирает
+        // автодогрузка (handOff) и толчка нет; он звучит только в самом конце
+        // каталога. Пока идёт ПЕРВАЯ загрузка ленты, толчок молчит: пустой
+        // список в этот момент — это «ещё не пришло», а не «конец».
+        A11y.edgeVibrate(
+            binding.scroll,
+            "каталог",
+            mayVibrate = { currentFeedSession()?.loadingFirst != true },
+            handOff = {
+                val s = currentFeedSession()
+                s != null && (hasMore(s) || s.loadingMore)
+            },
+            // Второй путь (09.10.2026): край ловим ещё и по фокусу на первой или
+            // последней строке — часть дикторов действий прокрутки не шлёт.
+            rows = binding.content,
+            // Касания слушает ВСЁ окно каталога (09.10.2026): жест, начавшийся на
+            // шапке, в поле поиска или на нижних кнопках, до слушателя ленты не
+            // доходил вовсе.
+            touch = false,
+            watch = { w -> act.watchTouches(w) },
+        )
         // 0.4.83 (msg7004): подписываемся на ход загрузки из службы — окно
         // показывает проценты на кнопке «Скачать», пока оно открыто.
         DownloadService.watcher = downloadWatcher
@@ -671,6 +732,8 @@ class CatalogActivity(private val act: SectionActivity) {
         val cur = nav.lastOrNull()
         val v = content()
         v.removeAllViews()
+        statusRow = null
+        hintRow = null
         currentButtons.clear()
         removePending()
         // msg2371: нижняя панель «Открыть книгу/Библиотека» — на ВСЕХ уровнях,
@@ -753,11 +816,14 @@ class CatalogActivity(private val act: SectionActivity) {
             val author = r.author?.takeIf { it.isNotBlank() }
             if (author == null) r.displayTitle else r.displayTitle + " — " + author
         }
-        MaterialAlertDialogBuilder(act)
+        val dlg = MaterialAlertDialogBuilder(act)
             .setTitle(R.string.recent_books_title)
             .setItems(names.toTypedArray()) { _, which -> openInReader(recent[which]) }
             .setNegativeButton(R.string.toc_close, null)
-            .show()
+            .create()
+        dlg.show()
+        // Конец списка на ощупь (09.10.2026): недавних книг бывает много.
+        A11y.edgeVibrateDialog(dlg, "недавние книги")
     }
 
     // ---------------- Список каталогов (корень) ----------------
@@ -1031,19 +1097,87 @@ class CatalogActivity(private val act: SectionActivity) {
         val s = sessions.getOrPut(cur.url) { FeedSession(cur.url, cur.title) }
         if (s.loadedOnce) {
             renderFeedContent(s)
-            // msg1468: вернулись «назад» из книги/папки — фокус на строку, с
-            // которой ушли (focusAfterBack по s.focusUrl); свежий вход в уже
-            // открытую ленту — сводка + первая строка (как при первой загрузке).
-            if (!focusAfterBack(s)) {
-                announceFeed(s)
-                focusFeedFirst()
-            }
+            // msg1468: вернулись «назад» из книги/папки — диктор встаёт на строку,
+            // с которой ушли (focusAfterBack по s.focusUrl); если строки в ленте
+            // уже нет — сводка и первая строка. Оба случая звучат: молчания при
+            // возврате в список книг быть не должно (жалоба Сержа 09.10.2026).
+            focusAfterBack(s)
             return
         }
         binding.tvTitle.text = cur.title
         showSearch(false)
-        hint(getString(R.string.catalog_loading))
+        showStatusRow(getString(R.string.catalog_loading))
         if (!s.loadingFirst) fetchFirst(s)
+    }
+
+    /**
+     * Строка «Загружаю…» и перенос диктора на неё (08.10.2026).
+     *
+     * Жалоба Сержа: «захожу в жанр, библиотека подгружается, а синтезатор молчит —
+     * я не знаю, что на экране, пока не пощупаю». Причина: прежняя подсказка была
+     * обычной строкой текста. Диктор о новой строке не говорит, пока её не тронешь,
+     * а после очистки списка фокус и вовсе падал неизвестно куда. Поэтому строку
+     * состояния СРАЗУ ставим под фокус диктора — перенос ([TabNav.a11yFocus]) читают
+     * и Jieshuo, и TalkBack, в отличие от простого объявления.
+     *
+     * Пауза 150 мс — чтобы строка успела разложиться: перенос на невидимую цель
+     * [TabNav.a11yFocus] пропускает.
+     */
+    private fun showStatusRow(text: String) {
+        val tv = TextView(act).apply {
+            this.text = text
+            textSize = 15f
+            setTextColor(Palette.DIM)
+            setPadding(dp(4), dp(2), dp(4), dp(10))
+            isFocusable = true
+        }
+        content().addView(tv, lp())
+        statusRow = tv
+        Diag.log(act, "opds", "строка загрузки: «$text»")
+        tv.postDelayed({
+            if (statusRow === tv && tv.isShown) TabNav.a11yFocus(tv)
+        }, 150)
+    }
+
+    /**
+     * Первая страница ленты пришла: говорим сводку и ставим диктора на ПЕРВУЮ
+     * строку списка (08.10.2026, просьба Сержа — «чтобы он становился на
+     * какую-нибудь первую загруженную книгу»).
+     *
+     * Почему переноса не было раньше (msg1573, «L1-каталог»): он обрывал сводку
+     * ленты, и звучало только начало. Теперь пауза считается по длине сводки —
+     * диктор успевает прочитать её целиком, и следом звучит первая строка.
+     * Ждём не больше 4 с: дольше молчать нельзя, человек решит, что всё встало.
+     *
+     * Если строк нет (пустой раздел) — целимся в подсказку «Здесь пусто…».
+     */
+    private fun announceLoadedFeed(s: FeedSession, takeFocus: Boolean) {
+        val summary = announceFeed(s)
+        if (!takeFocus) return
+        val target = firstFeedRow() ?: hintRow
+        if (target == null) {
+            Diag.log(act, "opds", "лента загружена, но ставить диктора не на что: «$summary»")
+            return
+        }
+        TabNav.observeFocusAfter(binding.root, "вход в ленту")
+        val wait = (FEED_SUMMARY_MS_PER_CHAR * summary.length + FEED_FOCUS_BASE_MS)
+            .coerceIn(FEED_FOCUS_BASE_MS, FEED_FOCUS_MAX_MS)
+        binding.scroll.postDelayed({
+            if (currentFeedSession() !== s) return@postDelayed
+            if (!target.isShown) return@postDelayed
+            Diag.log(act, "opds", "ставлю диктора на первую строку ленты")
+            TabNav.a11yFocus(target)
+        }, wait)
+    }
+
+    /** Первая строка списка ленты — книга или папка (у них метка-адрес в tag). */
+    private fun firstFeedRow(): View? {
+        val c = content()
+        for (i in 0 until c.childCount) {
+            val v = c.getChildAt(i)
+            if (v.isFocusable && v.isShown && v.tag is String) return v
+        }
+        return null
     }
 
     private fun fetchFirst(s: FeedSession) {
@@ -1070,8 +1204,9 @@ class CatalogActivity(private val act: SectionActivity) {
                     )
                     if (isTopFeed(s.url)) {
                         renderFeedContent(s)
-                        announceFeed(s)
-                        focusFeedFirst()
+                        // Голосовой поиск ждёт своей очереди открыть панель — тогда
+                        // перенос к первой строке не шлём: он перебил бы микрофон.
+                        announceLoadedFeed(s, takeFocus = !pendingVoiceSearch)
                         // msg2723/2730: окно открыли долгим нажатием «Каталоги» — ждали
                         // именно эту ленту. Она всё ещё верхняя и поисковая — открываем
                         // панель поиска сами (msg4917: раньше стартовал микрофон).
@@ -1106,6 +1241,7 @@ class CatalogActivity(private val act: SectionActivity) {
     private fun failFirst(s: FeedSession, e: Throwable?) {
         sessions.remove(s.url)
         pendingVoiceSearch = false
+        statusRow = null
         Diag.log(act, "opds", "лента не открылась: ${s.url} — ${e?.message}")
         if (isTopFeed(s.url)) {
             // Корневая лента не открылась — возврат в корень тоже возвращает
@@ -1123,12 +1259,14 @@ class CatalogActivity(private val act: SectionActivity) {
         }
     }
 
-    private fun announceFeed(s: FeedSession) {
+    /** Сводка ленты вслух. Возвращаем сказанное: по длине текста считаем паузу до
+     *  переноса диктора на первую строку ([announceLoadedFeed]). */
+    private fun announceFeed(s: FeedSession): String {
         val nf = s.items.count { it is OpdsItem.Folder }
         val nb = s.items.count { it is OpdsItem.Book }
-        binding.tvTitle.announceForAccessibility(
-            getString(R.string.catalog_announce, s.title, nf, nb),
-        )
+        val text = getString(R.string.catalog_announce, s.title, nf, nb)
+        binding.tvTitle.announceForAccessibility(text)
+        return text
     }
 
     /** Перерисовать ленту целиком (первый вход или возврат «Назад»). */
@@ -1137,6 +1275,8 @@ class CatalogActivity(private val act: SectionActivity) {
         showSearch(s.searchTemplate != null)
         val v = content()
         v.removeAllViews()
+        statusRow = null
+        hintRow = null
         currentButtons.clear()
         removePending()
         s.foldersShown = false
@@ -1162,47 +1302,42 @@ class CatalogActivity(private val act: SectionActivity) {
         finishScrollTo(s.scrollY)
         if (s.nextUrl != null) binding.scroll.post { prefillIfShort(s) }
         // Фокус после перерисовки ставят зовущие: focusAfterBack (возврат из
-        // книги/папки) или focusFeedFirst (первая загрузка / свежий вход в кэш).
+        // книги/папки) или announceLoadedFeed (первая загрузка ленты).
     }
 
-    /** Вернуть accessibility-фокус на строку (книгу/папку), с которой ушли вниз
-     *  и вернулись «Назад» (msg1220). scrollY уже вернул ленту на место; без
-     *  явного фокуса TalkBack прыгнул бы к первой строке списка. Пауза 350 мс —
-     *  как в focusFeedFirst: мгновенный requestFocus после перерисовки TalkBack
-     *  роняет на нижние вкладки (0.3.55). True — якорь был, фокус запланирован;
-     *  false — якоря нет, зовущий ставит фокус сам.
+    /** Вернуть диктора на строку (книгу/папку), с которой ушли вниз и вернулись
+     *  «Назад» (msg1220). scrollY уже вернул ленту на место. Пауза 350 мс — как в
+     *  focusFeedFirst: мгновенный перенос после перерисовки диктор роняет на
+     *  нижние вкладки (0.3.55).
      *
-     *  L1-каталог (msg1573): ПЕРЕНОС не шлём. Строку-якорь озвучиваем голосом,
-     *  а где фокус осядет сам — фиксируем в лог. True — якорь был (озвучен),
-     *  false — якоря нет, зовущий озвучивает сводку ленты. */
-    private fun focusAfterBack(s: FeedSession): Boolean {
-        val url = s.focusUrl ?: return false
+     *  09.10.2026, жалоба Сержа: «выхожу из описания книги в список книг — он
+     *  молчит». Причина: строка-якорь ОЗВУЧИВАЛАСЬ объявлением
+     *  (`announceForAccessibility`), а объявление в момент перерисовки дерева
+     *  диктор часто глотает — ровно то же, из-за чего молчал первый вход в жанр
+     *  (см. «КАТАЛОГ: ЗАГРУЗКА ВСЛУХ»). Теперь на строку-якорь диктора СТАВИМ
+     *  ([TabNav.a11yFocus]) — перенос читается и TalkBack, и TalkMan.
+     *
+     *  Если якоря в ленте не оказалось (лента перестроилась), говорим сводку и
+     *  встаём на первую строку ([announceLoadedFeed]) — молчания не остаётся ни в
+     *  одном случае. */
+    private fun focusAfterBack(s: FeedSession) {
+        val url = s.focusUrl
         s.focusUrl = null
         TabNav.observeFocusAfter(binding.root, "возврат в ленту ${s.title}")
         binding.scroll.postDelayed({
-            for (i in 0 until content().childCount) {
-                val v = content().getChildAt(i)
-                if (v.tag == url && v.isFocusable && v.isShown) {
-                    v.announceForAccessibility(v.contentDescription ?: "")
-                    return@postDelayed
+            if (url != null) {
+                for (i in 0 until content().childCount) {
+                    val v = content().getChildAt(i)
+                    if (v.tag == url && v.isFocusable && v.isShown) {
+                        Diag.log(act, "opds", "возврат в ленту: ставлю диктора на строку, с которой ушли")
+                        TabNav.a11yFocus(v)
+                        return@postDelayed
+                    }
                 }
             }
-            // Строки нет (лента перестроилась) — сводку озвучит зовущий (announceFeed).
+            Diag.log(act, "opds", "возврат в ленту: строки-якоря нет — говорю сводку и встаю на первую строку")
+            announceLoadedFeed(s, takeFocus = true)
         }, 350)
-        return true
-    }
-
-    /** msg1434/1438 (вариант А): после первой загрузки ленты ставим
-     *  accessibility-фокус на ПЕРВУЮ строку списка. Без этого TalkBack, когда
-     *  строка-папка, на которой стояли, исчезает при перерисовке контента, сам
-     *  роняет фокус куда попадёт — часто на нижние вкладки («Библиотека,
-     *  вкладка»). Пауза 350 мс — чтобы сводка announceFeed успела прозвучать
-     *  целиком, фокус уходит следом, не перебивая.
-     *
-     *  L1-каталог (msg1573): ПЕРЕНОС не шлём — сводку ленты уже озвучил зовущий
-     *  (announceFeed), здесь только наблюдаем, где Jieshuo осядет сам. */
-    private fun focusFeedFirst() {
-        TabNav.observeFocusAfter(binding.root, "вход в ленту")
     }
 
     /** Подсказку о жестах (двойной тап / долгое нажатие) озвучиваем один раз. */
@@ -1313,28 +1448,53 @@ class CatalogActivity(private val act: SectionActivity) {
         }
     }
 
-    private fun maybeLoadMore() {
+    private fun maybeLoadMore(announce: Boolean = true) {
         val s = currentFeedSession() ?: return
-        if (!s.loadedOnce || s.nextUrl == null || s.loadingMore || s.failMsg != null) return
-        loadNext(s)
+        if (!s.loadedOnce || s.nextUrl == null || s.loadingMore) return
+        if (s.failMsg != null) {
+            // Догрузка уже сорвалась и кнопка «повторить» показана. Если человек
+            // САМ дошёл свайпом до конца ещё раз — начинаем попытки заново, а не
+            // заставляем его искать кнопку (09.10.2026). Служебная догрузка
+            // короткой страницы с ошибкой не воюет.
+            if (!announce) return
+            Diag.log(act, "opds", "снова дошли до конца — пробую загрузить заново")
+            s.failMsg = null
+            s.retryCount = 0
+            removePending()
+        }
+        loadNext(s, announce)
     }
 
     /** Если страница-первая короткая и каталог ещё не заполнил экран — догружаем
-     *  вперёд, чтобы под самым концом не было пауз. */
+     *  вперёд, чтобы под самым концом не было пауз. Вслух об этом не говорим:
+     *  это служебная догрузка, человек её не заказывал (жаловаться на тишину
+     *  тут не на что). */
     private fun prefillIfShort(s: FeedSession) {
         val sv = binding.scroll
         val child = sv.getChildAt(0) ?: return
         if (child.height <= sv.height + dp(40) && s.nextUrl != null && s.failMsg == null) {
-            maybeLoadMore()
+            maybeLoadMore(announce = false)
         }
     }
 
-    private fun loadNext(s: FeedSession) {
+    /**
+     * Догрузка следующей страницы. [announce] — сказать вслух «Догружаю следующие
+     * книги…» (08.10.2026, просьба Сержа). Говорим только тогда, когда догрузку
+     * заказал сам человек — дошёл свайпом до конца списка: до этого он ничего не
+     * слышал и не понимал, почему дальше ничего не появляется. Служебная
+     * догрузка короткой первой страницы ([prefillIfShort]) молчит.
+     */
+    private fun loadNext(s: FeedSession, announce: Boolean = true) {
         val url = s.nextUrl ?: return
         s.loadingMore = true
         removePending()
-        pendingRow = addHintRow(getString(R.string.catalog_more_loading))
-        Diag.log(act, "opds", "догружаю страницу: $url")
+        val row = getString(R.string.catalog_more_loading)
+        pendingRow = addHintRow(row)
+        Diag.log(act, "opds", "догружаю страницу: $url (вслух: $announce)")
+        if (announce) {
+            binding.tvTitle.announceForAccessibility(row)
+            Diag.log(act, "opds", "говорю вслух: «$row»")
+        }
         Thread {
             val r = runCatching {
                 val f = OpdsNet.get(act, url, acceptFeed)
@@ -1344,6 +1504,8 @@ class CatalogActivity(private val act: SectionActivity) {
                 s.loadingMore = false
                 removePending()
                 r.onSuccess { feed ->
+                    s.retryCount = 0
+                    s.failMsg = null
                     val known = s.items.mapNotNull { item ->
                         (item as? OpdsItem.Folder)?.url ?: (item as? OpdsItem.Book)?.url
                     }.toHashSet()
@@ -1377,10 +1539,66 @@ class CatalogActivity(private val act: SectionActivity) {
                     // по-русски; технический текст остаётся в журнале.
                     s.failMsg = netReason(act, e)
                     Diag.log(act, "opds", "страница не догрузилась: $url — ${e.message}")
-                    addRetryRow(s)
+                    // 09.10.2026, просьба Сержа: «НЕ ДОГРУЗИЛОСЬ: БИБЛИОТЕКА НЕ
+                    // ОТВЕЧАЕТ. НАЖМИ, ЧТОБЫ ПОВТОРИТЬ — сделай, чтобы вместо
+                    // этого сообщения автоматически обновлялась, чтобы я не жал
+                    // кнопку». Поэтому вместо кнопки с первой же неудачи пробуем
+                    // САМИ, с растущей паузой; кнопку показываем, только когда
+                    // все попытки кончились.
+                    scheduleRetry(s)
                 }
             }
         }.start()
+    }
+
+    /**
+     * Автоматический повтор неудачной догрузки (09.10.2026, просьба Сержа).
+     *
+     * Всего ТРИ попытки (первая неудача плюс два повтора): пауза 2 с, потом 5 с.
+     * Больше не нужно — одна попытка у каталога занимает до 45 с (столько ждём
+     * молчания сервера), так что длинный хвост повторов превращался в минуты с
+     * висящей строкой «пробую ещё раз». Дойдя свайпом до конца списка ещё раз,
+     * человек сам начинает попытки заново — отдельного «просто попробуй ещё»
+     * счётчика не требуется.
+     *
+     * Пока попытки идут, в списке стоит тихая строка «Связь пропала — пробую ещё
+     * раз…», и об этом говорится вслух — но не чаще раза в минуту
+     * ([RETRY_SPEAK_EVERY_MS]): иначе при быстрых свайпах фраза звучала бы на
+     * каждый заход.
+     *
+     * Кнопку «повторить» показываем ТОЛЬКО после последней неудачи — как
+     * последнее средство, а не как единственный выход.
+     */
+    private fun scheduleRetry(s: FeedSession) {
+        if (s.retryCount >= RETRY_MAX) {
+            Diag.log(act, "opds", "автоповтор исчерпан (${s.retryCount}), показываю «повторить»")
+            addRetryRow(s)
+            return
+        }
+        s.retryCount++
+        val wait = RETRY_DELAYS_MS[(s.retryCount - 1).coerceAtMost(RETRY_DELAYS_MS.size - 1)]
+        if (s.retryCount == 1) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - retrySpokenAt >= RETRY_SPEAK_EVERY_MS) {
+                retrySpokenAt = now
+                binding.tvTitle.announceForAccessibility(
+                    getString(R.string.catalog_more_retrying_spoken),
+                )
+                Diag.log(act, "opds", "говорю вслух: связь пропала, пробую ещё раз")
+            } else {
+                Diag.log(act, "opds", "фразу про связь не повторяю: говорили меньше минуты назад")
+            }
+        }
+        removePending()
+        pendingRow = addHintRow(getString(R.string.catalog_more_retrying))
+        Diag.log(act, "opds", "автоповтор ${s.retryCount}/$RETRY_MAX через $wait мс")
+        binding.scroll.postDelayed({
+            // Ленту могли закрыть или сменить, пока ждали.
+            if (currentFeedSession() !== s) return@postDelayed
+            removePending()
+            s.failMsg = null
+            loadNext(s, announce = false)
+        }, wait)
     }
 
     /** Дописать пришедшую страницу в конец уже открытой ленты. */
@@ -1405,21 +1623,37 @@ class CatalogActivity(private val act: SectionActivity) {
         applyEnabled()
     }
 
+    /**
+     * Строка-состояние после того, как автоповтор не помог (09.10.2026).
+     *
+     * Была КНОПКА «Не догрузилось: … Нажми, чтобы повторить». Серж спросил:
+     * «может, кнопка повторить вообще не надо?» — и по делу: повторять теперь
+     * есть чем БЕЗ кнопки, достаточно свайпнуть до конца списка
+     * ([maybeLoadMore] начинает попытки заново). Но совсем убирать строку
+     * нельзя: тогда человек у конца списка не отличит «книги кончились» от
+     * «сеть пропала» — он услышит только толчок о конце списка. Поэтому строка
+     * осталась, но стала СООБЩЕНИЕМ, а не кнопкой: причина отказа плюс что
+     * делать («листай дальше — попробую снова»). Нажатие тоже работает (для
+     * зрячих и для тех, кто привык жать), но текст к нему не зовёт.
+     */
     private fun addRetryRow(s: FeedSession) {
-        val b = Button(act).apply {
-            text = getString(R.string.catalog_more_fail, s.failMsg.orEmpty()) +
-                "\n" + getString(R.string.catalog_more_retry)
+        val tv = TextView(act).apply {
+            text = getString(R.string.catalog_more_state, s.failMsg.orEmpty())
             textSize = 15f
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setTextColor(Palette.DIM)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            isFocusable = true
+            isClickable = true
             setOnClickListener {
+                // Ручное «попробовать» начинает счёт попыток заново: иначе первая
+                // же неудача снова упёрлась бы в исчерпанный лимит.
                 s.failMsg = null
+                s.retryCount = 0
                 loadNext(s)
             }
         }
-        content().addView(b, lp().apply { topMargin = dp(2); bottomMargin = dp(2) })
-        currentButtons.add(b)
-        pendingRow = b
+        content().addView(tv, lp().apply { topMargin = dp(2); bottomMargin = dp(2) })
+        pendingRow = tv
     }
 
     // ---------------- Страница книги ----------------
@@ -1880,13 +2114,19 @@ class CatalogActivity(private val act: SectionActivity) {
         })
     }
 
-    private fun hint(text: String) {
-        content().addView(TextView(act).apply {
+    /** Текст-подсказка экрана. Возвращаем вью: на неё переносим диктора, когда
+     *  лента пришла пустой, — иначе человек слышит сводку и остаётся в тишине. */
+    private fun hint(text: String): TextView {
+        val tv = TextView(act).apply {
             this.text = text
             textSize = 15f
             setTextColor(Palette.DIM)
             setPadding(dp(4), dp(2), dp(4), dp(10))
-        })
+            isFocusable = true
+        }
+        content().addView(tv, lp())
+        hintRow = tv
+        return tv
     }
 
     private fun addHintRow(text: String): TextView = TextView(act).apply {
@@ -1894,6 +2134,9 @@ class CatalogActivity(private val act: SectionActivity) {
         textSize = 15f
         setTextColor(Palette.DIM)
         setPadding(dp(4), dp(10), dp(4), dp(10))
+        // Строки «Догружаю следующие книги…» и «повторить» человек должен уметь
+        // добраться свайпом, а не только увидеть глазами (08.10.2026).
+        isFocusable = true
     }.also { content().addView(it, lp()) }
 
     private fun addButton(label: String, cd: String? = null, onClick: () -> Unit): Button {
@@ -2135,14 +2378,18 @@ class CatalogActivity(private val act: SectionActivity) {
             toast(getString(R.string.catalog_no_formats))
             return
         }
-        MaterialAlertDialogBuilder(act)
+        val dlg = MaterialAlertDialogBuilder(act)
             .setTitle(title ?: getString(R.string.catalog_fmt_dialog))
             .setItems(list.map { it.label }.toTypedArray()) { _, which ->
                 vibrate(50)
                 downloadFormat(b, list[which])
             }
             .setNegativeButton(R.string.toc_close, null)
-            .show()
+            .create()
+        dlg.show()
+        // Конец списка на ощупь (09.10.2026): у книги в сетевом каталоге форматов
+        // бывает десяток, и последний пункт — не «конец сети».
+        A11y.edgeVibrateDialog(dlg, "форматы книги")
     }
 
     /** Начать скачивание книги (0.4.83, msg7004).

@@ -36,6 +36,11 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
  */
 class ReplyVoiceActivity : RowsActivity() {
 
+    /** Толчок у края списка окну не нужен (просьба Сержа 09.10.2026): толчок
+     *  срабатывает на КАЖДОМ приходе фокуса на первую или последнюю строку, и на
+     *  коротком списке это помеха, а не подсказка. */
+    override val edgeTickAuto: Boolean get() = false
+
     companion object {
         /** Имя файла настроек чтения — то же, что у читалки и у строк настроек
          *  (RowsActivity держит его у себя приватно). */
@@ -205,6 +210,7 @@ class ReplyVoiceActivity : RowsActivity() {
             getString(R.string.reply_speed_cd),
             RateSteps.SPEED,
             sliders,
+            stepOf = RateSteps::speedSwipeStep,
         ) { v -> applyToLive { it.replySpeed = v } }
         addRateSlider(
             MainActivity.KEY_REPLY_PITCH,
@@ -658,6 +664,7 @@ class ReplyVoiceActivity : RowsActivity() {
         cd: String,
         values: List<Float>,
         into: LinearLayout,
+        stepOf: ((Float) -> Int)? = null,
         apply: (Float) -> Unit,
     ) {
         val ticks = values.lastIndex
@@ -674,10 +681,15 @@ class ReplyVoiceActivity : RowsActivity() {
         }
         into.addView(label)
 
-        val seek = SeekBar(this).apply {
+        val seek = RateSeekBar(this).apply {
             max = ticks
             progress = startP
             contentDescription = cd
+            // 06.10.2026: свайп скринридером — свой шаг на каждом участке шкалы
+            // (у скорости 0.1 внизу, 0.2 в середине, 0.5 наверху) вместо пятой
+            // части диапазона, как даёт платформа. Без [stepOf] (тон) — одна
+            // ступень списка, то есть 0.1.
+            if (stepOf == null) a11yStep = 1 else a11yStepOf = { p -> stepOf(valueOf(p)) }
         }
         fun announce(v: Float) {
             val txt = RateSteps.label(v)
@@ -712,10 +724,11 @@ class ReplyVoiceActivity : RowsActivity() {
         into.addView(label)
 
         val cd = getString(R.string.reply_volume_cd)
-        val seek = SeekBar(this).apply {
+        val seek = RateSeekBar(this).apply {
             max = 200
             progress = startP
             contentDescription = cd
+            a11yStep = 5 // проценты: свайп — 5%, а не 10% (см. [RateSeekBar])
         }
         fun announce(p: Int) {
             val txt = "$p%"

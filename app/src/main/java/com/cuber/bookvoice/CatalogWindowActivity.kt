@@ -13,6 +13,11 @@ class CatalogWindowActivity : SectionActivity() {
 
     private val catalog = CatalogActivity(this)
 
+    /** Толчок у края ленты каталога вешает сама страница: у неё есть `handOff` —
+     *  за краем загруженного живёт догрузка следующих страниц. Авто-подключение
+     *  окна перекрыло бы её слушатель касаний и сломало эту договорённость. */
+    override val edgeTickAuto: Boolean get() = false
+
     override fun buildSection(intent: android.content.Intent?) {
         // msg1756: имя окна = «Каталоги», а не label приложения. При появлении окно
         // объявляет свой window title; перенос фокуса на заголовок Jieshuo на свежем

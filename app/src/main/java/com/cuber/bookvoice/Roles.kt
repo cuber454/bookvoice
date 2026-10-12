@@ -144,6 +144,22 @@ object Roles {
         val s = text.trimStart()
         if (s.isEmpty()) return false
         if (DASHES.contains(s[0])) return true
+        // Кавычки-ёлочки (05.10.2026): реплика может стоять в «кавычках» без
+        // тире («Привет», — сказал Иван). Чтобы название в начале фразы
+        // («Война и мир» вышла…) не стало репликой, требуем, чтобы за
+        // закрывающей кавычкой шёл только знак конца куска или конец строки, а
+        // не продолжение текста.
+        if (s[0] == '«') {
+            val close = s.indexOf('»')
+            if (close > 0) {
+                val after = close + 1
+                if (after >= s.length) return true
+                val a = s[after]
+                if (a == ',' || a == '.' || a == '!' || a == '?' || a == '…' ||
+                    a == '—' || a == '–' || a == '−' || a == ':' || a == ';'
+                ) return true
+            }
+        }
         if (afterNumber && NUMBER_THEN_DASH.containsMatchIn(s)) return true
         for (m in ownMarks) {
             if (m.isEmpty() || s.length < m.length) continue
@@ -263,5 +279,122 @@ object Roles {
             .joinToString(", ") { "${it.key} ${it.value}" }
         val tail = if (top.isEmpty()) "названных героев нет" else "названы: $top"
         return "реплик ${s.replies} из ${s.sentences} ($pct%), $tail"
+    }
+
+    // ——— Разрезание прямой речи на реплики и слова автора (05.10.2026) ———
+    // Раньше роль фразы решалась ТОЛЬКО по её первому знаку, поэтому в самой
+    // частой форме «— Привет, — сказал Иван» вся строка (включая слова автора)
+    // читалась голосом прямой речи. Здесь строка режется на куски: реплики
+    // остаются с тире (их читает голос прямой речи), слова автора — без тире
+    // (их читает основной голос). Границей служит тире, перед которым стоит
+    // знак конца куска: запятая, точка, вопрос, восклицание, двоеточие. Так
+    // тире внутри самой реплики («это — правда») куском не становится.
+
+    /** Знаки, после которых тире открывает следующий кусок строки. */
+    private val AUTHOR_BOUNDARY_BEFORE = charArrayOf(',', '.', '!', '?', '…', ':', ';', '»', '«')
+
+    /** Символ перед [i], пропуская пробелы. null — слева ничего нет. */
+    private fun prevChar(s: String, i: Int): Char? {
+        var j = i - 1
+        while (j >= 0 && s[j].isWhitespace()) j--
+        return if (j >= 0) s[j] else null
+    }
+
+    /** Есть ли глагол речи среди первых [maxWords] слов после тире на позиции
+     *  [dashIdx]. Нужно, чтобы ловить слова автора, где глагол не первым словом:
+     *  «— Привет, — тихо сказал Иван». Смотрим не одно слово, а несколько, но с
+     *  потолком — иначе «— Иван, уже уставший, сказал» искали бы глагол почти по
+     *  всему куску и цепляли чужие слова. */
+    private fun hasSpeechVerb(s: String, dashIdx: Int, maxWords: Int): Boolean {
+        var j = dashIdx + 1
+        var words = 0
+        while (j < s.length && words < maxWords) {
+            while (j < s.length && !s[j].isLetterOrDigit()) j++
+            if (j >= s.length) break
+            val start = j
+            while (j < s.length && s[j].isLetterOrDigit()) j++
+            if (s.substring(start, j).lowercase() in SPEECH_VERBS) return true
+            words++
+        }
+        return false
+    }
+
+    /** Разрезать строку с прямой речью на куски для озвучки разными голосами.
+     *
+     *  Возвращает тексты кусков: реплики — с ведущим тире или в «кавычках» (их
+     *  распознает и отдаст голосу прямой речи [looksReplica]), слова автора —
+     *  уже без тире (их прочитает основной голос). null — резать не нужно:
+     *  обычный текст, реплика без слов автора или несколько реплик подряд
+     *  (голос у них и так один, лишняя граница только добавила бы паузу). */
+    fun splitSpeech(text: String): List<String>? {
+        if (text.isEmpty()) return null
+        var first = 0
+        while (first < text.length && text[first].isWhitespace()) first++
+        if (first >= text.length) return null
+
+        // Границы кусков: тире в начале строки или после знака конца куска;
+        // открывающая кавычка-ёлочка — в начале строки или после двоеточия
+        // («Иван сказал: «Привет»).
+        val cuts = ArrayList<Int>()
+        var i = first
+        var isStart = true
+        while (i < text.length) {
+            val c = text[i]
+            val isDash = c == '—' || c == '–' || c == '−'
+            val isQuote = c == '«'
+            if (isDash || isQuote) {
+                val prev = prevChar(text, i)
+                val boundary = if (isStart) {
+                    true
+                } else if (isDash) {
+                    prev != null && prev in AUTHOR_BOUNDARY_BEFORE
+                } else {
+                    prev != null && prev == ':'
+                }
+                if (boundary) cuts.add(i)
+            }
+            isStart = false
+            i++
+        }
+        if (cuts.isEmpty()) return null
+
+        val parts = ArrayList<String>()
+        val firstCut = cuts[0]
+        if (firstCut > first) {
+            val head = text.substring(first, firstCut).trim()
+            if (head.isNotEmpty()) parts.add(head)
+        }
+        for (k in cuts.indices) {
+            val from = cuts[k]
+            val to = if (k + 1 < cuts.size) cuts[k + 1] else text.length
+            val piece = text.substring(from, to).trim()
+            if (piece.isNotEmpty()) parts.add(piece)
+        }
+
+        // У слов автора срезаем ведущее тире; реплики и куски без тире оставляем.
+        var hasAuthor = false
+        val out = ArrayList<String>(parts.size)
+        for ((idx, p) in parts.withIndex()) {
+            var j = 0
+            while (j < p.length && p[j].isWhitespace()) j++
+            val dash = j < p.length && (p[j] == '—' || p[j] == '–' || p[j] == '−')
+            val quote = j < p.length && p[j] == '«'
+            // Первый кусок с тире — реплика всегда: иначе «— Сказал бы ты
+            // раньше» (реплика, начинающаяся с глагола речи) стала бы словами
+            // автора. Дальше кусок с тире — слова автора, если в первых словах
+            // есть глагол речи.
+            if (dash && idx > 0 && hasSpeechVerb(p, j, 4)) {
+                hasAuthor = true
+                out.add(p.substring(j + 1).trimStart())
+            } else if (!dash && !quote) {
+                // Кусок без тире и без кавычки — слова автора перед репликой
+                // («Иван сказал: — Привет»).
+                hasAuthor = true
+                out.add(p)
+            } else {
+                out.add(p)
+            }
+        }
+        return if (hasAuthor) out else null
     }
 }

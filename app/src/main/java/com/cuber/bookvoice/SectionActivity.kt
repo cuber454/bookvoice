@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.MotionEvent
 import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResult
@@ -103,6 +104,18 @@ abstract class SectionActivity : AppCompatActivity() {
         edgeToEdge(container)
         buildSection(intent)
 
+        // ТОЛЧОК У КРАЯ СПИСКА — всем окнам-секциям (09.10.2026). Окно собрано,
+        // ищем в нём то, что прокручивается, и вешаем наблюдателя. Имя для
+        // журнала берём у самого окна ([setTitle]): «Словарь», «Не засыпать»,
+        // «О программе». Короткий список промолчит сам — у него нет края.
+        if (edgeTickAuto) {
+            A11y.edgeVibrateAuto(
+                container,
+                title?.toString() ?: "окно",
+                watch = { w -> watchTouches(w) },
+            )
+        }
+
         // msg2233/2239: на Android 16 (targetSdk 36) системный «назад» уходит в
         // predictive-back диспетчер, и без явного callback системный default
         // МОЖЕТ закрыть окно сам, минуя onSectionBackKey (замечено в diag.log
@@ -163,6 +176,32 @@ abstract class SectionActivity : AppCompatActivity() {
 
     /** «Назад» на странице. True — обработано (окно дальше не пускает). */
     abstract fun onSectionBackKey(): Boolean
+
+    /** Вешаем ли толчок у края АВТОМАТИЧЕСКИ, по собранному окну (09.10.2026).
+     *  Окна, чья страница вешает его САМА (полка, каталог, настройки — им нужен
+     *  ещё и `handOff` догрузки страниц каталога), отвечают здесь «нет»: иначе
+     *  наш слушатель касаний перекрыл бы их собственный. */
+    protected open val edgeTickAuto: Boolean get() = true
+
+    /** Кто смотрит ВСЕ касания окна (09.10.2026). У касания ОДИН адресат: жест,
+     *  начавшийся на шапке окна или на нижних кнопках, до слушателя списка не
+     *  доходит вовсе — а Серж спрашивал ровно про это («с заголовка на первую
+     *  книгу не вибрирует», «и на нижних также сделал элементах?»). Поэтому окно
+     *  отдаёт свои касания тому, кто просит ([watchTouches]), а смотрим их в
+     *  [dispatchTouchEvent]: он проходит через ЛЮБУЮ ветку дерева и никому
+     *  события не отбирает. */
+    private var touchWatchers: Array<(MotionEvent) -> Unit> = emptyArray()
+
+    fun watchTouches(watcher: (MotionEvent) -> Unit) {
+        touchWatchers += watcher
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // Снимок ссылки: подписка во время жеста не сломает обход.
+        val ws = touchWatchers
+        for (i in ws.indices) ws[i](ev)
+        return super.dispatchTouchEvent(ev)
+    }
 
     /** Окно закрывается (полный выход из приложения) — страница снимает свои
      *  защиты. По умолчанию нечего снимать; полка и каталог переопределяют. */

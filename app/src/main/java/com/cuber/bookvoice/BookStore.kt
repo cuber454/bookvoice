@@ -53,15 +53,34 @@ data class BookRecord(
     // Своё название важнее метаданных из файла (title), те — важнее имени
     // файла. У ручного названия приоритет и оно не перезаписывается при чтении
     // файла: пишется в отдельное поле, title живёт своей жизнью.
+    // 09.10.2026: название из метаданных берём, только если оно похоже на название
+    // (см. [usableTitle]). У книги Сержа «Звонок для родителя» в title лежало
+    // «(=^..^=)» — полка показывала ЭТО, а годное имя файла пряталось за ним.
     val displayTitle: String
         get() = customTitle?.takeIf { it.isNotBlank() }
-            ?: title?.takeIf { it.isNotBlank() }
-            ?: name
+            ?: title?.takeIf { usableTitle(it) }
+            ?: fileTitle
+
+    /** Имя файла без расширения — запасное название строки полки: «.pdf» в
+     *  названии книги не нужно (скринридер читает его как отдельное слово). */
+    val fileTitle: String
+        get() = name.substringBeforeLast('.', name).trim().ifBlank { name }
 
     companion object {
         const val STATUS_NEW = 0
         const val STATUS_READING = 1
         const val STATUS_FINISHED = 2
+
+        /** Похоже ли название из метаданных файла на настоящее название. Требуем
+         *  минимум три буквы и половину знаков буквами или цифрами: служебные
+         *  строки сканов и PDF («(=^..^=)», «untitled», «Microsoft Word — 1»)
+         *  названиями не считаем — лучше имя файла, чем мусор. Те же правила, что
+         *  в `PdfParser.looksLikeTitle` (09.10.2026). */
+        fun usableTitle(t: String?): Boolean {
+            if (t.isNullOrBlank()) return false
+            if (t.count { it.isLetter() } < 3) return false
+            return t.count { it.isLetterOrDigit() } * 2 >= t.length
+        }
 
         fun fromJson(o: JSONObject) = BookRecord(
             uri = o.getString("uri"),
@@ -124,13 +143,37 @@ object BookStore {
     fun all(context: Context): List<BookRecord> {
         cache?.let { return it }
         val f = file(context)
-        val list = if (f.exists()) {
+        val loaded = if (f.exists()) {
             runCatching {
                 val arr = JSONArray(f.readText())
                 (0 until arr.length()).map { BookRecord.fromJson(arr.getJSONObject(it)) }
             }.getOrElse { emptyList() }
         } else {
             emptyList()
+        }
+        // 09.10.2026: чиним мусорные названия из метаданных, оставшиеся от старых
+        // версий. Записи реестра живут своей жизнью: новый разбор такой мусор уже
+        // не берёт, но у Сержа в title у «Звонка для родителя» лежало «(=^..^=)» и
+        // полка показывала его вместо названия. Чистим при чтении, файл
+        // переписываем один раз, в журнал пишем что и сколько.
+        var healed = 0
+        var sample: String? = null
+        val list = loaded.map { r ->
+            if (r.title != null && !BookRecord.usableTitle(r.title)) {
+                healed++
+                if (sample == null) sample = r.title
+                r.copy(title = null)
+            } else {
+                r
+            }
+        }
+        if (healed > 0) {
+            Diag.log(
+                "lib",
+                "мусорных названий из метаданных убрано: $healed " +
+                    "(например «${sample.orEmpty().take(40)}») — на полке будет имя файла",
+            )
+            save(context, list)
         }
         cache = list
         return list
@@ -347,7 +390,7 @@ object BookStore {
         list.forEach { r ->
             // Порядок как у displayTitle: своё название важнее метаданных.
             val t = r.customTitle?.takeIf { it.isNotBlank() }
-                ?: r.title?.takeIf { it.isNotBlank() }
+                ?: r.title?.takeIf { BookRecord.usableTitle(it) }
                 ?: return@forEach
             byTitle.getOrPut(normTitle(t)) { ArrayList() }.add(r)
         }

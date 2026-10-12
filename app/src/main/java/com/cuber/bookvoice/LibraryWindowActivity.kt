@@ -12,6 +12,11 @@ class LibraryWindowActivity : SectionActivity() {
 
     private val library = LibraryActivity(this)
 
+    /** Толчок у края полки вешает сама страница (`LibraryActivity`) — там же
+     *  живёт и «сколько строк в списке»: авто-подключение окна перекрыло бы её
+     *  слушатель касаний. */
+    override val edgeTickAuto: Boolean get() = false
+
     override fun buildSection(intent: android.content.Intent?) {
         // msg1739: имя окна-дома = «Библиотека», а не label приложения. При
         // холодном старте/возврате окно полки объявляет свой заголовок при

@@ -69,6 +69,10 @@ internal object ReaderEngine {
         fun onAnnounce(text: String)
         /** Обновить подпись скорости и статистику (после смены голоса/скорости). */
         fun onSpeedUiRefresh()
+        /** Книга дочитана до конца — спросить владельца, удалять ли её (07.10.2026).
+         *  У окна может не быть фокуса (экран погашен, чтение идёт без окна): тогда
+         *  вопрос ждёт возвращения в читалку, а не пропадает. */
+        fun onBookEndAsk() {}
     }
 
     @Volatile
@@ -81,10 +85,13 @@ internal object ReaderEngine {
     /** Версия приложения строкой — её пишем в журнал при каждом старте чтения.
      *  В шапке журнала [Diag.header] версия есть, но она одна на запуск и при
      *  длинном логе уезжает за обрезку: по присланному куску не видно, какая
-     *  сборка тестируется (вопрос Сергея, msg4424). */
+     *  сборка тестируется (вопрос Сергея, msg4424). Имя ПРОБНОЙ сборки
+     *  ([Diag.BUILD]) идёт рядом: versionCode у проб не меняется, и без него
+     *  сборку не опознать. */
     private val versionLabel: String by lazy {
-        runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?" }
+        val name = runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?" }
             .getOrDefault("?")
+        "$name проба ${Diag.BUILD}"
     }
     private val main = Handler(Looper.getMainLooper())
 
@@ -112,6 +119,35 @@ internal object ReaderEngine {
     // Нужно, чтобы после озвученной фразы переставить позицию ровно на столько
     // же предложений вперёд.
     private var spokenUnits = 1
+
+    /** 05.10.2026: следующую фразу читать одним предложением, без склейки —
+     *  ставится на ручном переходе ([goTo]) и снимается в [speakCurrent].
+     *  Зачем: после прыжка готового звука нет, а склеенная фраза пишется 3-4,5 с
+     *  (журнал Сержа 18:43) — короткая доспевает в разы быстрее. */
+    private var shortFirstPhrase = false
+
+    /** Фраза, которая читается СЕЙЧАС, укорочена (одно предложение, см.
+     *  [shortFirstPhrase]). Нужно [phraseStartAhead]: он считает, что читать
+     *  дальше, и обязан взять первый шаг таким же, как у самой фразы. Иначе
+     *  очередь заготовок считалась бы от позиции по обычной склейке и уезжала
+     *  вперёд: в журнале 21:03 заготовка «Скоро вдали показался паровозный
+     *  дымок…» прозвучала раньше своей очереди, и текст повторился. */
+    private var firstPhraseShort = false
+
+    /** Позиция той самой укороченной фразы ([firstPhraseShort]) — или -1.
+     *  07.10.2026: нужна [nextPhrasePos]. Укороченная фраза одна на переход, и
+     *  шаг от неё считается по её длине (одно предложение), а не по склейке:
+     *  без этого плеер, проверяя порядок очереди, ждал бы после неё не ту фразу
+     *  и держал бы готовый звук зря. */
+    private var shortPhrasePos = -1L
+
+    // 05.10.2026: одна фраза книги может состоять из нескольких кусков — когда
+    // прямая речь со словами автора режется на реплики (второй голос) и сами
+    // слова автора (основной голос). Куски читаются подряд, позиция книги при
+    // этом двигается только после последнего. Здесь лежат ещё не прочитанные
+    // куски текущей фразы и её позиция.
+    private var pendingFragments: List<String> = emptyList()
+    private var fragmentPos: Long = -1L
 
     // ——— Таймер сна (msg2567) ———
     // Живёт в движке, а не в окне: чтение «без окна» продолжается в фоне, и
@@ -335,7 +371,19 @@ internal object ReaderEngine {
         // 23.09.2026: фраза доиграла — разбираем, чья она: служебная «книга
         // прочитана» (у неё нет места в тексте) или очередная фраза книги.
         sp.onDone = { main.post { onPlayerDone() } }
-        sp.onNeedNext = { offset -> peekNextText(offset) }
+        // 08.10.2026: в журнал — каким порядком читаем. Прежнего пути больше нет
+        // (выключатель убран, когда новый отстоялся), но строка остаётся меткой:
+        // по ней видно, что сборка читает по единицам речи.
+        Diag.log(ctx, "sound", "порядок чтения: по единицам речи (ключ = место в книге + номер куска)")
+        // 05.10.2026 (журнал 22:43): движок перестал отвечать — движок плеера
+        // сам встаёт и зовёт нас: останавливаем чтение, оставляем место там, где
+        // кончился звук, и говорим об этом вслух (см. [onEngineSilent]).
+        sp.onEngineSilent = { pos -> main.post { onEngineSilent(pos) } }
+        sp.onNeedNext = { offset -> peekNextFragments(offset) }
+        // 07.10.2026: плееру нужен и «следующий адрес» фразы по позиции — им он
+        // проверяет порядок списка перед тем, как дописать заготовку (см.
+        // [nextPhrasePos] и SpeechPlayer.exoTopUp).
+        sp.onNeedAfter = { pos -> nextPhrasePos(pos) }
         sp.speed = prefs.getFloat(MainActivity.KEY_SPEED, 1f)
         sp.pitch = prefs.getFloat(MainActivity.KEY_PITCH, 1f)
         sp.volume = prefs.getFloat(MainActivity.KEY_VOLUME, 1f)
@@ -396,6 +444,8 @@ internal object ReaderEngine {
         // новой книгой, а сохраняется место прежней (глава 12, предл. 333).
         currentUri = null
         currentName = null
+        // Книги нет — и вопроса про неё тоже.
+        endAskUri = null
         // Книга закрыта — разбор возвращаем к общим знакам реплик (30.09.2026).
         ReplyMarks.apply(ctx, null)
         // msg2093: с книгой гасим и откат при старте — новое открытие перевооружит.
@@ -752,17 +802,48 @@ internal object ReaderEngine {
      *  Ждём готовности движка и списка его голосов: после смены движка голоса
      *  приезжают не сразу (msg3550), и без ожидания первая фраза ушла бы
      *  голосом по умолчанию. Пауза/закрытие книги во время ожидания отменяют
-     *  перезапуск — [playing] проверяем на каждом шаге. */
+     *  перезапуск — [playing] проверяем на каждом шаге.
+     *
+     *  07.10.2026, разбор журнала (жалоба Сержа «переключился на другой голос, а
+     *  она ещё дочитывает фразу старым»). Здесь стоял ранний выход по
+     *  `!playing`: на ПАУЗЕ заготовок и очереди уже нет, но остаётся звук
+     *  паузной фразы (keptPhrase) и кэш трёх сыгранных — оба сделаны прежним
+     *  голосом. Журнал: пауза 21:13:43 сохранила s_411.wav (kermen-ru-cis),
+     *  голос сменили на kseniya-ru в 21:14:05, продолжение в 21:14:08 сыграло
+     *  тот же файл и только через 6,6 с дошло до новой речи (21:14:15). ПРАВИЛО:
+     *  любой путь смены голоса или движка обязан выбросить ВСЁ, что записано
+     *  прежним голосом, — и когда чтение идёт, и когда оно стоит на паузе.
+     *  Откат — вернуть ранний выход `if (!playing || book == null) return`. */
     fun restartAfterSwitch() {
-        if (!playing || book == null) return
+        if (book == null) return
         whenVoicesReady {
             val p = player ?: return@whenVoicesReady
-            if (!playing || book == null) return@whenVoicesReady
+            if (book == null) return@whenVoicesReady
+            // Сначала чистка (она и в паузе нужна), потом перечитка: в паузе
+            // перечитывать нечего — продолжение закажет синтез заново.
             p.dropPrepared()
+            if (!playing) {
+                Diag.log(
+                    ctx, "sound",
+                    "смена голоса/движка на паузе — звук и заготовки прежнего голоса выброшены, " +
+                        "продолжение синтезирую заново"
+                )
+                return@whenVoicesReady
+            }
             Diag.log(ctx, "sound", "смена голоса/движка на ходу — перечитываю предложение заново")
             startSpeakingCurrent()
         }
     }
+
+    /** Сколько предложений занимает фраза, которая ЗВУЧИТ сейчас (0 — чтение
+     *  стоит, 1 — обычная фраза из одного предложения).
+     *
+     *  05.10.2026, жалоба Сержа «фразы повторяются, когда листаю»: склейка берёт
+     *  до [TIGHT_CHUNK_MAX_UNITS] предложений, а шаг вперёд был ровно на одно —
+     *  человек вставал в СЕРЕДИНУ звучащей фразы и слышал уже слышанное (журнал
+     *  18:53: «Тяжело! Тоска!» прозвучало дважды). Шаг вперёд обязан идти за конец
+     *  звучащей фразы — сколько бы предложений в ней ни было. */
+    fun playingPhraseUnits(): Int = if (playing) spokenUnits.coerceAtLeast(1) else 0
 
     /** Позвать [block], когда движок поднялся и отдал список своих голосов
      *  (msg5622). Список приезжает позже init, а публичного «список готов» в SDK
@@ -927,13 +1008,20 @@ internal object ReaderEngine {
         if (want != null && want != voiceName) return
         val (ch, s) = startPlace()
         if (book?.chapters?.getOrNull(ch)?.sentences.isNullOrEmpty()) return
-        val t = chunkText(ch, s, chunkSpan(ch, s)) ?: return
-        p.prewarm(t)
+        val raw = chunkText(ch, s, spanAt(ch, s, first = true)) ?: return
+        val first = Roles.splitSpeech(raw)?.firstOrNull() ?: raw
+        p.prewarm(first, ch * 1_000_000L + s)
     }
 
     /** Начать чтение с текущей позиции (см. исходный startSpeakingCurrent в
-     *  MainActivity). Держим открытым — окно зовёт его по жесту «повторить». */
-    fun startSpeakingCurrent() {
+     *  MainActivity). Держим открытым — окно зовёт его по жесту «повторить».
+     *
+     *  [userAsked] — чтение начала сама читалка по ходу книги (false) или фразу
+     *  попросил человек (true: «повторить», шаг назад, прыжок, продолжение после
+     *  паузы, смена голоса). Различие важно плееру: по ходу книги единица речи
+     *  звучит ОДИН раз за проход, а по просьбе человека — повторяем, и звук для
+     *  этого берём из кэша сыгранных (08.10.2026, см. [SpeechPlayer.speak]). */
+    fun startSpeakingCurrent(userAsked: Boolean = true) {
         val bk = book ?: return
         val p = player ?: return
         // Читатель снова взялся за книгу — незачем говорить «книга прочитана»
@@ -991,7 +1079,13 @@ internal object ReaderEngine {
         applyReplySettings(p)
         p.prepareReplyEngine()
         logChapterStats()
-        speakCurrent()
+        // 06.10.2026: принудительный способ чтения из опытных настроек
+        // ([ExpertPrefs.forceMode]) читаем ЗДЕСЬ — на старте чтения. Ручку меняют
+        // в другом окне, а плеер живёт дольше одной книги, поэтому решение надо
+        // обновлять; на ходу путь не меняем — это обрыв звука (см.
+        // [SpeechPlayer.applyForceMode]).
+        p.applyForceMode()
+        speakCurrent(userAsked)
         pushPlayState()
     }
 
@@ -1037,16 +1131,37 @@ internal object ReaderEngine {
         return if (title == text.trim()) text else "$title. $text"
     }
 
-    private fun speakCurrent() {
-        spokenUnits = chunkSpan(chapterIdx, sentenceIdx)
-        var t = dictText(chunkText(chapterIdx, sentenceIdx, spokenUnits))
+    private fun speakCurrent(userAsked: Boolean = true) {
+        // 05.10.2026: первую фразу после ручного перехода (прыжка) читаем КОРОТКИМ
+        // куском — одним предложением (флаг ставит [goTo]). Склейка берёт до
+        // четырёх предложений и до 220 знаков, а движок пишет примерно 15 мс на
+        // знак: длинная фраза после прыжка — это 3-4,5 с тишины. Одно предложение
+        // доспевает в разы быстрее, звук идёт почти сразу, а следующие предложения
+        // читаются дальше обычной склейкой.
+        // 07.10.2026 (жалоба Сержа «фразы повторяются», разбор журнала): СНАЧАЛА
+        // берём флаг, потом считаем длину фразы. Было наоборот — [spanAt] читал
+        // СТАРОЕ значение поля, то есть флаг «укоротить» доставался не той фразе,
+        // для которой его ставили, а следующей. И тут же расходились два счёта:
+        // читалка считала фразу одной длины, а заготовка впрок ([phraseStartAhead],
+        // он берёт флаг уже новым) — другой. В журнале 00:35-00:36 это видно как
+        // «фраза собрана: предл. 10» (одно предложение) при файле s_180 на ТРИ
+        // предложения: файл звучал целиком, чтение двигалось на одно — и то же
+        // предложение позже читалось снова.
+        firstPhraseShort = shortFirstPhrase
+        shortFirstPhrase = false
+        val span = spanAt(chapterIdx, sentenceIdx, first = true)
+        // Запоминаем для [phraseStartAhead]: он считает, что читать дальше, и
+        // первый шаг обязан совпасть с этой фразой (иначе очередь заготовок
+        // уезжает вперёд, и текст повторяется — журнал 21:03).
+        spokenUnits = span
+        var frags = voicedFragments(chapterIdx, sentenceIdx, spokenUnits)
         // msg4426: фраза из одних знаков (в книге «‹…›» — маркер пропуска) — для
         // движка пустой звук: он отдаёт файл в 44 байта, а мы всё равно тратим
         // цикл плеера и слышим паузу в четверть секунды. Пропускаем такие
         // фразы, не отдавая их движку вовсе. Ограничитель — чтобы битый текст
         // или дыра в разборе не гоняли нас по кругу.
         var guard = 0
-        while (t == null && guard++ < 8) {
+        while (frags.isEmpty() && guard++ < 8) {
             val atCh = chapterIdx
             val atS = sentenceIdx
             val raw = chunkText(atCh, atS, spokenUnits)
@@ -1058,8 +1173,8 @@ internal object ReaderEngine {
                 if (finished) scheduleBookEnd()
                 return
             }
-            spokenUnits = chunkSpan(chapterIdx, sentenceIdx)
-            t = dictText(chunkText(chapterIdx, sentenceIdx, spokenUnits))
+            spokenUnits = spanAt(chapterIdx, sentenceIdx)
+            frags = voicedFragments(chapterIdx, sentenceIdx, spokenUnits)
             // 30.09.2026: пишем, ПОЧЕМУ фраза не прозвучала. Без этой строки
             // «убрал строку правилом — а она всё равно читается / пропала» не
             // разобрать: у словаря свой выключатель, у правила — своя книга.
@@ -1072,7 +1187,16 @@ internal object ReaderEngine {
                 },
             )
         }
-        if (t == null) return
+        if (frags.isEmpty()) return
+        // 07.10.2026: БЫСТРЫЙ СТАРТ. Первая фраза после перехода и так короткая
+        // (одно предложение, см. [shortFirstPhrase]), но предложение бывает и в
+        // двести знаков: движок пишет его секунды три-четыре, и всё это время
+        // человек слышит тишину. Если по замеру движка (см.
+        // [SpeechPlayer.estimateSynthMs]) первая фраза выйдет дольше
+        // [FIRST_CUT_MS], режем её по первой подходящей запятой: голова звучит
+        // почти сразу, а хвост движок пишет, пока она играет (его заказывает
+        // [SpeechPlayer.prefetchRest] — как второй кусок реплики).
+        frags = cutFirstForStart(frags)
         // 30.09.2026: в журнал — ДЛЯ КАКОГО предложения собрана фраза и с чего она
         // начинается. Без этой строки не разобрать жалобу «фраза прозвучала дважды»
         // и «похожие фразы не в том порядке»: у плеера видно имя файла и текст, а к
@@ -1081,10 +1205,110 @@ internal object ReaderEngine {
             ctx, "sound",
             "фраза собрана: глава $chapterIdx, предл. $sentenceIdx" +
                 (if (spokenUnits > 1) "…${sentenceIdx + spokenUnits - 1}" else "") +
-                " «${t.replace(Regex("\\s+"), " ").take(40)}»"
+                " «${frags.joinToString(" / ") { it.replace(Regex("\\s+"), " ").take(40) }}»"
         )
-        player?.speak(t)
+        pendingFragments = frags.drop(1)
+        fragmentPos = chapterIdx * 1_000_000L + sentenceIdx
+        // Укороченная фраза — эта (см. [shortPhrasePos]).
+        shortPhrasePos = if (firstPhraseShort) fragmentPos else -1L
+        player?.speak(frags.first(), fragmentPos, userAsked)
+        // 05.10.2026: остальные куски (реплики после слов автора) заказываем
+        // сразу, а не когда первый кусок доиграет — иначе реплика синтезируется
+        // поздно и встаёт в конец очереди (за уже заготовленными следующими
+        // фразами), и прямая речь пропускается или звучит не на месте.
+        if (pendingFragments.isNotEmpty()) {
+            player?.prefetchRest(pendingFragments, fragmentPos)
+        }
     }
+
+    /** Озвучиваемые куски фразы (ch, s, n): после разрезания прямой речи на
+     *  реплики и слова автора и после словаря произношения. Пусто — произносить
+     *  нечего (одни знаки, или словарь убрал всё). */
+    private fun voicedFragments(ch: Int, s: Int, n: Int): List<String> {
+        val raw = chunkText(ch, s, n) ?: return emptyList()
+        val parts = Roles.splitSpeech(raw) ?: listOf(raw)
+        return parts.mapNotNull { dictText(it) }
+    }
+
+    /** БЫСТРЫЙ СТАРТ: разрезать первую фразу по запятой (07.10.2026, просьба
+     *  Сержа — пятый пункт списка «что взять у MyTTS»; вопрос был «а оно будет
+     *  быстрее стартовать?», ответ — да, но не всегда).
+     *
+     *  Когда это помогает. Первая фраза после перехода и так короткая — одно
+     *  предложение ([shortFirstPhrase]), но предложение бывает и в двести знаков:
+     *  у MyTTS это ~16 мс на знак, то есть три с половиной секунды тишины перед
+     *  первым звуком; кусок до первой запятой доспевает за секунду. Считаем по
+     *  замеру самого движка ([SpeechPlayer.estimateSynthMs]) и режем только если
+     *  выходит дольше [FIRST_CUT_MS].
+     *
+     *  Когда не помогает и потому не делаем: у ХОЛОДНОГО движка (после запуска или
+     *  смены голоса) тишину съедает его подготовка, а не длина; и у MyTTS резать
+     *  там даже вредно — он готовит текст по фрагментам, и разрезанное предложение
+     *  станет двумя фрагментами с двумя подготовками.
+     *
+     *  Голова и хвост — куски ОДНОЙ фразы ([ReaderEngine.pendingFragments]): хвост
+     *  звучит сразу за головой, позиция книги двигается только после него, а
+     *  заказывается он заранее (см. [SpeechPlayer.prefetchRest]). Хвосту
+     *  возвращаем знак реплики, иначе он перестал бы быть репликой и зазвучал
+     *  другим голосом (на этих граблях уже стояли в сборке 209). */
+    private fun cutFirstForStart(frags: List<String>): List<String> {
+        if (!firstPhraseShort) return frags
+        val head = frags.firstOrNull() ?: return frags
+        val p = player ?: return frags
+        if (p.estimateSynthMs(head) <= FIRST_CUT_MS) return frags
+        val at = commaForStart(head) ?: return frags
+        val cut = head.substring(0, at + 1).trim()
+        val tail = head.substring(at + 1).trim()
+        if (cut.isEmpty() || tail.isEmpty()) return frags
+        val mark = roleMarkOf(head)
+        val tailText = if (mark.isNullOrEmpty()) tail else "$mark $tail"
+        Diag.log(
+            ctx, "sound",
+            "быстрый старт: первая фраза разрезана по запятой (по замеру движка " +
+                "${p.estimateSynthMs(head)} мс) — " +
+                "«${cut.replace(Regex("\\s+"), " ").take(40)}» / " +
+                "«${tailText.replace(Regex("\\s+"), " ").take(40)}»"
+        )
+        return listOf(cut, tailText) + frags.drop(1)
+    }
+
+    /** Где резать: первая запятая, при которой голова не короче
+     *  [FIRST_CUT_HEAD_PERCENT] от хвоста. Иначе вышло бы хуже, чем было: голова
+     *  доиграет за полсекунды, а хвост ещё пишется — та же тишина, только посреди
+     *  фразы. null — подходящей запятой нет, фразу не трогаем. */
+    private fun commaForStart(text: String): Int? {
+        var from = 0
+        while (true) {
+            val at = text.indexOf(',', from)
+            if (at < 0) return null
+            val headLen = at + 1
+            val tailLen = text.length - headLen
+            if (tailLen <= 0) return null
+            if (headLen * 100 >= tailLen * FIRST_CUT_HEAD_PERCENT) return at
+            from = at + 1
+        }
+    }
+
+    /** Знак реплики в начале текста (длинное тире или свой знак из настроек) —
+     *  им помечаем хвост, чтобы он читался тем же голосом. */
+    private fun roleMarkOf(text: String): String? {
+        val t = text.trimStart()
+        if (t.isEmpty()) return null
+        if (t[0] == '—' || t[0] == '–' || t[0] == '−') return t.substring(0, 1)
+        for (m in Roles.ownMarks) {
+            if (m.isNotEmpty() && t.startsWith(m, ignoreCase = true)) return m
+        }
+        return null
+    }
+
+    /** Быстрый старт: с какого расчётного времени синтеза режем первую фразу по
+     *  запятой (см. [cutFirstForStart]). 2,5 с — уже заметная тишина; короче
+     *  резать незачем, целое предложение звучит ровнее. */
+    private const val FIRST_CUT_MS = 2_500L
+
+    /** Голова не короче этой доли от хвоста (в процентах): иначе хвост не успеет
+     *  доспеть, пока голова играет (см. [commaForStart]). */
+    private const val FIRST_CUT_HEAD_PERCENT = 35
 
     // ——— Короткие паузы: склейка соседних предложений (msg4416) ———
     // Просьба тестера @Spartach72: паузы между предложениями. Обрезка тишины по
@@ -1100,6 +1324,32 @@ internal object ReaderEngine {
      *  синтезатор читает хуже, а пауза и прыжок посреди неё откатывают её целиком. */
     private const val TIGHT_CHUNK_MAX = 220
     private const val TIGHT_CHUNK_MAX_UNITS = 4
+
+    /** Сколько предложений берём в одну фразу на позиции (ch, s).
+     *
+     *  Одно предложение — в двух случаях: первая фраза после ручного перехода
+     *  ([firstPhraseShort], см. [speakCurrent]) и ЛЮБАЯ фраза у медленного голоса
+     *  (просьба Сержа 06.10.2026: «сделай чтобы по одному предложению, чтобы
+     *  паузы были поменьше»). У сетевого голоса MultiTTS первая фраза в 166
+     *  знаков зазвучала только через 15,3 с — это время его сборки; одно
+     *  предложение собирается в разы быстрее, поэтому и пауза короче.
+     *
+     *  ВАЖНО: длину фразы считают ЧЕТЫРЕ места, и все они обязаны звать эту
+     *  функцию, иначе очередь заготовок разойдётся с чтением и текст повторится
+     *  (грабли сборок 240, 242 и 243): [speakCurrent], [phraseStartAhead],
+     *  [speakablePhrase] и [peekNextFragments]. Первая фраза после перехода
+     *  отличается от остальных, поэтому у неё отдельный флаг [first].
+     *
+     *  ОТКАТ (Серж, 06.10.2026: «пометишь, что мы сейчас фразы эти короткие, если
+     *  будет плохо — тогда вернём»). Возврат к прежнему поведению — убрать
+     *  строку `player?.readsSlowly == true -> 1`: у медленного голоса снова
+     *  заработает обычная склейка до четырёх предложений, и всё остальное
+     *  останется как есть. Больше ничего трогать не нужно. */
+    private fun spanAt(ch: Int, s: Int, first: Boolean = false): Int = when {
+        first && firstPhraseShort -> 1
+        player?.readsSlowly == true -> 1
+        else -> chunkSpan(ch, s)
+    }
 
     /** Сколько предложений с [s] уйдёт в движок одной фразой. Склейка коротких
      *  фраз включена всегда (msg5254: галочка убрана). Без побочных эффектов:
@@ -1171,7 +1421,7 @@ internal object ReaderEngine {
      *  те, что чтение пропустит, — а пропускает оно две породы: фразы из одних
      *  знаков (маркер пропуска «‹…›») и фразы, убранные словарём произношения
      *  (правило с пустой заменой). Из-за этого очередь заготовок спотыкалась:
-     *  как только очередная фраза вперёд оказывалась пропускаемой, [peekNextText]
+     *  как только очередная фраза вперёд оказывалась пропускаемой, [peekNextFragments]
      *  отвечал null, [SpeechPlayer.requestPrefetch] ничего не заказывал, и
      *  очередь так и стояла на глубине 1 из 3. В журнале Сержа это видно
      *  строками «заготовка готова … в очереди 1/3» у каждой фразы, а с медленным
@@ -1186,10 +1436,16 @@ internal object ReaderEngine {
         var left = offset.coerceAtLeast(1)
         // Ограничитель на случай битого разбора: лучше вернуть null, чем крутиться.
         var guard = 0
+        // Первый шаг считаем так же, как сама читаемая фраза: после перехода она
+        // бывает укороченной ([firstPhraseShort]) — одно предложение. Пересчёт от
+        // позиции по обычной склейке увёл бы очередь заготовок вперёд, и текст
+        // повторился бы (журнал 21:03: «Скоро вдали показался паровозный дымок…»).
+        var first = true
         while (guard++ < 128) {
             val cur = bk.chapters.getOrNull(ch)?.sentences ?: return null
             if (cur.isEmpty()) return null
-            s += chunkSpan(ch, s)
+            s += spanAt(ch, s, first = first)
+            first = false
             if (s >= cur.size) {
                 ch++
                 s = 0
@@ -1215,14 +1471,77 @@ internal object ReaderEngine {
     /** Прозвучит ли фраза с позиции (ch, s): словарь её не убрал и в ней есть что
      *  произносить. То же правило, по которому [speakCurrent] пропускает фразу. */
     private fun speakablePhrase(ch: Int, s: Int): Boolean =
-        dictText(chunkText(ch, s, chunkSpan(ch, s))) != null
+        dictText(chunkText(ch, s, spanAt(ch, s))) != null
 
-    /** Текст фразы через [offset] вперёд — без побочных эффектов (не двигает
+    /** Все куски фразы через [offset] вперёд — без побочных эффектов (не двигает
      *  позицию). Для упреждающего синтеза плеера (msg4472: он держит очередь
-     *  заготовок и спрашивает не только следующую фразу). */
-    private fun peekNextText(offset: Int): String? {
+     *  заготовок и спрашивает не только следующую фразу). 05.10.2026: отдаём
+     *  ВСЕ куски фразы, а не только первый: прямая речь режется на реплики и
+     *  слова автора, и реплика обязана быть готова и стоять в очереди сразу за
+     *  своим авторским куском — иначе она заказывается поздно, когда авторский
+     *  кусок уже доиграл, и уходит в конец очереди (жалоба «второй синтезатор
+     *  не читает прямую речь, фраза пропускается»).
+     *
+     *  08.10.2026: третье значение — НОМЕР КУСКА (см. [Units.key]). Номер считаем
+     *  по ПРОИЗНОСИМЫМ кускам, по порядку: ровно так же нумерует сама читалка,
+     *  когда говорит фразу ([speakCurrent] и [SpeechPlayer.prefetchRest]). Если
+     *  словарь убрал кусок, номера остальных сдвигаются — иначе ключ заготовки и
+     *  ключ просьбы чтения разошлись бы, и файл не нашёл бы своё место. */
+    private fun peekNextFragments(offset: Int): List<Triple<String, Long, Int>>? {
         val p = phraseStartAhead(offset) ?: return null
-        return dictText(chunkText(p.first, p.second, chunkSpan(p.first, p.second)))
+        val raw = chunkText(p.first, p.second, spanAt(p.first, p.second)) ?: return null
+        val parts = Roles.splitSpeech(raw) ?: listOf(raw)
+        val pos = p.first * 1_000_000L + p.second
+        val out = ArrayList<Triple<String, Long, Int>>(parts.size)
+        for (part in parts) {
+            val t = dictText(part) ?: continue
+            if (t.isBlank()) continue
+            out.add(Triple(t, pos, out.size))
+        }
+        return if (out.isEmpty()) null else out
+    }
+
+    /** Стартовая позиция фразы, которая прозвучит сразу ПОСЛЕ позиции [pos] —
+     *  или null, если книга кончилась (07.10.2026).
+     *
+     *  Зачем это плееру. Он держит список фраз у ExoPlayer и дописывает туда
+     *  заготовки вперёд. Порядок в списке — это порядок звука, а не порядок
+     *  готовности, поэтому список обязан идти по книге. Проверить это можно
+     *  только здесь: длину фразы знает читалка (склейка коротких предложений,
+     *  укороченная первая фраза после перехода, словарь, роли), и она же одна
+     *  знает, что дальше. Жалоба Сержа 07.10.2026 «фразы повторяются» — как раз
+     *  про файл, который встал в список через одну фразу: он звучал раньше
+     *  очереди, чтение считало фразы по «доиграла» и уезжало, а потом та же
+     *  фраза заказывалась и звучала второй раз. */
+    fun nextPhrasePos(pos: Long): Long? {
+        val bk = book ?: return null
+        if (pos < 0) return null
+        var ch = (pos / 1_000_000L).toInt()
+        var s = (pos % 1_000_000L).toInt()
+        if (bk.chapters.getOrNull(ch)?.sentences?.getOrNull(s) == null) return null
+        // Первый шаг — такой же, как у самой фразы: укороченная после перехода
+        // читается одним предложением ([shortPhrasePos]).
+        var first = pos == shortPhrasePos
+        var guard = 0
+        while (guard++ < 128) {
+            val cur = bk.chapters.getOrNull(ch)?.sentences ?: return null
+            if (cur.isEmpty()) return null
+            s += spanAt(ch, s, first = first)
+            first = false
+            if (s >= cur.size) {
+                ch++
+                s = 0
+                if (ch >= bk.chapters.size) return null
+            }
+            if (!speakablePhrase(ch, s)) continue
+            // За границу выделенного куска (#106) и за главу с таймером сна
+            // «до конца главы» фраз впрок не готовят — и в список их не берут.
+            val re = rangeEnd
+            if (re != null && (ch > re.chapter || (ch == re.chapter && s >= re.sentence))) return null
+            if (sleepMode == SLEEP_CHAPTER && ch != chapterIdx) return null
+            return ch * 1_000_000L + s
+        }
+        return null
     }
 
     /** Книга для словаря: по ней он считает, сколько раз встречается искомое. */
@@ -1271,6 +1590,10 @@ internal object ReaderEngine {
         // правило выкинуло строку-источник вроде «1995 (с лекций МГУ)»). Отдаём
         // null — чтение пропустит её и пойдёт дальше, а не замолчит на месте
         // (та же ветка, что у фраз из одних знаков).
+        //
+        // 06.10.2026: правки текста из списка RuVoice (ссылки, скобки, знаки
+        // именем) написали и ОТЛОЖИЛИ — Серж: «давай отложим эти правки на потом».
+        // Разбор и решение, где будет галочка, — docs/BACKLOG.md, раздел про RuVoice.
         return trimForeignDash(Dict.apply(ctx, src, engine, book)).ifBlank { null }
     }
 
@@ -1292,6 +1615,17 @@ internal object ReaderEngine {
             stopAtEnd()
             return
         }
+        // 05.10.2026: у фразы могли остаться не прочитанные куски (слова автора
+        // или продолжение реплики) — читаем следующий кусок той же позиции, не
+        // двигая место в книге.
+        if (pendingFragments.isNotEmpty()) {
+            val next = pendingFragments.first()
+            pendingFragments = pendingFragments.drop(1)
+            // Куски одной фразы — это просьба самой читалки, а не человека:
+            // повтор по ходу книги плеер гасит (см. [SpeechPlayer.speak]).
+            player?.speak(next, fragmentPos, userAsked = false)
+            return
+        }
         if (!advanceUnits(spokenUnits)) {
             // Конец книги — не то же самое, что «чтение встало»: сюда же
             // приходят таймер сна «до конца главы» и конец выделенного куска
@@ -1301,17 +1635,105 @@ internal object ReaderEngine {
             if (finished) scheduleBookEnd()
             return
         }
-        startSpeakingCurrent()
+        // Шаг по книге делает сама читалка — это не просьба человека.
+        startSpeakingCurrent(userAsked = false)
     }
 
+    /** Сколько раз подряд пришёл конец «чужой» единицы речи. Дальше трёх раз не
+     *  упираемся: пусть лучше место двинется, чем чтение встанет насовсем. */
+    private var foreignDone = 0
+
     /** Фраза доиграла: [onUtteranceDone] — про фразы книги, а служебное
-     *  «книга прочитана» живёт своей жизнью и позиции в тексте не имеет. */
+     *  «книга прочитана» живёт своей жизнью и позиции в тексте не имеет.
+     *
+     *  08.10.2026 (жалоба Сержа «два раза какая-то фраза повторялась», журнал
+     *  21:43 и 12:45). Плеер вместе с сигналом присылает, КАКАЯ единица речи
+     *  доиграла: место в книге и номер куска. Раньше чтение двигало место на
+     *  любом «доиграла», и конец файла, прозвучавшего не в свою очередь, уводил
+     *  его вперёд: чтение просило фразу, которая уже прозвучала, кэш сыгранных
+     *  отдавал её звук — повтор слышался мгновенно. Теперь место двигается
+     *  только по СВОЕЙ единице, а если звук ушёл вперёд — чтение подтягивается к
+     *  тому, что реально звучит.
+     *
+     *  Выключатель «Прежний порядок чтения» в опытных настройках возвращает
+     *  прежнее поведение. */
     private fun onPlayerDone() {
         if (endAnnounceSpeaking) {
             finishEndAnnounce()
             return
         }
-        if (playing) onUtteranceDone()
+        if (!playing) return
+        val sp = player
+        if (sp != null) {
+            val donePos = sp.lastDonePos
+            val doneLast = sp.lastDoneLast
+            when {
+                donePos < 0 -> foreignDone = 0
+                donePos == fragmentPos -> {
+                    if (!doneLast && pendingFragments.isEmpty()) {
+                        // Кусок не последний, а других кусков чтение не ждёт:
+                        // значит прозвучал файл из середины чужой фразы.
+                        foreignDone++
+                        Diag.log(
+                            ctx, "sound",
+                            "указатель: кусок ${posLabel(donePos)} не последний, своих кусков " +
+                                "чтение не ждёт — место в книге не двигаю (раз $foreignDone)"
+                        )
+                        if (foreignDone < 3) return
+                    } else {
+                        foreignDone = 0
+                    }
+                }
+                donePos < fragmentPos -> {
+                    // Хвост прежней фразы или запоздавший кусок: двигать место
+                    // нечем. Пишем один раз, чтобы не забивать журнал.
+                    if (foreignDone == 0) {
+                        Diag.log(
+                            ctx, "sound",
+                            "указатель: доиграла прежняя единица ${posLabel(donePos)}, " +
+                                "ждём ${posLabel(fragmentPos)} — место не двигаю"
+                        )
+                    }
+                    foreignDone++
+                    return
+                }
+                else -> {
+                    // ЗВУК УШЁЛ ВПЕРЁД нашего места. Раньше чтение двигалось на
+                    // одно предложение и просило уже прозвучавшее (повтор). Теперь
+                    // подтягиваем место к тому, что реально звучит.
+                    foreignDone++
+                    Diag.log(
+                        ctx, "sound",
+                        "указатель: звук ушёл вперёд — читалка стояла на ${posLabel(fragmentPos)}, " +
+                            "доиграла ${posLabel(donePos)}; подтягиваю место к звуку"
+                    )
+                    catchUpTo(donePos)
+                }
+            }
+        }
+        onUtteranceDone()
+    }
+
+    /** Место в книге словами — для журнала. Номера те же, что в «старт чтения»
+     *  («глава $chapterIdx»), — единицу НЕ прибавлять: иначе строки журнала
+     *  расходятся между собой и разбор путается. */
+    private fun posLabel(pos: Long): String =
+        if (pos < 0) "без места" else "глава ${pos / 1_000_000L}, предл. ${pos % 1_000_000L}"
+
+    /** Подтянуть чтение к тому месту, которое реально звучит: звук обогнал
+     *  указатель (см. [onPlayerDone]). Место ставим на доигравшую единицу, а
+     *  следующий шаг чтения уйдёт уже за неё. */
+    private fun catchUpTo(pos: Long) {
+        if (pos < 0) return
+        val ch = (pos / 1_000_000L).toInt()
+        val s = (pos % 1_000_000L).toInt()
+        if (book?.chapters?.getOrNull(ch)?.sentences?.getOrNull(s) == null) return
+        chapterIdx = ch
+        sentenceIdx = s
+        fragmentPos = pos
+        spokenUnits = spanAt(ch, s).coerceAtLeast(1)
+        pendingFragments = emptyList()
+        host?.onShowCurrent()
     }
 
     // ——— «Книга прочитана» (23.09.2026, просьба Сергея) ———
@@ -1350,6 +1772,12 @@ internal object ReaderEngine {
         // полку обновит строку сам (refreshRowsInPlace, msg4356) — в строке
         // появится «дочитана» и сто процентов.
         markBookFinished()
+        // 07.10.2026 (просьба Сержа): дочитанную книгу предлагаем удалить —
+        // «книга прочитана, удалить вместе с файлом или нет». Вопрос задаём
+        // ПОСЛЕ фразы «книга прочитана», иначе диктор и голос чтения говорили бы
+        // разом. Здесь только вооружаем: показывать будет окно, когда оно на
+        // экране (см. [endAskUri] и [Host.onBookEndAsk]).
+        armEndAsk()
         if (endAnnouncePending || endAnnounceSpeaking) return
         endAnnouncePending = true
         Diag.log(
@@ -1374,6 +1802,7 @@ internal object ReaderEngine {
         val p = player
         if (p == null || !p.isReady) {
             Diag.log(ctx, "activity", "«книга прочитана»: движок не готов — молчу")
+            askDeleteAtEnd()
             return
         }
         // Чтение к этому моменту уже отпустило фокус и процессор (stopAtEnd),
@@ -1389,11 +1818,66 @@ internal object ReaderEngine {
         endAnnounceSpeaking = false
         KeepAwake.release()
         dropAudioFocus()
+        // Фраза отзвучала целиком — только теперь спрашиваем про удаление: два
+        // голоса разом (наш и диктор, читающий окно) сливаются в кашу.
+        askDeleteAtEnd()
+    }
+
+    // ——— «Книга дочитана — удалить?» (07.10.2026, просьба Сержа) ———
+
+    /** Адрес книги, о которой ждём ответа. Задаём вопрос только у книги с полки:
+     *  у той, что открыта ссылкой из чужого проводника, удалять нечего.
+     *
+     *  Показываем вопрос в живом окне читалки: с погашенным экраном его читать
+     *  некому, поэтому он ЖДЁТ возвращения окна (см. [Host.onBookEndAsk]), а не
+     *  пропадает. Любой ответ снимает вопрос ([endAskDone]). */
+    private var endAskUri: String? = null
+
+    /** Галочка «спрашивать про удаление дочитанной книги» (07.10.2026, просьба
+     *  Сержа: «надо, чтобы этот диалог включать и выключать»). Живёт в
+     *  Настройках → «Библиотека», читается КАЖДЫЙ раз на конце книги: выключил —
+     *  следующий конец книги уже молчит, перезапускать ничего не надо. */
+    const val KEY_ASK_DELETE_END = "ask_delete_finished"
+    const val ASK_DELETE_END_DEFAULT = true
+
+    private fun armEndAsk() {
+        if (!prefs.getBoolean(KEY_ASK_DELETE_END, ASK_DELETE_END_DEFAULT)) return
+        val u = currentUri ?: return
+        if (BookStore.byUri(ctx, u) == null) return
+        endAskUri = u
+        Diag.log(ctx, "activity", "книга дочитана — жду ответа: удалить её или оставить")
+    }
+
+    private fun askDeleteAtEnd() {
+        if (endAskUri == null) return
+        // Окна нет (чтение без окна) — вопрос останется ждать: следующее открытие
+        // читалки спросит само (MainActivity.maybeShowEndAsk).
+        host?.onBookEndAsk()
+    }
+
+    /** Книга, о которой надо спросить (null — вопроса нет). Заодно снимаем
+     *  вопрос, если за это время открыли другую книгу: спрашивать про прошлую
+     *  поверх новой — только путать. */
+    fun endAskRecord(): BookRecord? {
+        val u = endAskUri ?: return null
+        if (u != currentUri) {
+            endAskUri = null
+            return null
+        }
+        return BookStore.byUri(ctx, u)
+    }
+
+    /** Ответ получен (удалили или оставили) — вопроса больше нет. */
+    fun endAskDone() {
+        endAskUri = null
     }
 
     /** Отменить несказанное (или оборвать звучащее): читатель снова взялся за
      *  книгу — нажал «читать», перешёл по главе, закрыл читалку, поставил паузу. */
     private fun cancelEndAnnounce() {
+        // Читатель снова взялся за книгу — вопрос «книга прочитана, удалить?»
+        // тоже снимаем: книгу он явно оставляет себе.
+        endAskUri = null
         if (!endAnnouncePending && !endAnnounceSpeaking) return
         endAnnouncePending = false
         main.removeCallbacks(endAnnounceRunnable)
@@ -1522,6 +2006,42 @@ internal object ReaderEngine {
         // msg1119: пауза — ключевой момент, позицию фиксируем сразу.
         savePosition()
         pushPlayState()
+    }
+
+    /** Движок перестал отвечать: чтение встало, но и вперёд не идёт.
+     *
+     *  05.10.2026, журнал 22:43 (жалоба Сержа: «книжка очень быстро побежала
+     *  вперёд»). Заглючивший TeraTTS на КАЖДУЮ заявку отвечал «готово», файла не
+     *  писал, а прямая речь отвечала отказом. Мы каждую такую фразу молча
+     *  пропускали и шли к следующей: за 9 секунд чтение ушло с главы 6 на главу
+     *  21 — тысячи фраз, 530 КБ журнала, ни звука и ни слова человеку. Теперь
+     *  плеер считает такие фразы подряд (см. `SpeechPlayer.noteSilentPhrase`) и,
+     *  если их подряд слишком много, зовёт нас с позицией, где звук кончился.
+     *  Здесь мы возвращаем место чтения туда, останавливаемся и говорим. */
+    private fun onEngineSilent(pos: Long) {
+        val bk = book
+        val wasChapter = chapterIdx
+        if (bk != null && pos > 0L) {
+            val ch = (pos / 1_000_000L).toInt().coerceIn(0, bk.chapters.lastIndex)
+            val cur = bk.chapters[ch].sentences
+            chapterIdx = ch
+            sentenceIdx = (pos % 1_000_000L).toInt().coerceIn(0, cur.lastIndex.coerceAtLeast(0))
+        }
+        Diag.log(
+            ctx, "activity",
+            "движок не отвечает: чтение остановлено на главе ${chapterIdx + 1}, " +
+                "предл. $sentenceIdx (место звука), playing=$playing"
+        )
+        cancelEndAnnounce()
+        playing = false
+        player?.stop()
+        KeepAwake.release()
+        cancelSleepTimer()
+        dropAudioFocus()
+        savePosition()
+        pushPlayState()
+        if (bk != null && chapterIdx != wasChapter) host?.onChapterLoaded() else host?.onShowCurrent()
+        host?.onAnnounce(ctx.getString(R.string.engine_silent_stop))
     }
 
     /** Сообщить UI и системе новое состояние play/pause. Зовётся на каждой фразе
@@ -2085,7 +2605,11 @@ internal object ReaderEngine {
         BookStore.upsert(ctx, BookRecord(
             uri = u,
             name = existing?.name ?: currentName ?: "book",
-            title = doc.title ?: existing?.title,
+            // 09.10.2026: название из метаданных берём, только если оно похоже на
+            // название, и прежнее («(=^..^=)» у «Звонка для родителя») тоже не
+            // возвращаем: иначе мусор жил бы в записи вечно.
+            title = doc.title?.takeIf { BookRecord.usableTitle(it) }
+                ?: existing?.title?.takeIf { BookRecord.usableTitle(it) },
             author = doc.author ?: existing?.author,
             annotation = existing?.annotation,
             sourceUrl = existing?.sourceUrl,
@@ -2422,6 +2946,9 @@ internal object ReaderEngine {
             }
         }
         userMoved = true
+        // 05.10.2026: после ручного перехода первую фразу читаем коротким куском
+        // (см. [shortFirstPhrase]) — так звук приходит почти сразу.
+        shortFirstPhrase = true
         Diag.log(ctx, "activity", "переход: глава $chClamped, предл. $sClamped")
         persistPosition()
         // msg4377: ручной переход (ползунок, оглавление, закладка, поиск) — это

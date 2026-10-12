@@ -8,13 +8,19 @@
     <string name="next_sentence">Следующее предложение</string>
     <!-- msg2471: имена кнопок «Пред.»/«След.» для скринридера меняются по выбранному
          шагу (предложение/абзац/глава) — код ставит нужную пару в contentDescription. -->
-    <string name="prev_chapter">Предыдущая глава</string>
-    <string name="next_chapter">Следующая глава</string>
+    <!-- 10.10.2026, просьба Сержа: «обманчивая настройка — называется „глава“, а
+         ходит не по главам». Глава верхнего уровня — это заголовок, под которым
+         нет других заголовков; вложенные подразделы (частые в дневниках и
+         сборниках) такой шаг пропускает. Названия говорим как есть, чтобы не
+         сбивать: «глава верхнего уровня» и «любой заголовок». -->
+    <string name="prev_chapter">Предыдущая глава верхнего уровня</string>
+    <string name="next_chapter">Следующая глава верхнего уровня</string>
     <!-- msg2531/2535: имена кнопок «◀ Глава/Глава ▶» следуют режиму «Кнопки глав
-         шагают» (ch_nav): «По главам» → глава, «По крупным разделам» → раздел,
-         «По всем заголовкам» → заголовок. Код ставит нужную пару в contentDescription. -->
-    <string name="prev_header">Предыдущий заголовок</string>
-    <string name="next_header">Следующий заголовок</string>
+         шагают» (ch_nav): «По главам» → глава верхнего уровня, «По крупным
+         разделам» → раздел, «По всем заголовкам» → любой заголовок. Код ставит
+         нужную пару в contentDescription. -->
+    <string name="prev_header">Предыдущий любой заголовок</string>
+    <string name="next_header">Следующий любой заголовок</string>
     <string name="no_book">Открой книгу, чтобы начать слушать</string>
     <string name="auto_off">Авто: выкл</string>
     <string name="engine_loading">Настраиваю движок…</string>
@@ -186,12 +192,12 @@
          глаз: синтезатору уходит contentDescription, а не этот текст. -->
     <string name="catalog_title_short">🌐 Сетевые</string>
     <string name="catalog_sources_title">Мои библиотеки</string>
-    <string name="catalog_empty">Библиотек пока нет. Нажми ⋮ справа вверху, выбери „Добавить библиотеку“ и введи адрес — например https://flibusta.is/opds</string>
+    <string name="catalog_empty">Библиотек пока нет. Нажми ⋮ справа вверху, выбери „Добавить библиотеку“ и введи адрес — например http://flibusta.is/opds</string>
     <string name="catalog_add">Добавить библиотеку</string>
     <string name="catalog_add_ok">Добавить</string>
     <string name="catalog_added">Библиотека добавлена: %1$s</string>
     <string name="catalog_url_dialog">Адрес библиотеки (OPDS)</string>
-    <string name="catalog_url_hint">https://flibusta.is/opds</string>
+    <string name="catalog_url_hint">http://flibusta.is/opds</string>
     <string name="catalog_bad_url">Не похоже на адрес библиотеки — проверь ссылку</string>
     <string name="catalog_remove">Удалить библиотеку</string>
     <string name="catalog_remove_ask">Удалить библиотеку „%1$s“?</string>
@@ -286,8 +292,14 @@
     <string name="catalog_annotation_title">Аннотация</string>
     <string name="catalog_book_announce">Книга „%1$s“. %2$s</string>
     <string name="catalog_more_loading">Догружаю следующие книги…</string>
-    <string name="catalog_more_fail">Не догрузилось: %1$s</string>
-    <string name="catalog_more_retry">Нажми, чтобы повторить</string>
+    <!-- 09.10.2026, просьба Сержа: кнопку «нажми, чтобы повторить» убрали —
+         повторяет свайп до конца списка. Но причину и что делать сказать надо:
+         иначе у конца списка не отличить «книги кончились» от «сеть пропала». -->
+    <string name="catalog_more_state">Не догрузилось: %1$s. Листай дальше — попробую снова.</string>
+    <!-- 09.10.2026: пока догрузка повторяется сама, вместо кнопки тихая строка;
+         об этом же один раз говорим вслух (не чаще раза в минуту). -->
+    <string name="catalog_more_retrying">Связь пропала — пробую ещё раз…</string>
+    <string name="catalog_more_retrying_spoken">Связь пропала, пробую загрузить ещё раз</string>
     <string name="catalog_end">Список загружен полностью. Разделов %1$d, книг %2$d.</string>
 
     <!-- Настройки ридера -->
@@ -376,6 +388,11 @@
     <string name="settings_group_start">Управление</string>
     <string name="settings_group_library">Библиотека и скачанные</string>
     <string name="settings_group_diag">Разное</string>
+    <!-- Скрытый раздел настроек (06.10.2026): появляется в корне, только когда
+         включён экспериментальный режим (семь нажатий по строке версии в окне
+         «О программе», см. ExpertPrefs). Серж: «сделай, чтобы все мои опытные
+         настройки складывались в папку „экспериментальные настройки“». -->
+    <string name="settings_group_experiment">Экспериментальные настройки</string>
     <!-- Подсказки разделов (msg721): короткая статичная строка-содержимое под названием
          в главном списке Настроек. Не значения, а «что внутри» — помогает найти раздел. -->
     <!-- 30.09.2026: подсказки корневых строк переписаны ключевыми словами
@@ -386,6 +403,22 @@
     <string name="settings_group_start_hint">Жесты, кнопки, гарнитура, стартовый экран</string>
     <string name="settings_group_library_hint">Папка книг, фильтры полки, скачивание, копии, синхронизация</string>
     <string name="settings_group_diag_hint">Обновления и журнал</string>
+    <string name="settings_group_experiment_hint">Очередь фраз, пометки движка и проба движка</string>
+    <!-- Варианты руки «по одной фразе» в экспериментальных настройках (06.10.2026):
+         «авто» — по пометке пары «движок + голос» (см. SpeechPlayer.directAhead). -->
+    <string name="experiment_one_auto">авто (по пометке движка)</string>
+    <string name="experiment_one_always">по одной всегда</string>
+    <string name="experiment_one_never">как раньше (с запасом вперёд)</string>
+    <!-- Разбор PDF (09.10.2026): три галочки на три правки разбора. Правки
+         независимые, и каждая может испортить конкретную книгу — поэтому их
+         можно снять по одной. Снял галочку — книга разберётся заново, и в ней
+         останется то, что было до этой правки. -->
+    <string name="experiment_pdf_headers">Чистить колонтитулы и номера страниц</string>
+    <string name="experiment_pdf_headers_hint">сверху и снизу страницы убираю повторяющиеся строки: название книги, заголовок главы, номер. Снял галочку — книга разберётся заново и останется как напечатано</string>
+    <string name="experiment_pdf_spacing">Склеивать разрядку по зазорам</string>
+    <string name="experiment_pdf_spacing_hint">«З во но к дл я р од ит ел я» читается как «Звонок для родителя»: смотрю на расстояние между буквами. Снял галочку — вернётся чтение по буквам</string>
+    <string name="experiment_pdf_columns">Читать страницы по колонкам</string>
+    <string name="experiment_pdf_columns_hint">страницу в две колонки читаю так: левая до конца, потом правая. Снял галочку — читаю строки подряд, как они лежат в файле</string>
     <string name="settings_about_hint">Что умеет, версия, что нового</string>
     <!-- 30.09.2026: состояние строки «Не засыпать» — справка и призыв. Марки
          телефонов из подсказки убраны: про них сказано внутри окна, у каждой
@@ -484,8 +517,8 @@
     <!-- msg2547: заголовок диалога называет направление настраиваемого свайпа. -->
     <string name="gesture_choose_right">Действие свайпа вправо</string>
     <string name="gesture_choose_left">Действие свайпа влево</string>
-    <string name="g_action_next_ch">Следующая глава</string>
-    <string name="g_action_prev_ch">Предыдущая глава</string>
+    <string name="g_action_next_ch">Следующая глава верхнего уровня</string>
+    <string name="g_action_prev_ch">Предыдущая глава верхнего уровня</string>
     <string name="g_action_next_sent">Следующее предложение</string>
     <string name="g_action_prev_sent">Предыдущее предложение</string>
     <string name="g_action_next_para">Следующий абзац</string>
@@ -508,8 +541,8 @@
         <item quantity="many">%1$d предложений</item>
         <item quantity="other">%1$d предложения</item>
     </plurals>
-    <string name="g_action_next_header">Следующий заголовок</string>
-    <string name="g_action_prev_header">Предыдущий заголовок</string>
+    <string name="g_action_next_header">Следующий любой заголовок</string>
+    <string name="g_action_prev_header">Предыдущий любой заголовок</string>
     <!-- 26.09.2026: шаг по разделителям-подзаголовкам («* * *», «— — —», «...»).
          Нужен в сборниках, где глав в файле нет, а границы между вещами
          помечены только такой строкой. -->
@@ -623,13 +656,13 @@
     <string name="headset_off">Выключено</string>
     <string name="headset_sentence">Предложение</string>
     <string name="headset_paragraph">Абзац</string>
-    <string name="headset_chapter">Глава</string>
+    <string name="headset_chapter">Глава верхнего уровня</string>
     <!-- msg5295: три уровня «главы» — отдельные пункты списка шагов гарнитуры, как
          у свайпов и кнопок читалки (G_NEXT_CH/MAJOR/HEADER). Раньше уровень был
          отдельной строкой «Шаг „главы“ на гарнитуре» (ключ CH_NAV); строка убрана,
          ключ остался только источником разового переноса (migrateHeadsetStep). -->
     <string name="headset_major">Крупный раздел</string>
-    <string name="headset_header">Заголовок</string>
+    <string name="headset_header">Любой заголовок</string>
     <!-- msg5250: в списке шагов гарнитуры — прыжок. Направление даёт сама кнопка
          (как у «Предложения»/«Абзаца»), поэтому пункт один, а число берётся из
          настройки своей кнопки: на «вперёд» — из «вперёд», на «назад» — из «назад». -->
@@ -1033,6 +1066,10 @@
     <string name="after_call_continue">Продолжить чтение</string>
     <string name="after_call_continue_announce">Звонок закончился. Отматываю и продолжаю чтение</string>
     <string name="after_call_perm_denied">Разрешение «Телефон» не выдано — продолжать после звонка не получится. Выдай разрешение или выбери «Остановиться»</string>
+    <!-- 05.10.2026, журнал 22:43: заглючивший движок отдавал «готово» без звука, и
+         чтение молча убегало вперёд (глава 6 → глава 21 за 9 секунд). Теперь плеер
+         вовремя встаёт, а эта фраза объясняет человеку, что случилось. -->
+    <string name="engine_silent_stop">Синтезатор не отвечает. Чтение остановлено, место сохранено. Включи голос заново или выбери другой движок</string>
 
     <!-- 0.3.42: пауза при отключении наушников (#99). 30.09.2026: три галочки
          «останавливать чтение» стоят прямо в разделе «Чтение», а не в окне. -->
@@ -1342,6 +1379,15 @@
          23.09.2026). Знак уходит движку как есть — и в обычном режиме, и в
          прямой речи. -->
     <string name="book_finished">Книга прочитана.</string>
+    <!-- 07.10.2026: книга дочитана до конца — спрашиваем, удалять ли её вместе с
+         файлом (просьба Сержа). Заголовок короткий: его диктор читает первым.
+         Кнопка отказа — именно «Оставить», а не «Отмена»: вопрос не про отмену
+         действия, а про выбор из двух. -->
+    <string name="book_end_ask_title">Книга прочитана</string>
+    <string name="book_end_ask_msg">Удалить „%1$s“ вместе с файлом?</string>
+    <string name="book_end_keep">Оставить</string>
+    <!-- Галочка в Настройках → «Библиотека»: выключает вопрос выше. -->
+    <string name="ask_delete_end_title">Спрашивать про удаление дочитанной книги</string>
     <string name="voice_book_saved">Запоминаю для этой книги</string>
     <string name="voice_book_cleared">Читаю обычным голосом</string>
     <string name="voice_remember_hint">Включён — голос запомнится только для этой книги. Выключен — голос станет общим для всех книг без своего голоса.</string>

@@ -27,6 +27,11 @@ import java.util.Locale
  */
 class SleepWindowActivity : RowsActivity() {
 
+    /** Толчок у края списка окну не нужен (просьба Сержа 09.10.2026): список
+     *  короткий, а толчок звучит на каждом приходе фокуса на первую или последнюю
+     *  строку. */
+    override val edgeTickAuto: Boolean get() = false
+
     private lateinit var binding: ActivitySleepBinding
 
     /** Строки окна строятся в [ActivitySleepBinding.content] — общий каркас

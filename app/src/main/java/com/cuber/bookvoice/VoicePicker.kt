@@ -470,7 +470,10 @@ class VoicePicker(
                     }
                 }
                 .setNegativeButton(R.string.toc_close, null)
-                .show()
+                .create()
+            dlg.show()
+            // Конец списка на ощупь (09.10.2026): движков у человека бывает много.
+            A11y.edgeVibrateDialog(dlg, "выбор движка")
             // 0.4.82: временный плеер гасим только если переключения в этом
             // диалоге НЕ было. Найдено по журналу Сергея 24.09.2026: выбор пункта
             // списка закрывает диалог (`d.dismiss()`), а слушатель закрытия
@@ -568,7 +571,10 @@ class VoicePicker(
                     host.redraw()
                 }
                 .setNegativeButton(R.string.toc_close, null)
-                .show()
+                .create()
+            dlg.show()
+            // Конец списка на ощупь (09.10.2026): языков у движка бывает много.
+            A11y.edgeVibrateDialog(dlg, "выбор языка")
             if (temp) dlg.setOnDismissListener { p.shutdown() }
         }
     }
@@ -618,7 +624,11 @@ class VoicePicker(
                     if (!host.hasBook()) speakSample(p)
                 }
                 .setNegativeButton(R.string.toc_close, null)
-                .show()
+                .create()
+            dlg.show()
+            // Конец списка на ощупь (09.10.2026): голосов бывают десятки, и
+            // листают их на слух — полезно знать, что список кончился.
+            A11y.edgeVibrateDialog(dlg, "выбор голоса")
             if (temp) dlg.setOnDismissListener { p.shutdown() }
         }
     }

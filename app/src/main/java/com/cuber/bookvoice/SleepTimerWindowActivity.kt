@@ -24,6 +24,11 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
  */
 class SleepTimerWindowActivity : RowsActivity() {
 
+    /** Толчок у края списка окну не нужен (просьба Сержа 09.10.2026): список
+     *  короткий, а толчок звучит на каждом приходе фокуса на первую или последнюю
+     *  строку. */
+    override val edgeTickAuto: Boolean get() = false
+
     private lateinit var binding: ActivitySleepBinding
 
     override val contentRoot: ViewGroup get() = binding.content

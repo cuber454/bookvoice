@@ -174,7 +174,18 @@ data class OpdsFeed(
 /** Настройки: сохранённые каталоги (имя + адрес). Живут в prefs "reader". */
 object OpdsPrefs {
     const val KEY_SOURCES = "opds_sources"
-    val DEFAULT_URL = "https://flibusta.is/opds"
+
+    /**
+     * Флибуста работает ТОЛЬКО по http (проверено 07.10.2026 с домашней сети
+     * Сергея): по https адрес молчит или отвечает 502 и через Tor-клиент, и без
+     * него, а по http каталог приходит за 0,15 с, поиск и скачивание книг
+     * работают. Прежде здесь стоял https — из-за него «библиотека не
+     * открывалась», и Серж искал причину в блокировках. НЕ возвращать https.
+     * Обратная сторона: пароль от «Моей полки» по http идёт открытым текстом —
+     * об этом предупреждает `catalog_login_insecure` (проверка в
+     * [CatalogActivity.askLogin]).
+     */
+    val DEFAULT_URL = "http://flibusta.is/opds"
 
     /** Куда качать книги из каталога: tree-uri (SAF) или null = в приложение. */
     const val KEY_DL_DIR = "opds_dl_dir"
@@ -189,8 +200,17 @@ object OpdsPrefs {
 
     /** Второе зеркало Флибусты (Сергей попросил добавить его рядом с основным:
      *  адрес длинный, набирать его вслепую руками — мучение). Проверено живым
-     *  запросом: /opds отвечает 200 и отдаёт обычную ленту OPDS. */
-    private const val MIRROR_URL = "https://n.flibusta.is/opds"
+     *  запросом 07.10.2026: по http /opds отвечает 200 и отдаёт ту же ленту,
+     *  что и основной адрес. */
+    private const val MIRROR_URL = "http://n.flibusta.is/opds"
+
+    /** Прежние https-адреса Флибусты (до 07.10.2026 в стартовом наборе). У тех,
+     *  у кого они остались от старых версий, заменяем на месте при открытии
+     *  каталогов ([ensureDefaults]): руками Серж такую запись не поправит. */
+    private val MOVED_TO_HTTP = mapOf(
+        "https://flibusta.is/opds" to DEFAULT_URL,
+        "https://n.flibusta.is/opds" to MIRROR_URL,
+    )
 
     /** Coollib (Сергей попросил третьим каталогом). Адрес он назвал по http, но
      *  сервер сам переводит на https — берём сразу https, чтобы вход в «Мою
@@ -225,14 +245,19 @@ object OpdsPrefs {
     /** При первом запуске добавляет стартовый набор каталогов. Мёртвое зеркало
      *  flibusta.site (msg1776) у тех, у кого оно осталось от старых версий,
      *  вычищаем: раньше ensureDefaults докладывал его снова при каждом открытии
-     *  Каталога, и удалённая вручную запись возвращалась. */
+     *  Каталога, и удалённая вручную запись возвращалась. Заодно переводим
+     *  прежние https-адреса Флибусты на http ([MOVED_TO_HTTP]). */
     fun ensureDefaults(context: Context) {
-        val cleaned = sources(context).filterNot { it.url == DEAD_URL }
+        val before = sources(context)
+        val cleaned = before
+            .map { s -> MOVED_TO_HTTP[s.url]?.let { Source(s.name, it) } ?: s }
+            .distinctBy { it.url }
+            .filterNot { it.url == DEAD_URL }
         val list = cleaned.toMutableList()
         for ((name, url) in DEFAULT_SOURCES) {
             if (cleaned.none { it.url == url }) list.add(Source(name, url))
         }
-        if (list != cleaned) save(context, list)
+        if (list != before) save(context, list)
     }
 
     fun add(context: Context, name: String, url: String) {

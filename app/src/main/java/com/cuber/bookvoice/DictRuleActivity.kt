@@ -41,6 +41,11 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
  */
 class DictRuleActivity : RowsActivity() {
 
+    /** Толчок у края списка этому окну не нужен (просьба Сержа 09.10.2026): списки
+     *  короткие, а толчок срабатывает на КАЖДОМ приходе фокуса на первую или
+     *  последнюю строку — «остановлюсь на элементе, и он начинает вибрировать». */
+    override val edgeTickAuto: Boolean get() = false
+
     companion object {
         const val EXTRA_INDEX = "index"
         const val EXTRA_ENGINE = "engine"
@@ -313,7 +318,10 @@ class DictRuleActivity : RowsActivity() {
                 }
                 val text = pickedText(words)
                 findField?.setText(text)
-                speak(text)
+                // НЕ произносим собранную фразу (просьба Сержа 09.10.2026: «после
+                // выбора каждой галочки синтезатор зачитывает мой выбор — это не
+                // нужно»). Поле заполняется, а прочитает его диктор, когда до поля
+                // дойдёшь.
             }
             boxes.add(cb)
             col.addView(cb)
@@ -428,7 +436,9 @@ class DictRuleActivity : RowsActivity() {
         }
     }
 
-    /** Слово во фразе выбираем списком: замену можно править и в целом выражении. */
+    /** Слово во фразе выбираем списком: замену можно править и в целом выражении.
+     *  Толчок у края списка этому диалогу НЕ вешаем (09.10.2026): слов бывает
+     *  немного, а толчок на приходе фокуса Серж слышит как помеху. */
     private fun pickWord(words: List<String>, onPick: (String) -> Unit) {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.dict_pick_word)
