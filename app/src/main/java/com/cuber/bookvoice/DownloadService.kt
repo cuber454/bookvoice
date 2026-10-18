@@ -266,10 +266,13 @@ class DownloadService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle(title)
-            .setContentText(
-                if (pct >= 0) getString(R.string.catalog_dl_progress_pct, pct)
-                else getString(R.string.catalog_dl_progress)
-            )
+            // ПРОЦЕНТОВ В ТЕКСТЕ КАРТОЧКИ НЕТ (16.10.2026, просьба Сержа:
+            // «чтобы когда скачивается книга проценты не проговаривались
+            // скринридером»). Число менялось на каждом шаге, и карточка
+            // перекладывалась заново — у части дикторов это читается вслух.
+            // Ход видно полосой (она не текст и вслух не читается), а число
+            // показывает окно каталога отдельной строкой.
+            .setContentText(getString(R.string.catalog_dl_progress))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)

@@ -15,11 +15,6 @@ class SettingsWindowActivity : SectionActivity() {
 
     private val settings = SettingsActivity(this)
 
-    /** Толчок у края списка настроек вешает сама страница (`SettingsActivity`) —
-     *  она же перестраивает строки при смене раздела. Авто-подключение окна
-     *  перекрыло бы её слушатель касаний. */
-    override val edgeTickAuto: Boolean get() = false
-
     // msg5730: раздел, открытый до пересоздания окна (смена размера текста).
     // Пусто — обычный вход, начинаем с корневого меню.
     private var restoreGroup: String? = null

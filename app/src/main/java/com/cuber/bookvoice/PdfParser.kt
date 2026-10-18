@@ -52,8 +52,25 @@ object PdfParser {
      * 4 — 09.10.2026, вечер: колонтитул ищем как ПОВТОРЯЮЩЕЕСЯ НАЧАЛО строки, а не
      *     только на краю набора: в «Звонке для родителя» он стоит в середине
      *     верхнего поля и слипается с первой фразой текста.
+     * 5 — 15.10.2026: АБЗАЦЫ ВНУТРИ СТРАНИЦЫ. Прежде текст страницы уходил в
+     *     книгу ОДНИМ абзацем, и книга на тысячу с лишним абзацев выглядела в
+     *     ленте двумя сотнями строк-страниц («Звонок для родителя»: журнал
+     *     «глав 253, строк 506» — 253 заголовка «Стр. N» да 253 абзаца-страницы,
+     *     тогда как poppler в той же книге видит 1056 абзацев). Текст при этом
+     *     не терялся — терялась СТРУКТУРА: абзац длиной в страницу не даёт ни
+     *     перейти к абзацу, ни увидеть, где кончается мысль. Границы абзацев
+     *     берём по ГЕОМЕТРИИ строк — [PARA_GAP_RATIO] и [PARA_INDENT].
+     * 6 — 16.10.2026, сборка 263x: ГЛАВЫ ПО КЕГЛЮ. У книги без закладок главами
+     *     были СТРАНИЦЫ («Стр. 1», «Стр. 2»…): в оглавлении «Звонка для
+     *     родителя» стояло 253 страницы, хотя настоящих глав там 22. Кегль в
+     *     PDF виден: заголовок набран крупнее обычного текста (в этой книге
+     *     26-46 pt против 10 pt). Теперь крупные абзацы становятся главами, а
+     *     подряд идущие крупные строки одной страницы — одним названием
+     *     («Часть I» + «Зачем нужно альтернативное образование?»). Правило
+     *     проверено зондом на компьютере: 22 главы у «Звонка», 11 у «Жизни в
+     *     поместье» (скан), у книги с закладками кегль не спрашиваем вовсе.
      */
-    const val RULES = 9
+    const val RULES = 13
 
     // Страница «читаемая», если в ней хотя бы столько непробельных символов
     // и нет кучи символов-замен (бывает при шрифтах без таблицы Unicode).
@@ -123,12 +140,15 @@ object PdfParser {
         val spacing: Boolean = true,
         /** Многоколоночную страницу читаем по колонкам. */
         val columns: Boolean = true,
+        /** Главы ищем по КЕГЛЮ, когда закладок нет (16.10.2026, сборка 263x). */
+        val headings: Boolean = true,
     ) {
         /** Отпечаток набора — для кэша: сменились галочки, разбор не годится. */
         val stamp: Long
             get() = (if (headers) 1L else 0L) or
                 (if (spacing) 2L else 0L) or
-                (if (columns) 4L else 0L)
+                (if (columns) 4L else 0L) or
+                (if (headings) 8L else 0L)
     }
 
     /** Какие чистки применять прямо сейчас. Значение ставит приложение при старте
@@ -181,6 +201,12 @@ object PdfParser {
         "указание", "указания", "внимание", "важно", "опасность", "осторожно",
         "примечание", "примечания", "совет", "советы", "список",
         "tip", "tips", "warning", "warnings", "caution", "danger", "note", "notes",
+        // 16.10.2026 (сборка 264x): ЯРЛЫКИ ПЕЧАТНОГО БЛОКА. У учебника «Человек и
+        // мир» закладки «Обложка», «Форзац 1», «Форзац 2» — это части бумажной
+        // книги, а не разделы с текстом: в оглавлении они только путают, и диктор
+        // объявлял «Обложка» при каждом переходе.
+        "обложка", "оборот обложки", "форзац", "нахзац", "титул", "титульный лист",
+        "выходные данные", "переплёт", "переплет", "корешок",
     )
 
     /** Разбор PDF из байтов (файл уже целиком в памяти). Для больших файлов не
@@ -217,7 +243,13 @@ object PdfParser {
         } catch (_: OutOfMemoryError) {
             // Большой PDF не влез в кучу при разборе (msg2587/2619). Не роняем.
             BookDocument(null, null, emptyList(), BookDocument.Unreadable.PDF_OUT_OF_MEMORY)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // 14.10.2026: причину пишем в журнал. Прежде сбой PDF не оставлял
+            // следа вовсе, и по журналу Сержа («разбор не удался: без
+            // подробностей») нельзя было отличить битый файл от файла, который
+            // нечем прочитать (нет «Доступа ко всем файлам» — EACCES при
+            // открытии).
+            Diag.log("pdf", "не открылся: ${e.javaClass.simpleName}: ${e.message}")
             // Не открылся. Если файл действительно под паролем — скажем про это;
             // иначе это битый/не-PDF файл — null (ридер покажет общую ошибку).
             if (doc != null && doc.isEncrypted) {
@@ -232,10 +264,15 @@ object PdfParser {
 
     private fun build(doc: PDDocument, n: Int, opts: Options): BookDocument {
         val fix = Fixes()
-        // Один проход по документу: забираем текст каждой страницы отдельно,
-        // сразу вычищая то, что распознаватель сканов вписал в текст книги.
-        val pageTexts = PageTextStripper(opts, fix).run {
+        // Один проход по документу: забираем текст каждой страницы отдельно —
+        // АБЗАЦАМИ ([cleanPages]) — сразу вычищая то, что распознаватель сканов
+        // вписал в текст книги.
+        var rawPages: List<List<PdfLine>> = emptyList()
+        val pageParas = PageTextStripper(opts, fix).run {
             getText(doc)
+            // Строки со шрифтами нужны для НАЗВАНИЯ с титульного листа — держим
+            // их до чистки (16.10.2026, сборка 264x).
+            rawPages = pages
             cleanPages(pages, fix, opts)
         }
         // Геометрия — в журнал: по этим числам видно, сработали ли склейка
@@ -251,7 +288,9 @@ object PdfParser {
         val readablePages = ArrayList<Int>(n)
         var totalChars = 0
         for (i in 0 until n) {
-            val t = pageTexts.getOrElse(i) { "" }
+            // Читаемость и объём считаем по ВСЕМУ тексту страницы: абзацы — это
+            // разрезы того же текста, знаков в них столько же.
+            val t = pageParas.getOrElse(i) { emptyList() }.joinToString(" ") { it.text }
             if (isPageReadable(t)) {
                 readablePages.add(i)
                 totalChars += t.count { !it.isWhitespace() }
@@ -269,13 +308,23 @@ object PdfParser {
         val infoTitle = doc.documentInformation.title
             ?.replace(Regex("\\s+"), " ")?.trim()
             ?.takeIf { looksLikeTitle(it) }
+        // НАЗВАНИЕ С ТИТУЛЬНОГО ЛИСТА (16.10.2026, сборка 264x). У многих PDF в
+        // метаданных названия нет вовсе, и книга попадала на полку под именем
+        // файла («Chel_i_mir_5kl_Lopuh_rus_2022»). Берём крупнейшие строки первых
+        // страниц — на титуле название всегда набрано крупнее всего остального.
+        val pageTitle = if (infoTitle != null) null else guessTitle(rawPages, n)
+        if (pageTitle != null) Diag.log("pdf", "название с титульного листа: «$pageTitle»")
+        val title = infoTitle ?: pageTitle
 
-        // Главы: из закладок, если те дают осмысленные разделы; иначе — страницы.
+        // Главы: из закладок, если те дают осмысленные разделы; иначе — по
+        // ЗАГОЛОВКАМ, найденным по кеглю (16.10.2026, сборка 263x); не нашлось
+        // заголовков — по страницам, как прежде.
         val sections = outlineSections(doc)
-        val chapters = if (sections.size >= MIN_OUTLINE_SECTIONS) {
-            chaptersFromSections(sections, pageTexts, n, fix)
-        } else {
-            chaptersFromPages(readablePages, pageTexts)
+        val chapters = when {
+            sections.size >= MIN_OUTLINE_SECTIONS ->
+                chaptersFromSections(sections, pageParas, n, fix)
+            else -> chaptersFromHeadings(pageParas, infoTitle)
+                ?: chaptersFromPages(readablePages, pageParas)
         }
 
         if (chapters.isEmpty()) {
@@ -297,7 +346,7 @@ object PdfParser {
                     "(оставлено разряженных строк ${fix.spacedLeft})"
             )
         }
-        return BookDocument(infoTitle, null, sewn)
+        return BookDocument(title, null, sewn)
     }
 
     // ---------------- Читаемость страницы ----------------
@@ -337,8 +386,22 @@ object PdfParser {
         /** Уже выброшена или склеена с буквицей. */
         var dropped = false
 
+        /** С этой строки начинается АБЗАЦ (15.10.2026). Ставит [markParagraphs]
+         *  по геометрии; по этим пометкам текст страницы делится на абзацы, а не
+         *  уходит в книгу одним куском. */
+        var para = false
+
+        /** Кегль строки в точках — самый крупный из её знаков (16.10.2026,
+         *  сборка 263x): по нему видно заголовок. Ноль — распознаватель кегля
+         *  не дал. */
+        var size = 0f
+
         fun norm(): String = text.replace(Regex("\\s+"), " ").trim()
     }
+
+    /** Абзац страницы: текст и признак «это ЗАГОЛОВОК по кеглю» (16.10.2026).
+     *  Главы без закладок строятся по этим пометкам ([chaptersFromHeadings]). */
+    private class PdfPara(val text: String, val heading: Boolean)
 
     /** Во сколько раз промежуток до соседа должен быть больше обычного, чтобы
      *  строку считать стоящей в поле. */
@@ -351,8 +414,74 @@ object PdfParser {
     /** Докуда вверх от буквицы искать начало абзаца: тот же запас в промежутках. */
     private const val CAP_GAP_RATIO = 3f
 
+    // ---------------- Абзацы внутри страницы (15.10.2026) ----------------
+
+    /** Во сколько раз зазор до предыдущей строки должен быть больше ОБЫЧНОГО
+     *  зазора этой страницы (медианы), чтобы считать строку началом абзаца.
+     *  Замер по «Звонку для родителя»: обычный зазор между строками 15 pt, а
+     *  перед новым абзацем 30-45 pt, то есть вдвое-втрое. Берём с запасом 1,2 —
+     *  правило срабатывает 430 раз, и только 4 раза там, где строка кончается
+     *  переносом (то есть граница ложная). Считаем от медианы САМОЙ страницы,
+     *  поэтому правило не зависит от кегля и формата книги. */
+    private const val PARA_GAP_RATIO = 1.2f
+
+    /** Насколько первая строка абзаца сдвинута вправо от левого края набора,
+     *  точки. У «Звонка для родителя» левый край набора 50 pt, а первая строка
+     *  абзаца стоит на 66 pt (сдвиг 16 pt): по одному отступу абзац виден и там,
+     *  где зазор между абзацами такой же, как между строками (так набрана
+     *  страница 30). Порог 6 pt — заметно меньше настоящего отступа и заметно
+     *  больше дрожания координат. */
+    private const val PARA_INDENT = 6f
+
+    /** Строка кончает фразу: по ней отступ читается как начало АБЗАЦА, а не как
+     *  сдвинутая строка внутри него (втяжка цитаты, строка после вставки). */
+    private fun endsSentence(t: String): Boolean {
+        val c = t.lastOrNull() ?: return false
+        return c == '.' || c == '!' || c == '?' || c == '…' || c == '»' || c == '"' || c == ')'
+    }
+
     /** Номер страницы — строка из одних цифр (не длиннее четырёх). */
     private fun isPageNumber(t: String): Boolean = t.length in 1..4 && t.all { it.isDigit() }
+
+    // ---------------- Главы по кеглю (16.10.2026, сборка 263x) ----------------
+
+    /** Во сколько раз заголовок должен быть крупнее обычного текста. Замер по
+     *  «Звонку для родителя»: тело книги 10 pt, заголовки глав 26 pt, части 46 pt
+     *  (в 2,6 и 4,6 раза), а подзаголовки внутри глав — 11 pt (1,1 раза, их
+     *  главами не считаем: они дробят главу на куски). В «Жизни в поместье»
+     *  (скан) тело 13 pt, заголовки 25-30 pt. Порог 1,35 пропускает настоящие
+     *  заголовки и не трогает полужирные подзаголовки. */
+    private const val HEAD_SIZE_RATIO = 1.35f
+
+    /** Длиннее этого строка не заголовок, а абзац крупным кеглем (врезка,
+     *  эпиграф, объявление). Название главы столько не занимает. */
+    private const val HEADING_MAX_CHARS = 120
+
+    /** Меньше этого букв — это не название, а буквица, номер или знак. */
+    private const val HEADING_MIN_LETTERS = 3
+
+    /** Сколько заголовков нужно, чтобы делить книгу по ним. Меньше — правило
+     *  ошиблось (нашло пару крупных строк), и книга остаётся постраничной:
+     *  не тронутое по ошибке лучше испорченного оглавления. */
+    private const val MIN_HEADINGS = 3
+
+    /** Обычный кегль книги — тот, которым набрано БОЛЬШЕ ВСЕГО БУКВ (16.10.2026).
+     *  Медиана по строкам не годится: строк с мелкими сносками больше, чем
+     *  строк текста, и медиана уезжает вниз (в «Звонке» 9 pt вместо 10 pt).
+     *  Кегль округляем до полутора: у распознавателя он бывает 9,98 и 10,02. */
+    private fun bodySize(pages: List<List<PdfLine>>): Float {
+        val letters = HashMap<Int, Int>()
+        for (page in pages) for (l in page) {
+            if (l.size <= 0f) continue
+            var n = 0
+            for (c in l.text) if (c.isLetter()) n++
+            if (n == 0) continue
+            val key = Math.round(l.size * 2f)
+            letters[key] = (letters[key] ?: 0) + n
+        }
+        val best = letters.maxByOrNull { it.value } ?: return 0f
+        return best.key / 2f
+    }
 
     // ---------------- Куски разряженного колонтитула (09.10.2026, сборка 253m) ----------------
 
@@ -421,8 +550,11 @@ object PdfParser {
      *
      * Цифры ВНЕ поля не трогаем: это числа из текста и номера в печатном
      * содержании. Не тронутое по ошибке лучше выброшенного.
+     *
+     * Возврат — АБЗАЦЫ каждой страницы (15.10.2026): прежде отдавали одну
+     * строку на страницу, и абзацев в книге не было вовсе (см. пометки [PdfLine.para]).
      */
-    private fun cleanPages(pages: List<List<PdfLine>>, fix: Fixes, opts: Options): List<String> {
+    private fun cleanPages(pages: List<List<PdfLine>>, fix: Fixes, opts: Options): List<List<PdfPara>> {
         // Невидимые знаки набора снимаем ДО всей разметки (09.10.2026): мягкий
         // перенос стоит внутри слова и в тексте не виден, а синтезатор его
         // читает; после снятия слово само становится целым.
@@ -433,6 +565,9 @@ object PdfParser {
             }
         }
         val n = pages.size
+        // Обычный кегль книги — считаем ДО чистки: сноски и колонтитулы тоже
+        // часть набора, но букв в них мало, и на ответ они не влияют.
+        val body = if (opts.headings) bodySize(pages) else 0f
         val med = FloatArray(n)
         val minX = FloatArray(n)
         for (i in 0 until n) {
@@ -727,12 +862,110 @@ object PdfParser {
             }
         }
 
-        // Строки страницы — в один поток. Стык строк — единственное место, где
-        // видно перенос, поэтому склейка живёт здесь. Порядок строк уже собран по
-        // колонкам — это сделал распознаватель ([PageTextStripper.endPage]).
-        return pages.map { page ->
-            glueLines(page.filter { !it.dropped }.map { it.norm() }, fix)
+        // АБЗАЦЫ ВНУТРИ СТРАНИЦЫ (15.10.2026, сборка 261x).
+        //
+        // ЧТО БЫЛО. Текст страницы уходил в книгу ОДНИМ абзацем:
+        // [chaptersFromPages] звал `TextSplit.fromParagraphs(listOf(text))`, и
+        // единственный абзац — вся страница целиком. В ленте это выглядело так:
+        // «Звонок для родителя» — «глав 253, строк 506», то есть 253 заголовка
+        // «Стр. N» и 253 абзаца по 1300 знаков, хотя в той же книге poppler
+        // видит 1056 абзацев. Человек листает ленту и видит вместо книги двести
+        // пятьдесят «кирпичей», а «следующий абзац» перескакивает на страницу
+        // вперёд. ТЕКСТ ПРИ ЭТОМ НЕ ТЕРЯЛСЯ (проверено выгрузкой кэша и
+        // сравнением с poppler: 3845 предложений, 316 817 знаков, покрытие
+        // 90 % — остальное снято как колонтитулы и номера страниц) — терялась
+        // СТРУКТУРА.
+        //
+        // ЧЕМ МЕРИЛИ (та же книга, страница 30): обычный зазор между строками
+        // 15 pt, перед новым абзацем 30 pt и 45 pt; левый край набора 50 pt, а
+        // первая строка абзаца — 66 pt. Отсюда два признака ниже. Зазор считаем
+        // от МЕДИАНЫ зазоров САМОЙ страницы, поэтому правило не зависит ни от
+        // кегля, ни от формата книги. Осторожность: отступ читаем как абзац
+        // только после конца фразы — иначе под правило попадёт сдвинутая строка
+        // внутри абзаца.
+        var paraStart = 0
+        for (i in 0 until n) {
+            val live = pages[i].filter { !it.dropped }
+            if (live.isEmpty()) continue
+            // Обычный зазор строк берём по строкам, которые ДОЖИЛИ до этого
+            // места: колонтитул и номер страницы уже выброшены, и медиана — это
+            // зазор самого текста.
+            val m = medianGap(live.sortedBy { it.y })
+            var left = Float.MAX_VALUE
+            for (l in live) left = minOf(left, l.x)
+            for ((k, l) in live.withIndex()) {
+                // Первая строка страницы начинает абзац всегда: продолжение она
+                // или нет, из страницы не видно, а склеивать её с прошлой
+                // страницей нечем — там другой абзац ([gluePageBreaks] дошивает
+                // только слово, разрезанное переносом).
+                if (k == 0) {
+                    l.para = true
+                    paraStart++
+                    continue
+                }
+                val up = live[k - 1]
+                val byGap = m > 0f && l.y - up.y >= PARA_GAP_RATIO * m
+                val byIndent = endsSentence(up.norm()) &&
+                    l.x > left + PARA_INDENT && l.x > up.x + 2f
+                if (byGap || byIndent) {
+                    l.para = true
+                    paraStart++
+                }
+            }
         }
+        Diag.log("pdf", "абзацев разобрано $paraStart (страниц $n)")
+
+        // Строки страницы — в один поток, а строки ОДНОГО АБЗАЦА — в один абзац.
+        // Стык строк — единственное место, где видно перенос, поэтому склейка
+        // живёт здесь ([glueLines]). Порядок строк уже собран по колонкам — это
+        // сделал распознаватель ([PageTextStripper.endPage]).
+        //
+        // 16.10.2026 (сборка 263x): у абзаца появился признак ЗАГОЛОВКА по
+        // кеглю — по нему книга без закладок делится на главы
+        // ([chaptersFromHeadings]), а не на страницы.
+        val out = ArrayList<List<PdfPara>>(n)
+        for (page in pages) {
+            val live = page.filter { !it.dropped }
+            val paras = ArrayList<PdfPara>(8)
+            var from = 0
+            for (k in live.indices) {
+                if (k > 0 && live[k].para) {
+                    val p = makePara(live.subList(from, k), body, fix)
+                    if (p.text.isNotEmpty()) paras.add(p)
+                    from = k
+                }
+            }
+            val tail = makePara(live.subList(from, live.size), body, fix)
+            if (tail.text.isNotEmpty()) paras.add(tail)
+            out.add(paras)
+        }
+        var headParas = 0
+        for (page in out) for (p in page) if (p.heading) headParas++
+        if (headParas > 0) {
+            Diag.log(
+                "pdf",
+                "заголовков по кеглю $headParas (обычный кегль $body pt) — главы будут по ним",
+            )
+        }
+        return out
+    }
+
+    /** Абзац из строк: текст (склейка переносов — [glueLines]) и признак
+     *  «ЗАГОЛОВОК ПО КЕГЛЮ» (16.10.2026, сборка 263x).
+     *
+     *  Заголовком считаем абзац, у которого КАЖДАЯ строка крупнее обычного
+     *  текста: если в абзаце есть хоть одна обычная строка, заголовок только
+     *  начинает его, а дальше идёт речь — это текст, а не название. Длину и
+     *  число букв ограничиваем: крупным кеглем набирают ещё врезки, эпиграфы и
+     *  объявления, и названием главы они быть не должны. */
+    private fun makePara(block: List<PdfLine>, body: Float, fix: Fixes): PdfPara {
+        if (block.isEmpty()) return PdfPara("", false)
+        val text = glueLines(block.map { it.norm() }, fix)
+        if (text.isEmpty() || body <= 0f) return PdfPara(text, false)
+        for (l in block) if (l.size < body * HEAD_SIZE_RATIO) return PdfPara(text, false)
+        val heading = text.length <= HEADING_MAX_CHARS &&
+            text.count { it.isLetter() } >= HEADING_MIN_LETTERS
+        return PdfPara(text, heading)
     }
 
     // ---------------- Порядок чтения на многоколоночной странице ----------------
@@ -893,10 +1126,12 @@ object PdfParser {
         }
         val a = PdfLine(l.y, l.x, buildText(ps.subList(0, cut)))
         a.right = ps[cut - 1].xDirAdj + ps[cut - 1].widthDirAdj
+        a.size = l.size
         // Разрезанные куски читаются как обычный текст: разрядку в них не ищем
         // (её и так снял первый проход), поэтому координат знаков не держим.
         val b = PdfLine(l.y, ps[cut].xDirAdj, buildText(ps.subList(cut, ps.size)))
         b.right = l.right
+        b.size = l.size
         var n = 0
         if (a.text.isNotBlank()) {
             left.add(a)
@@ -980,12 +1215,14 @@ object PdfParser {
         return sb.toString()
     }
 
-    /** Дефис приклеен к последней букве строки — это перенос слова. */
-    private fun cutWord(sb: StringBuilder): Boolean =
+    /** Дефис приклеен к последней букве строки — это перенос слова. Принимаем
+     *  и [StringBuilder] (склейка строк), и [String] (склейка абзацев на стыке
+     *  страниц, [joinPages]). */
+    private fun cutWord(sb: CharSequence): Boolean =
         sb.length >= 2 && sb[sb.length - 1] in HYPHENS && sb[sb.length - 2].isLetter()
 
     /** Дефис приклеен к последней цифре («1-й», «5-6») — дефис оставляем. */
-    private fun cutRange(sb: StringBuilder): Boolean =
+    private fun cutRange(sb: CharSequence): Boolean =
         sb.length >= 2 && sb[sb.length - 1] in HYPHENS && sb[sb.length - 2].isDigit()
 
     /** Разряженное начало строки: сколько кусков-«букв» и что выходит, если убрать
@@ -1094,6 +1331,177 @@ object PdfParser {
         return t.count { it.isLetterOrDigit() } * 2 >= t.length
     }
 
+    // ---------------- Название с титульного листа (16.10.2026, 264x) ----------------
+
+    /** Сколько первых страниц смотрим в поисках титула. У учебника «Человек и
+     *  мир» титул лежит на четвёртой странице: перед ним обложка и два форзаца. */
+    private const val TITLE_PAGES = 6
+
+    /** Отношение кегля к САМОМУ КРУПНОМУ на титуле, с которым строку ещё считаем
+     *  частью названия. 0,6 выбрано по двум книгам: у «Звонка для родителя»
+     *  «ЗВОНОК» набрано 34 pt, «ДЛЯ РОДИТЕЛЯ» — 46 pt (0,74 — берём обе строки),
+     *  а подзаголовок 11 pt отсекается; у учебника название 65 pt, автор 15 pt. */
+    private const val TITLE_SIZE_RATIO = 0.6f
+
+    /** Название должно быть заметно крупнее обычного текста книги — иначе это не
+     *  титул, и гадать нельзя: лучше имя файла, чем «УДК 502» в полке. */
+    private const val TITLE_MIN_OVER_BODY = 1.5f
+
+    private const val TITLE_MAX_CHARS = 80
+
+    /** Название книги с ТИТУЛЬНОГО ЛИСТА. Возврат null — не разобрались.
+     *
+     *  Зачем: у многих PDF в метаданных названия нет вовсе (у учебника «Человек и
+     *  мир» Title пустой), и книга попадала в библиотеку под именем файла —
+     *  «Chel_i_mir_5kl_Lopuh_rus_2022». На титуле название всегда набрано крупнее
+     *  всего остального, поэтому берём строки первых страниц с самым большим
+     *  кеглем и склеиваем их в одну («ЧЕЛОВЕК» + «И МИР»). */
+    private fun guessTitle(pages: List<List<PdfLine>>, n: Int): String? {
+        if (pages.isEmpty() || n <= 0) return null
+        val body = bodySize(pages)
+        if (body <= 0f) return null
+        val upto = minOf(n, TITLE_PAGES)
+        var maxSize = 0f
+        for (i in 0 until upto) for (l in pages[i]) {
+            val t = l.norm()
+            if (l.size <= maxSize) continue
+            if (t.count { it.isLetter() } < 3) continue
+            if (t.length > TITLE_MAX_CHARS) continue
+            if (t.count { it.isDigit() } * 2 > t.length) continue
+            maxSize = l.size
+        }
+        if (maxSize < body * TITLE_MIN_OVER_BODY) return null
+        val need = maxSize * TITLE_SIZE_RATIO
+        val parts = ArrayList<String>(3)
+        var len = 0
+        for (i in 0 until upto) {
+            if (parts.size >= 3) break
+            for (l in pages[i]) {
+                if (parts.size >= 3) break
+                if (l.size < need) continue
+                val t = l.norm()
+                if (t.count { it.isLetter() } < 3) continue
+                if (t.length > TITLE_MAX_CHARS) continue
+                if (t.count { it.isDigit() } * 2 > t.length) continue
+                if (noiseLabels.contains(t.lowercase().trimEnd('.', ' '))) continue
+                if (len + t.length > TITLE_MAX_CHARS) continue
+                parts.add(t)
+                len += t.length + 1
+            }
+        }
+        if (parts.isEmpty()) return null
+        // ДВА ЯЗЫКА НА ТИТУЛЕ — берём один (16.10.2026). У «Жизни в поместье»
+        // название напечатано дважды: «Жизнь в поместье» и «On the Estate».
+        // Оставляем строки той же письменности, что и первая: читать вслух
+        // «Жизнь в поместье Он зе Эстейт» незачем.
+        val latin = parts.first().any { it in 'A'..'Z' || it in 'a'..'z' }
+        val one = parts.filter { p ->
+            val isLatin = p.any { it in 'A'..'Z' || it in 'a'..'z' }
+            isLatin == latin
+        }
+        val title = sentenceCase((if (one.isEmpty()) parts else one).joinToString(" "))
+        return title.takeIf { looksLikeTitle(it) }
+    }
+
+    /** «ЧЕЛОВЕК И МИР» → «Человек и мир»: название, набранное одними прописными,
+     *  в полке и в объявлении читать удобнее обычным. Регистр трогаем, только
+     *  если строчных букв в названии нет вовсе. */
+    private fun sentenceCase(t: String): String {
+        if (t.any { it.isLowerCase() }) return t
+        return t.lowercase().replaceFirstChar { c -> c.uppercaseChar() }
+    }
+
+    /** Название с титульного листа БЕЗ полного разбора книги (16.10.2026, 264x).
+     *
+     *  Нужно скану папки: иначе название появлялось бы только после открытия
+     *  книги, а Серж просил, чтобы кривые имена исправлялись уже при сканировании.
+     *  Читаем только первые [TITLE_PAGES] страниц — это дешевле полного разбора:
+     *  замер на зонде 16.10.2026 дал 0,24 с у «Звонка для родителя» и 4,6 с у
+     *  тяжёлого учебника на 38 МБ (там дорого открыть сам файл, а не прочитать
+     *  страницы). Возврат null — не разобрались или файл не открылся. */
+    fun peekPageTitle(file: File, scratchDir: File): String? {
+        var doc: PDDocument? = null
+        return try {
+            val mem = MemoryUsageSetting.setupTempFileOnly().setTempDir(scratchDir)
+            doc = PDDocument.load(file, mem)
+            val n = doc.documentCatalog.pages.count
+            if (n <= 0) return null
+            if (doc.isEncrypted) runCatching { doc.setAllSecurityToBeRemoved(true) }
+            val s = TitleStripper()
+            s.startPage = 1
+            s.endPage = minOf(n, TITLE_PAGES)
+            s.getText(doc)
+            guessTitle(s.pages, s.pages.size)
+        } catch (_: OutOfMemoryError) {
+            null
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { doc?.close() }
+        }
+    }
+
+    /** Строки первых страниц со шрифтами — только для [peekPageTitle]. Чистку
+     *  набора не делает: нужен лишь кегль и текст строк. */
+    private class TitleStripper : PDFTextStripper() {
+        val pages = ArrayList<List<PdfLine>>()
+        private val pageLines = ArrayList<PdfLine>()
+        private val line = StringBuilder()
+        private var size = 0f
+        private var y = Float.NaN
+        private var x = Float.NaN
+
+        override fun startPage(page: PDPage) {
+            pageLines.clear()
+            clearLine()
+        }
+
+        override fun writeString(text: String, textPositions: List<TextPosition>) {
+            if (textPositions.isNotEmpty()) {
+                if (line.isEmpty() && y.isNaN()) {
+                    y = textPositions[0].yDirAdj
+                    x = textPositions[0].xDirAdj
+                }
+                for (p in textPositions) {
+                    val s = p.fontSizeInPt
+                    if (s > size) size = s
+                }
+            }
+            line.append(text)
+        }
+
+        override fun writeString(text: String) {
+            line.append(text)
+        }
+
+        override fun writeLineSeparator() {
+            flushLine()
+        }
+
+        override fun endPage(page: PDPage) {
+            flushLine()
+            pages.add(ArrayList(pageLines))
+            pageLines.clear()
+        }
+
+        private fun clearLine() {
+            line.setLength(0)
+            size = 0f
+            y = Float.NaN
+            x = Float.NaN
+        }
+
+        private fun flushLine() {
+            val t = line.toString().replace(Regex("\\s+"), " ").trim()
+            if (t.isNotEmpty()) {
+                val l = PdfLine(if (y.isNaN()) 0f else y, if (x.isNaN()) 0f else x, t)
+                l.size = size
+                pageLines.add(l)
+            }
+            clearLine()
+        }
+    }
+
     // ---------------- Дерево закладок -> разделы ----------------
 
     /** Разделы в порядке чтения: (заголовок, страница начала). В дереве идём
@@ -1140,11 +1548,32 @@ object PdfParser {
     /** Заголовок закладки → кандидат в название раздела, либо null (шум). */
     private fun cleanHeading(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
-        val t = raw.replace(Regex("\\s+"), " ").trim()
+        var t = raw.replace(Regex("\\s+"), " ").trim()
             // Снять маркеры списков, которыми производители помечают буллеты.
             .trim('■', '●', '•', '◦', '▪', '·', '*', '»', ':', '.', '-', '–')
             .trim()
         if (t.isEmpty()) return null
+        // ЯРЛЫК ПЕЧАТНОГО БЛОКА В НАЧАЛЕ ЗАКЛАДКИ (17.10.2026). У учебника
+        // «Человек и мир. 2 класс» закладки называются «Форзац 1. По страницам
+        // Красной книги…» и «Форзац 2. По страницам…». Форзац — это часть
+        // бумажной книги, а не раздел: Серж слышал «Форзац 1» в начале чтения.
+        // Ярлык снимаем, остаток оставляем названием; остатка нет — закладку
+        // выбрасываем целиком.
+        val label = BLOCK_LABEL.find(t)
+        if (label != null) {
+            val rest = t.substring(label.range.last + 1).trim()
+            // ЛОВУШКА: «Форзац — внутренняя сторона обложки» — это уже ФРАЗА, а не
+            // ярлык. Отличаем по номеру: ярлык идёт с номером («Форзац 2») либо
+            // сразу кончается. Если после слова стоит тире или двоеточие и номера
+            // нет, это текст — не трогаем.
+            val numbered = label.groupValues[2].isNotEmpty()
+            val dashTail = rest.startsWith("—") || rest.startsWith("-") || rest.startsWith(":")
+            when {
+                !numbered && dashTail -> Unit          // оставляем название как есть
+                rest.count { it.isLetter() } < 3 -> return null
+                else -> t = rest
+            }
+        }
         // Служебные блоки-ярлыки («Указание») и «[ru]/[pl]»-обёртки языков.
         val lower = t.lowercase()
         if (lower.contains('[')) return null
@@ -1157,6 +1586,14 @@ object PdfParser {
         return t
     }
 
+    /** Ярлык печатного блока в начале названия закладки: «Форзац 2.», «Нахзац 1»,
+     *  «Обложка», «Титульный лист» — с номером или без. */
+    private val BLOCK_LABEL = Regex(
+        "^(обложка|оборот обложки|форзац|нахзац|титул|титульный лист|выходные данные)" +
+            "\\s*(\\d{1,2}|[IVXІі]{1,4})?\\.?\\s*",
+        RegexOption.IGNORE_CASE,
+    )
+
     // ---------------- Сборка глав ----------------
 
     /** Главы по разделам из закладок: раздел начинается на странице своей
@@ -1164,7 +1601,7 @@ object PdfParser {
      *  и страницы до своей закладки (обложка, печатное «Содержание»). */
     private fun chaptersFromSections(
         sections: ArrayList<Pair<String, Int>>,
-        pageTexts: List<String>,
+        pageParas: List<List<PdfPara>>,
         n: Int,
         fix: Fixes,
     ): ArrayList<Chapter> {
@@ -1172,13 +1609,99 @@ object PdfParser {
         for (i in sections.indices) {
             val start = if (i == 0) 0 else sections[i].second
             val end = if (i + 1 < sections.size) sections[i + 1].second else n
-            val text = joinPages(pageTexts, start, end, fix)
-            if (text.isBlank()) continue
-            val sentences = TextSplit.fromParagraphs(listOf(text))
+            val paras = joinPages(pageParas, start, end, fix)
+            if (paras.isEmpty()) continue
+            // АБЗАЦЫ РАЗДЕЛА ОСТАЮТСЯ АБЗАЦАМИ (15.10.2026): прежде весь раздел
+            // уходил одной строкой, и у учебника с закладками в ленте была ОДНА
+            // строка на главу — та же потеря структуры, что у книги без закладок.
+            val sentences = TextSplit.fromParagraphs(paras)
             if (sentences.isEmpty()) continue
             out.add(Chapter(sections[i].first, sentences, major = true))
         }
         return out
+    }
+
+    /** Главы по ЗАГОЛОВКАМ, найденным по КЕГЛЮ (16.10.2026, сборка 263x).
+     *
+     *  Зачем: у PDF без закладок главами были СТРАНИЦЫ, и оглавление «Звонка для
+     *  родителя» выглядело как 253 страницы при 22 настоящих главах. Кегль в PDF
+     *  есть, и по нему заголовок виден: в этой книге тело набрано 10 pt,
+     *  названия глав — 26 pt, частей — 46 pt.
+     *
+     *  Как собираем. Идём по абзацам книги по порядку; абзац-заголовок открывает
+     *  новую главу, а его текст становится НАЗВАНИЕМ и из текста главы уходит —
+     *  иначе диктор прочёл бы его дважды (в оглавлении и в чтении). Название в
+     *  две-три строки («Часть I» + «Зачем нужно альтернативное образование?») —
+     *  это несколько крупных абзацев ОДНОЙ страницы подряд, их склеиваем.
+     *
+     *  Возврат null — заголовков меньше [MIN_HEADINGS]: правило ошиблось, и книгу
+     *  делим по страницам, как прежде. Это и есть откат: там, где кегль не
+     *  отличается (или врёт, как у иных сканов), поведение прежнее.
+     */
+    private fun chaptersFromHeadings(
+        pageParas: List<List<PdfPara>>,
+        bookTitle: String?,
+    ): ArrayList<Chapter>? {
+        var count = 0
+        for (page in pageParas) for (p in page) if (p.heading) count++
+        if (count < MIN_HEADINGS) return null
+
+        val out = ArrayList<Chapter>(count + 1)
+        // Первая глава — всё, что стоит ДО первого заголовка (обложка, выходные
+        // данные, печатное оглавление): название ей даёт книга, а если названия
+        // нет — «Начало». Как и «Стр. N», это НАШЕ название (`autoTitle`):
+        // в оглавлении оно нужно, а вслух его не читаем.
+        var title: String = bookTitle?.replace(Regex("\\s+"), " ")?.trim()
+            ?.takeIf { it.isNotEmpty() } ?: "Начало"
+        var auto = true
+        var body = ArrayList<String>(32)
+        var lastWasHeading = false
+        var lastHeadingPage = -1
+
+        fun flush() {
+            if (body.isEmpty()) return
+            val sentences = TextSplit.fromParagraphs(body)
+            body = ArrayList(32)
+            if (sentences.isEmpty()) return
+            out.add(Chapter(title, sentences, major = true, autoTitle = auto))
+        }
+
+        for ((pageIdx, page) in pageParas.withIndex()) {
+            for (p in page) {
+                if (p.heading) {
+                    if (lastWasHeading && lastHeadingPage == pageIdx) {
+                        title = joinHeading(title, p.text)
+                    } else {
+                        flush()
+                        title = p.text.trim()
+                            .trimEnd('.', ',', ' ', ':', '—', '-', '–')
+                            .ifBlank { p.text.trim() }
+                        auto = false
+                    }
+                    lastWasHeading = true
+                    lastHeadingPage = pageIdx
+                    continue
+                }
+                lastWasHeading = false
+                body.add(p.text)
+            }
+        }
+        flush()
+        // Одни названия без текста — пустое оглавление: книгу отдаём постранично.
+        if (out.count { it.sentences.isNotEmpty() } < MIN_HEADINGS) return null
+        Diag.log("pdf", "главы по кеглю: заголовков $count, глав ${out.size}")
+        return out
+    }
+
+    /** Склеить две части одного названия: строчная буква продолжает предыдущую
+     *  строку через пробел, заглавная начинает новую мысль — её отделяем точкой
+     *  («Часть I» + «Зачем нужно…» → «Часть I. Зачем нужно…»). */
+    private fun joinHeading(a: String, b: String): String {
+        val t = b.trim()
+        if (t.isEmpty()) return a
+        val last = a.lastOrNull()
+        val done = last != null && "…:;»\"".indexOf(last) >= 0
+        return if (done || t[0].isLowerCase()) "$a $t" else "$a. $t"
     }
 
     /** Запасной вариант без структуры: по читаемой странице — глава «Стр. N».
@@ -1187,29 +1710,53 @@ object PdfParser {
      *  слушать «Стр. 1, Стр. 2…» на каждой странице нечего. */
     private fun chaptersFromPages(
         readable: List<Int>,
-        pageTexts: List<String>,
+        pageParas: List<List<PdfPara>>,
     ): ArrayList<Chapter> {
         val out = ArrayList<Chapter>(readable.size)
         for (i in readable) {
-            val text = pageTexts[i].replace(Regex("\\s+"), " ").trim()
-            if (text.isEmpty()) continue
-            val sentences = TextSplit.fromParagraphs(listOf(text))
+            val paras = pageParas.getOrElse(i) { emptyList() }.map { it.text }.filter { it.isNotEmpty() }
+            if (paras.isEmpty()) continue
+            val sentences = TextSplit.fromParagraphs(paras)
             if (sentences.isEmpty()) continue
             out.add(Chapter("Стр. ${i + 1}", sentences, major = true, autoTitle = true))
         }
         return out
     }
 
-    /** Склеить текст страниц диапазона в один поток: страницы — через пробел,
-     *  чтобы предложение, переходящее через границу страницы, не рвалось, а
-     *  перенос на стыке страниц убирает [glueLines] (09.10.2026). */
-    private fun joinPages(pageTexts: List<String>, from: Int, to: Int, fix: Fixes): String =
-        glueLines(
-            (from until to).map { i ->
-                pageTexts.getOrElse(i) { "" }.replace(Regex("\\s+"), " ").trim()
-            },
-            fix,
-        )
+    /** Абзацы страниц диапазона — в один список: страницы идут подряд, а абзац,
+     *  разрезанный границей страницы, дошивается к прежнему. Признак тот же, что
+     *  у переноса в [glueLines]: дефис приклеен к последней букве, а продолжение
+     *  начинается со строчной. Остальные границы абзацев остаются на месте —
+     *  иначе раздел из закладок снова стал бы одной строкой (15.10.2026). */
+    private fun joinPages(
+        pageParas: List<List<PdfPara>>,
+        from: Int,
+        to: Int,
+        fix: Fixes,
+    ): List<String> {
+        val out = ArrayList<String>(64)
+        for (i in from until to) {
+            var firstOnPage = true
+            for (raw in pageParas.getOrElse(i) { emptyList() }) {
+                val t = raw.text.replace(Regex("\\s+"), " ").trim()
+                if (t.isEmpty()) continue
+                val last = out.lastOrNull()
+                if (firstOnPage && last != null && (cutWord(last) || cutRange(last))) {
+                    // Продолжение слова с прошлой страницы — дошиваем.
+                    out[out.size - 1] = if (cutWord(last) && t[0].isLowerCase()) {
+                        last.dropLast(1) + t
+                    } else {
+                        last + t
+                    }
+                    fix.glued++
+                } else {
+                    out.add(t)
+                }
+                firstOnPage = false
+            }
+        }
+        return out
+    }
 
     // ---------------- Извлечение текста по страницам ----------------
 
@@ -1229,6 +1776,10 @@ object PdfParser {
 
         /** Знаки текущей строки — в том порядке, как их отдал распознаватель. */
         private var linePositions = ArrayList<TextPosition>()
+
+        /** Кегль текущей строки (самый крупный из её знаков), точки. По нему
+         *  [cleanPages] видит заголовок (16.10.2026, сборка 263x). */
+        private var lineSize = 0f
 
         /** Строки каждой страницы с координатами: по ним [cleanPages] ищет
          *  колонтитулы, номера страниц и буквицы. */
@@ -1256,6 +1807,10 @@ object PdfParser {
                 for (t in textPositions) {
                     val r = t.xDirAdj + t.widthDirAdj
                     if (lineRight.isNaN() || r > lineRight) lineRight = r
+                    // Кегль запоминаем самый крупный: у строки он один, но у
+                    // склеенных распознавателем кусков бывает разный.
+                    val sz = t.fontSizeInPt
+                    if (sz > lineSize) lineSize = sz
                 }
             }
             line.append(text)
@@ -1286,6 +1841,7 @@ object PdfParser {
             lineY = Float.NaN
             lineX = Float.NaN
             lineRight = Float.NaN
+            lineSize = 0f
         }
 
         private fun flushLine() {
@@ -1313,6 +1869,7 @@ object PdfParser {
                     prev.text += t
                     val r = if (lineRight.isNaN()) -1f else lineRight
                     if (r > 0f && r > prev.right) prev.right = r
+                    if (lineSize > prev.size) prev.size = lineSize
                     fix.fragments++
                     clearLine()
                     return
@@ -1322,6 +1879,7 @@ object PdfParser {
                 val l = PdfLine(y, x, t)
                 l.right = if (lineRight.isNaN()) -1f else lineRight
                 l.pos = linePositions
+                l.size = lineSize
                 pageLines.add(l)
             }
             clearLine()

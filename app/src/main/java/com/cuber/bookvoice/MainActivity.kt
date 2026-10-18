@@ -353,18 +353,28 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     /** «Удалить» в вопросе о дочитанной книге: стираем файл и убираем запись с
      *  полки (то же ядро, что у удаления с полки, — [BookDelete]), после чего
-     *  читалка закрывается: читать больше нечего. */
+     *  читалка закрывается: читать больше нечего. Файл стереть не вышло — книгу
+     *  не трогаем и говорим правду (12.10.2026, решение Сержа). */
     private fun deleteFinishedBook(rec: BookRecord) {
         ReaderEngine.endAskDone()
-        val deleted = BookDelete.book(this, rec, withFiles = true)
+        val o = BookDelete.book(this, rec, withFiles = true)
         Diag.log(
             this, "lib",
-            "дочитанная книга удалена: ${rec.name}; файл ${if (deleted) "стёрт" else "не стёрт — скрыт от скана"}"
+            "дочитанная книга ${rec.name}: " + when {
+                !o.removed -> "файл стереть не удалось — книга осталась на полке"
+                o.fileGone -> "книга и файл удалены"
+                else -> "книга убрана с полки, файл остался"
+            }
         )
-        Vibra.confirm(this)
-        toast(getString(R.string.book_deleted))
-        // Книга стёрта из-под открытой читалки: гасим чтение и уходим на полку,
-        // где её строки уже нет.
+        if (o.removed) {
+            Vibra.confirm(this)
+            toast(getString(R.string.book_deleted))
+        } else {
+            Vibra.error(this)
+            toast(getString(R.string.book_delete_file_stays))
+        }
+        // Книга дочитана: гасим чтение и уходим на полку — и когда запись убрана,
+        // и когда файл стереть не вышло (книга там же, строкой).
         ReaderEngine.close()
         startLibrary()
     }
@@ -447,20 +457,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.sentenceList.layoutManager = layoutManager
         binding.sentenceList.adapter = adapter
         binding.sentenceList.setHasFixedSize(true)
-        // Конец книги на ощупь (08.10.2026, просьба Сержа — «и в читалке»):
-        // свайп вниз в самом конце ленты отвечает толчком, вверх в самом начале —
-        // двойным. Середину не трогаем: там прокрутку ведёт TalkBack.
-        // Второй путь (09.10.2026): диктор Сержа (`com.nirenr.talkman`) действий
-        // прокрутки не шлёт вовсе, поэтому край ловим ещё и по фокусу — как
-        // только диктор встаёт на последнюю строку книги, отвечаем толчком.
-        // Третий путь — само касание — встроен в installSwipe (у списка уже есть
-        // свой слушатель касаний, поэтому здесь touch = false).
-        A11y.edgeVibrate(
-            binding.sentenceList,
-            "читалка",
-            rows = binding.sentenceList,
-            touch = false,
-        )
         // Наблюдение за фокусом диктора (29.09.2026, жалоба «фокус улетает на
         // кнопку Ещё или Читать»): пишем, кто получает доступностный фокус.
         // Поведение не меняем — только журнал; по нему видно, уходит ли диктор из
@@ -1080,6 +1076,43 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
     }.getOrElse { getString(R.string.book_file_missing, currentName ?: uri.toString()) }
 
+    /** Книга не открылась потому, что лежит во внешнем хранилище, а «Доступа ко
+     *  всем файлам» нет. 14.10.2026, журнал Сержа: после обновления системы
+     *  (Android 16 → 17) доступ снялся, и PDF из /sdcard/Books отвечал
+     *  «формат не поддерживается или файл повреждён» — файл был целый, читать
+     *  его было нечем. Промах виден только на внешних книгах (их на полке 26):
+     *  своя копия внутри приложения читается всегда. null — причина не в
+     *  доступе. */
+    private fun accessBlockedReason(uri: Uri): String? {
+        if (AllFiles.granted(this)) return null
+        if (uri.scheme != "file") return null
+        val path = uri.path ?: return null
+        if (!BookStore.externalPath(path)) return null
+        return getString(R.string.book_file_no_access, currentName ?: uri.lastPathSegment ?: path)
+    }
+
+    /** Сказать причину и предложить включить «Доступ ко всем файлам» одним
+     *  касанием. Окно читалки закрываем тем же порядком, что и [failOpen]:
+     *  книга не открылась — пустого окна человек видеть не должен. */
+    private fun askAllFiles(reason: String) {
+        Diag.log(
+            this, "activity",
+            "нет доступа ко всем файлам — книга не открылась; адрес: $currentUri"
+        )
+        toast(reason)
+        binding.tvHeader.announceForAccessibility(reason)
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.all_files_title)
+            .setMessage(reason)
+            .setPositiveButton(R.string.all_files_open) { _, _ ->
+                AllFiles.openSettings(this)
+                finish()
+            }
+            .setNegativeButton(R.string.all_files_later) { _, _ -> finish() }
+            .setOnCancelListener { finish() }
+            .show()
+    }
+
     private fun openBook(uri: Uri, chapter: Int, sentence: Int, rewindOnOpen: Boolean = false) {
         // 29.09.2026: другой книге — другой звук, и сразу. Пока новая книга
         // разбирается (тяжёлый PDF — секунды), прежняя не должна звучать: тестер
@@ -1132,11 +1165,38 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             lastOpenWhy = null
             lastReadError = null
             val gone = fileGoneReason(uri)
+            // 15.10.2026: место, с которого открываем книгу, чистка может сдвинуть
+            // (она выбрасывает строки) — пересчитываем его по карте [StructureClean]
+            // сразу после разбора и дальше пользуемся уже новыми координатами.
+            var startChapter = chapter
+            var startSentence = sentence
             val doc = try {
                 // msg3081+: тяжёлый разбор (большой PDF) кэшируем на диск. Первое
                 // открытие — разбор, повторное — готовый текст из кэша (BookCache.get
                 // сам проверяет, что файл книги не менялся).
-                if (gone != null) null else BookCache.get(this, uri) ?: readBook(uri)
+                if (gone != null) null else BookCache.get(this, uri) ?: readBook(uri)?.let { fresh ->
+                    // 15.10.2026: ОБЩИЙ РАЗБОР СТРУКТУРЫ — один шаг на все форматы
+                    // ([StructureClean]): убрать мусорные строки и разделители сцен,
+                    // склеить рваные строки, найти главы там, где их нет. Зовём
+                    // ТОЛЬКО для свежего разбора и ДО записи в кэш: тогда книга всюду
+                    // идёт уже разобранной. Режим и части разбора — в [ParsePrefs]:
+                    // у книги может быть своя отметка «как в файле».
+                    val bookUri = uri.toString()
+                    if (ParsePrefs.modeForBook(this, bookUri) == ParsePrefs.MODE_RULES) {
+                        val cleaned = StructureClean.clean(fresh, ParsePrefs.parts(this))
+                        Diag.log(this, "parse", cleaned.stats.toLog())
+                        // Место чтения: карта отдаёт новые координаты, а если
+                        // структура глав изменилась (карты нет) — оставляем как было.
+                        cleaned.remap?.invoke(startChapter, startSentence)?.let { p ->
+                            startChapter = p.first
+                            startSentence = p.second
+                        }
+                        cleaned.doc
+                    } else {
+                        Diag.log(this, "parse", "разбор структуры выключен — книга как в файле")
+                        fresh
+                    }
+                }
             } catch (_: Exception) {
                 null
             }
@@ -1157,6 +1217,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 // Запись книги можно обновлять и до проверок ниже: это просто
                 // метаданные полки, к движку и разбору они отношения не имеют.
                 seriesUpd?.let { runCatching { BookStore.upsert(this, it) } }
+                // 16.10.2026: разбор достал название с титульного листа — если на
+                // полке стоит имя файла, заменяем его настоящим названием.
+                doc?.let { d -> runCatching { fixShelfTitleFromDoc(d) } }
                 // msg2679: разбор кончился — состояние загрузки снято, дальше
                 // refreshChrome сам решает по факту (есть книга или пусто).
                 bookLoading = false
@@ -1167,6 +1230,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 if (isDestroyed || isFinishing || ReaderEngine.player == null) return@post
                 if (doc == null) {
                     Diag.log(this, "activity", "разбор не удался: ${lastOpenWhy ?: "без подробностей"}")
+                    // Причина может быть не в файле, а в доступе: без «Доступа ко
+                    // всем файлам» внешняя книга не читается вовсе, и говорить
+                    // про формат — значит отправлять человека искать поломку в
+                    // целом файле (см. [accessBlockedReason]).
+                    val blocked = accessBlockedReason(uri)
+                    if (blocked != null) {
+                        askAllFiles(blocked)
+                        return@post
+                    }
                     failOpen(gone
                         ?: unreadableFormatMessage()
                         ?: "Не удалось открыть: формат не поддерживается или файл повреждён")
@@ -1205,9 +1277,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     chapterStart = prog.first
                     cumWords = prog.second
                 }
-                chapterIdx = chapter.coerceIn(0, doc.chapters.size - 1)
-                sentenceIdx = if (chapterIdx == chapter && chapter in 0..doc.chapters.lastIndex) {
-                    sentence.coerceIn(0, doc.chapters[chapterIdx].sentences.size - 1)
+                chapterIdx = startChapter.coerceIn(0, doc.chapters.size - 1)
+                sentenceIdx = if (chapterIdx == startChapter && startChapter in 0..doc.chapters.lastIndex) {
+                    startSentence.coerceIn(0, doc.chapters[chapterIdx].sentences.size - 1)
                 } else 0
                 // msg1139: запоминаем, откуда книга открылась, и что навигации ещё
                 // не было — по этому отличаем сброс позиции к началу от выбора.
@@ -1941,20 +2013,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         )
     }
 
-    /** Толчок у края ленты — наблюдатель касаний (09.10.2026).
-     *
-     *  Живёт ПОЛЕМ, а события ему отдаёт [dispatchTouchEvent] окна: у касания один
-     *  адресат, и жест, начавшийся на кнопках под лентой или на шапке, до
-     *  слушателя самой ленты не доходит (вопросы Сержа: «спускаюсь пальцем с
-     *  заголовка книги на первую — не вибрирует?», «и на нижних также сделал
-     *  элементах?»). Смотрим при этом ВСЕ касания окна, но никому их не отбираем. */
-    private var readerEdge: A11y.EdgeGesture? = null
-
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        readerEdge?.onTouch(ev)
-        return super.dispatchTouchEvent(ev)
-    }
-
     /** Настраиваемые свайпы влево/вправо по тексту (#77). Без TalkBack жест —
      *  одним пальцем; с включённым TalkBack один палец он забирает себе, поэтому
      *  свайпать нужно двумя пальцами (их скринридер не трогает). И то, и другое
@@ -1966,10 +2024,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         var downX = 0f
         var downY = 0f
         var multi = false
-        // Толчок у края ленты (09.10.2026): наблюдатель живёт между событиями
-        // касания и даёт толчок прямо в движении пальца за краем. Касания ему
-        // отдаёт окно ([dispatchTouchEvent]), а не сама лента.
-        readerEdge = A11y.EdgeGesture(binding.sentenceList, "читалка")
         binding.sentenceList.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -2649,8 +2703,47 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         ReaderEngine.pausePlayback(keepFocus, byFocusLoss)
 
     /** Старт чтения с текущей позиции. Логика (guard места, фокус, медиа-сервис,
-     *  кнопка) — в движке, ему стартовать нужно и при чтении без окна. */
-    private fun startSpeakingCurrent() = ReaderEngine.startSpeakingCurrent()
+     *  кнопка) — в движке, ему стартовать нужно и при чтении без окна.
+     *
+     *  16.10.2026 (сборка 264x): перед стартом спрашиваем, жив ли синтезатор
+     *  вообще. У Сержа TTS не работает в системе целиком — и наша читалка молчала
+     *  вместе с ним, человек не понимал, почему книга не звучит. Теперь причина
+     *  называется словами, а системные настройки мы только предлагаем открыть. */
+    private fun startSpeakingCurrent() {
+        if (blockIfTtsBroken()) return
+        ReaderEngine.startSpeakingCurrent()
+    }
+
+    /** Синтезатор не может читать? Тогда объясняем словами, а не молчим. */
+    private fun ttsProblem(): TtsHealth.Answer? = TtsHealth.systemProblem(this)
+        ?: if (TtsHealth.engineUnusable) TtsHealth.Answer(TtsHealth.Problem.SILENT_ENGINE) else null
+
+    /**
+     * true — начинать чтение не надо: причину назвали словами и ОТКРЫЛИ выбор
+     * синтезатора.
+     *
+     * 17.10.2026 (просьба Сержа: «выскакивает окошко, и там нужно сделать переход
+     * к выбору синтезатора… без всяких кнопок „повторить“ и „закрыть“»). Прежде
+     * здесь было окно с кнопками «Попробовать снова», «Настройки синтезатора» и
+     * «Закрыть»: чтобы просто сменить голос, приходилось закрывать окно и искать
+     * панель самому. Теперь причина звучит словами, а сразу за ней открывается
+     * НАША панель «Голос чтения» ([toggleVoicePanel]) — там движок, язык, голоса,
+     * скорость и первая строка «Читать», то есть из неё же можно начать читать
+     * новым голосом. Системные настройки синтезатора остаются в меню «О программе»
+     * и в Настройках — сюда их кнопку не тащим.
+     *
+     * Флаг «движок нерабочий» при этом снимаем: человек как раз идёт менять голос,
+     * и следующее нажатие «Читать» должно СНОВА попробовать прочитать, а не
+     * показать панель вместо чтения.
+     */
+    private fun blockIfTtsBroken(): Boolean {
+        val a = ttsProblem() ?: return false
+        Diag.log(this, "tts", "чтение не начинаю: синтезатор непригоден (${a.problem}) — открываю выбор голоса")
+        binding.tvHeader.announceForAccessibility(TtsHealth.text(this, a))
+        TtsHealth.reset()
+        if (binding.voicePanel.visibility != View.VISIBLE) toggleVoicePanel()
+        return true
+    }
 
     /**
      * 28.09.2026 (код 174): «умный шаг» попробовали и убрали — он сам выбирал, по
@@ -3034,8 +3127,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val bmHeader = if (bms.isEmpty()) null else getString(R.string.bm_toc_entry, bms.size)
         val titles = bk.chapters.mapIndexed { i, ch ->
             val title = ch.title?.takeIf { it.isNotBlank() } ?: "Глава ${i + 1}"
-            if (i == chapterIdx) getString(R.string.toc_current, i + 1, title)
-            else "${i + 1}. $title"
+            // ЦИФРЫ В НАЧАЛЕ СТРОКИ НЕТ (16.10.2026, просьба Сержа). Прежде
+            // строка была «7. Название главы», и диктор читал «семь, название…»
+            // — то есть номер главы ДО её имени («первая глава один, второй
+            // глава пять»). Порядок и так виден по списку, а где ты сейчас —
+            // говорит пометка «сейчас» и строка места.
+            if (i == chapterIdx) getString(R.string.toc_current, title)
+            else title
         }
         val items = if (bmHeader == null) titles.toTypedArray() else arrayOf(bmHeader) + titles
         // msg6171: оглавление открывается на текущей главе, а не с начала
@@ -3066,9 +3164,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             if (row in items.indices) list.setSelection(row)
         }
         dlg.show()
-        // Конец списка на ощупь (09.10.2026): в учебнике глав сотни, и, дойдя до
-        // конца, понять нечем — главы кончились или палец не сработал.
-        A11y.edgeVibrateDialog(dlg, "оглавление")
     }
 
     /** Перепрыгнуть на глобальное предложение (слайдер перемотки). [announce] —
@@ -3530,9 +3625,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             setPadding(dp2px(4f), dp2px(8f), dp2px(4f), dp2px(8f))
         }
         scroll.addView(content)
-        // Конец списка на ощупь (09.10.2026): закладок бывает много, а список
-        // собран руками — вешаем наблюдателя на него самого.
-        A11y.edgeVibrate(scroll, "закладки", rows = content)
         var dialog: androidx.appcompat.app.AlertDialog? = null
 
         fun jump(bm: Bm) {
@@ -3705,6 +3797,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         actions.add(getString(R.string.quotes_title) to {  // 0.3.44 (msg1092): Цитаты из читалки
             startActivity(Intent(this, QuotesActivity::class.java))
         })
+        // 15.10.2026 (решение Сержа): разбор книги — ОДНИМ пунктом, а внутри
+        // подменю: в самом меню «⋮» три новых пункта были бы нагромождением.
+        // Живёт только здесь: в меню предложения (TalkBack «Действия») и на полке
+        // этих ручек нет — они про книгу, а не про предложение и не про полку.
+        actions.add(getString(R.string.reader_parse_menu) to { showParseDialog() })
         // msg3081+: панель быстрого доступа (пять ячеек недавних/закреплённых книг)
         // и закрепление открытой книги. Показ/скрытие — переключатель; пункт пина
         // меняется по тому, закреплена ли текущая книга.
@@ -3737,6 +3834,73 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 actions[which].second()
             }
             .show()  // msg1687: без «Закрыть» — меню гасит системный «назад».
+    }
+
+    /**
+     * Подменю «Разбор книги» из меню «⋮» читалки (15.10.2026; переделано
+     * 16.10.2026, сборка 263x).
+     *
+     * ЧТО ИЗМЕНИЛОСЬ И ПОЧЕМУ. Прежде это были ДВЕ КНОПКИ — «Разобрать книгу
+     * заново» и «Вернуть как в файле», — и Серж справедливо спросил: зачем
+     * «разобрать заново», если книга и так разобрана? Кнопки выглядели как два
+     * разных действия, хотя это ОДИН переключатель с двумя положениями, и на
+     * деле книга всегда стоит в одном из них. Теперь это СПИСОК С ОТМЕТКОЙ:
+     * галочка стоит на том, как книга читается СЕЙЧАС, а выбор другого
+     * положения сразу пересобирает книгу. Цифр по-прежнему нет (решение Сержа
+     * 15.10.2026 — числа уходят в журнал).
+     *
+     * Если человек выбрал положение, в котором книга уже стоит, пересобирать
+     * нечего, но и молчать нельзя — говорим «Так уже и читается»: пустое нажатие
+     * без ответа и было причиной вопроса.
+     */
+    private fun showParseDialog() {
+        val u = currentUri ?: return
+        val mode = ParsePrefs.modeForBook(this, u)
+        val checked = if (mode == ParsePrefs.MODE_RULES) 0 else 1
+        val options = arrayOf(
+            getString(R.string.reader_parse_opt_rules),
+            getString(R.string.reader_parse_opt_file),
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.reader_parse_title, ParsePrefs.modeWord(this, mode)))
+            .setMessage(R.string.reader_parse_hint)
+            .setSingleChoiceItems(options, checked) { dlg, which ->
+                dlg.dismiss()
+                if (which == checked) {
+                    binding.tvHeader.announceForAccessibility(getString(R.string.reader_parse_same))
+                    return@setSingleChoiceItems
+                }
+                reparseCurrentBook(u, asFile = which == 1)
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /**
+     * Пересобрать открытую книгу под выбранное положение переключателя: поставить
+     * книге свою отметку и выбросить разобранный текст из кэша, после чего книга
+     * открывается заново ТЕМ ЖЕ МЕСТОМ.
+     *
+     * Почему без выброса кэша нельзя: текст книги берётся из кэша разбора
+     * ([BookCache]), поэтому смена настройки без сброса записи ничего бы не
+     * изменила — человек нажал бы и услышал прежнее чтение (тот же урок, что с
+     * галочками PDF в 253i). Место чтения при этом не сбивается: открываем ту же
+     * главу и то же предложение.
+     */
+    private fun reparseCurrentBook(uri: String, asFile: Boolean) {
+        ParsePrefs.setModeForBook(
+            this, uri,
+            if (asFile) ParsePrefs.MODE_FILE else ParsePrefs.MODE_RULES,
+        )
+        runCatching { BookCache.remove(this, Uri.parse(uri)) }
+        Diag.log(
+            this, "ui",
+            if (asFile) "разбор книги: читаю как в файле" else "разбор книги: разбираю по правилам",
+        )
+        binding.tvHeader.announceForAccessibility(
+            getString(if (asFile) R.string.reader_parse_revert_done else R.string.reader_parse_again_doing)
+        )
+        openBook(Uri.parse(uri), chapterIdx, sentenceIdx)
     }
 
     // ---------------- msg3081+: панель быстрого доступа (пять кнопок-ячеек) ----------------
@@ -3989,6 +4153,27 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private fun currentBookRecord(): BookRecord? {
         val u = currentUri ?: return null
         return BookStore.byUri(this, u)
+    }
+
+    /** НАЗВАНИЕ ИЗ КНИГИ ВМЕСТО ИМЕНИ ФАЙЛА (16.10.2026, сборка 264x).
+     *
+     *  У многих PDF в метаданных названия нет вовсе, и книга стояла на полке под
+     *  именем файла — «Chel_i_mir_5kl_Lopuh_rus_2022». Разбор уже достал настоящее
+     *  название с титульного листа ([PdfParser.guessTitle]); здесь переписываем
+     *  запись полки, но ТОЛЬКО если в ней стоит имя файла или ничего: своё
+     *  «название для полки» ([BookRecord.customTitle]) и чужие названия не
+     *  трогаем — человек мог назвать книгу сам. */
+    private fun fixShelfTitleFromDoc(doc: BookDocument) {
+        val t = doc.title?.trim().orEmpty()
+        if (t.isEmpty()) return
+        val u = currentUri ?: return
+        val rec = runCatching { BookStore.byUri(this, u) }.getOrNull() ?: return
+        if (!rec.customTitle.isNullOrBlank()) return
+        val cur = rec.title?.trim().orEmpty()
+        if (cur.isNotEmpty() && !cur.equals(rec.name.trim(), ignoreCase = true)) return
+        if (cur == t) return
+        runCatching { BookStore.upsert(this, rec.copy(title = t)) }
+        Diag.log(this, "activity", "название книги из файла: «$t» (было «$cur»)")
     }
 
     /** Сохранить запомненное для книги (движок/голос/скорость) в её запись и
@@ -4421,15 +4606,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     /** Показать найденные строки списком — прослушать перед согласием. */
     private fun showDropExamples(found: DictSmart.Found) {
         val items = found.examples.mapIndexed { i, t -> "${i + 1}. $t" }.toTypedArray()
-        // Диалог создаём сами (а не цепочкой .show()): после показа вешаем толчок
-        // у края — найденных строк бывает много (09.10.2026).
+        // Диалог создаём сами (а не цепочкой .show()): подписи строк ставятся
+        // после показа (09.10.2026).
         val dlg = MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.dict_drop_examples, found.count))
             .setItems(items, null)
             .setNegativeButton(R.string.toc_close, null)
             .create()
         dlg.show()
-        A11y.edgeVibrateDialog(dlg, "строки словаря")
     }
 
     /** «Вернуть такие строки» (30.09.2026, вопрос Сержа «а если захочется вернуть

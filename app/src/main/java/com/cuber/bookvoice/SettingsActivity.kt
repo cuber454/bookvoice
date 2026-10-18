@@ -161,6 +161,11 @@ class SettingsActivity(private val act: SectionActivity) {
     // msg5931: строка «Системные кнопки» в разделе «Экран книги» — показывать /
     // скрывать во время чтения / скрывать, пока открыта книга.
     private var readerBarsRow: Button? = null
+    // 15.10.2026: строка «Разбор книги» (раздел «Чтение»). Подсказка строки
+    // называет ВЫБРАННЫЙ режим, поэтому ссылку держим: после выбора в диалоге
+    // переписываем только её текст ([refreshRows]), иначе подпись осталась бы
+    // прежней и выглядело бы, будто настройка не работает.
+    private var parseModeRow: Button? = null
     // Строки-кнопки вкладок Библиотеки (#97): id режима → кнопка «<Имя>: показана/скрыта».
     private val tabRowButtons = ArrayList<Pair<Int, Button>>()
     private var resetTabsRow: Button? = null
@@ -295,19 +300,6 @@ class SettingsActivity(private val act: SectionActivity) {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         binding.btnMore.setOnClickListener { showSettingsMoreMenu() }
-
-        // Конец списка настроек на ощупь (08.10.2026): свайп вниз у последней
-        // строки или вверх у первой отвечает толчком, а не тишиной. Второй путь
-        // (09.10.2026) — по фокусу на крайней строке: диктор Сержа действий
-        // прокрутки не шлёт вовсе. Касания слушает всё окно (09.10.2026): жест,
-        // начавшийся на шапке, до слушателя списка не доходил.
-        A11y.edgeVibrate(
-            binding.scroll,
-            "настройки",
-            rows = binding.content,
-            touch = false,
-            watch = { w -> act.watchTouches(w) },
-        )
 
         // msg1712/1718: шапка как в FBReader — кнопка «Назад» слева от заголовка
         // (в Настройках — по желанию Сергея, как в Каталоге). Работает как
@@ -613,6 +605,30 @@ class SettingsActivity(private val act: SectionActivity) {
             R.string.experiment_pdf_columns, ExpertPrefs.KEY_PDF_COLUMNS, true,
             R.string.experiment_pdf_columns_hint,
         ) { pdfCleanChanged(it, "Чтение по колонкам") }
+        // 16.10.2026 (сборка 263x): главы PDF по кеглю. Снял галочку — книга
+        // снова делится по страницам, как было до 263x: это и есть откат, если
+        // правило где-то найдёт «главу» там, где её нет.
+        addCheck(
+            R.string.experiment_pdf_headings, ExpertPrefs.KEY_PDF_HEADINGS, true,
+            R.string.experiment_pdf_headings_hint,
+        ) { pdfCleanChanged(it, "Главы по кеглю") }
+        // 15.10.2026: три галочки разбора книги — тем же приёмом, что чистки PDF
+        // выше, и по той же причине: снял галочку — книга разберётся заново и
+        // останется как до правки; это и способ проверить, не наша ли чистка
+        // съела нужное. Кэш разбора сам станет негодным по отпечатку настроек,
+        // поэтому в колбэке ничего, кроме журнала и слов вслух, не делаем.
+        addCheck(
+            R.string.experiment_parse_junk, ParsePrefs.KEY_JUNK, true,
+            R.string.experiment_parse_junk_hint,
+        ) { parseCleanChanged(it, "Чистка мусора") }
+        addCheck(
+            R.string.experiment_parse_merge, ParsePrefs.KEY_MERGE, true,
+            R.string.experiment_parse_merge_hint,
+        ) { parseCleanChanged(it, "Склейка разрывов") }
+        addCheck(
+            R.string.experiment_parse_headings, ParsePrefs.KEY_HEADINGS, true,
+            R.string.experiment_parse_headings_hint,
+        ) { parseCleanChanged(it, "Разметка заголовков") }
         addMenuRow(
             "Выключить экспериментальные настройки",
             "раздел исчезнет из настроек; включить снова — семь нажатий по строке " +
@@ -639,6 +655,23 @@ class SettingsActivity(private val act: SectionActivity) {
         binding.tvTitle.announceForAccessibility(
             "$what: ${if (on) "включено" else "выключено"}. " +
                 "Книга разберётся заново при следующем открытии"
+        )
+    }
+
+    /** Переключили галочку разбора книги: пишем в журнал и говорим вслух, что
+     *  книги разберутся заново. Больше ничего и не нужно: кэш разбора сверяет
+     *  отпечаток настроек и сам станет негодным ([ParsePrefs.stamp]), а
+     *  применять что-либо в движке тут нечего — разбор идёт при открытии книги
+     *  (15.10.2026). */
+    private fun parseCleanChanged(on: Boolean, what: String) {
+        Diag.log(
+            act,
+            "ui",
+            "экспериментальные: разбор «$what» — ${if (on) "включен" else "выключен"}",
+        )
+        binding.tvTitle.announceForAccessibility(
+            "$what: ${if (on) "включено" else "выключено"}. " +
+                "Книги разберутся заново при следующем открытии"
         )
     }
 
@@ -1389,6 +1422,16 @@ class SettingsActivity(private val act: SectionActivity) {
         // «Вернуть все кнопки») здесь больше нет — Серж попросил их убрать.
         // Набор галочек человек собирает сам в подразделе «Что показывать в книге».
 
+        // 15.10.2026: «Разбор книги» — каким способом книга делится на части
+        // (как в файле или нашими правилами). Место ей в «Чтении»: это про то,
+        // каким придёт текст в книгу, а не про вид экрана. Выбор — диалогом, как
+        // у «После звонка»: два способа надо слышать словами, а подсказка строки
+        // называет выбранный — по ней слышно, что выбор сработал.
+        parseModeRow = addMenuRow(
+            getString(R.string.settings_parse_title),
+            getString(R.string.settings_parse_hint, parseModeLabel(ParsePrefs.mode(act))),
+        ) { pickParseMode() }
+
         // msg5923/5931: системные кнопки («назад/домой/недавние») — тоже про то,
         // что видно на экране книги. Строка последняя в разделе.
         readerBarsRow = addValueButton { cycleReaderBars() }
@@ -1429,6 +1472,36 @@ class SettingsActivity(private val act: SectionActivity) {
                 .setNegativeButton(R.string.toc_close, null)
                 .show()
         }
+    }
+
+    /** Название режима разбора словами ([ParsePrefs.mode]): «Как в файле» или
+     *  «Правила». И подсказка строки, и пункты диалога берут слова отсюда —
+     *  человек слышит один и тот же режим одними и теми же словами. */
+    private fun parseModeLabel(mode: String): String = getString(
+        if (mode == ParsePrefs.MODE_FILE) R.string.settings_parse_file
+        else R.string.settings_parse_rules
+    )
+
+    /** Выбор «Разбор книги»: как в файле или нашими правилами. Два пункта — как
+     *  у «После звонка» ([pickAfterCallMode]). После выбора переписываем ТОЛЬКО
+     *  текст строки ([refreshRows]), раздел не пересобираем: пересборка уводила
+     *  фокус диктора (жалоба Сержа 06.10.2026). Иначе подсказка строки осталась бы
+     *  прежней и выглядело бы, будто настройка не работает. */
+    private fun pickParseMode() {
+        val modes = arrayOf(ParsePrefs.MODE_FILE, ParsePrefs.MODE_RULES)
+        val labels = modes.map { parseModeLabel(it) }.toTypedArray()
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.settings_parse_title)
+            .setItems(labels) { _, which ->
+                val mode = modes[which]
+                ParsePrefs.setMode(act, mode)
+                Diag.log(act, "ui", "разбор книги: ${parseModeLabel(mode)}")
+                refreshRows()
+                binding.tvTitle.announceForAccessibility(
+                    getString(R.string.settings_parse_changed, parseModeLabel(mode))
+                )
+            }
+            .show()
     }
 
     /** Имя открытого раздела (null — корень). Окно берёт его перед пересозданием
@@ -2439,6 +2512,13 @@ class SettingsActivity(private val act: SectionActivity) {
         // 30.09.2026: «Уровень этого звука: <значение>».
         silentLevelRow?.text = valueLine(getString(R.string.silent_level_title), silentLevelLabel())
         readerBarsRow?.text = valueLine(getString(R.string.reader_bars_title), readerBarsLabel())
+        // 15.10.2026: «Разбор книги» — подсказка строки называет выбранный режим,
+        // поэтому переписываем её вместе с остальными строками-резюме: после
+        // выбора в диалоге человек слышит новый режим на той же строке.
+        parseModeRow?.text = valueLine(
+            getString(R.string.settings_parse_title),
+            getString(R.string.settings_parse_hint, parseModeLabel(ParsePrefs.mode(act)))
+        )
 
         val hiddenTabs = LibraryActivity.tabsHidden(prefs)
         for ((mode, b) in tabRowButtons) {

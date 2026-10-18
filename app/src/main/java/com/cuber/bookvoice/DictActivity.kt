@@ -30,11 +30,6 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
  */
 class DictActivity : RowsActivity() {
 
-    /** Толчок у края списка этому окну не нужен (просьба Сержа 09.10.2026): список
-     *  замен короткий, а толчок срабатывает на КАЖДОМ приходе фокуса на первую или
-     *  последнюю строку — «остановлюсь на элементе, и он начинает вибрировать». */
-    override val edgeTickAuto: Boolean get() = false
-
     private lateinit var binding: ActivitySettingsBinding
 
     override val contentRoot: ViewGroup get() = binding.content

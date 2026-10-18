@@ -182,6 +182,19 @@ object WhatsNew {
             R.string.whats_new_234_5,
             R.string.whats_new_234_6,
         ),
+        // 0.7.0 (versionCode 253): сводный блок с 0.6.0 — разбор всех форматов,
+        // главы PDF по кеглю, оглавление, проценты скачивания, ровное чтение.
+        // Текст утверждён Сержем 16.10.2026 (work/whatsnew-253.txt).
+        253 to listOf(
+            R.string.whats_new_253_1,
+            R.string.whats_new_253_2,
+            R.string.whats_new_253_3,
+            R.string.whats_new_253_4,
+            R.string.whats_new_253_5,
+            R.string.whats_new_253_6,
+            R.string.whats_new_253_7,
+            R.string.whats_new_253_8,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =
@@ -286,8 +299,5 @@ object WhatsNew {
         // продолжается только если человек остался в приложении.
         dlg.setOnDismissListener { onClosed?.invoke(!wentToGroup) }
         dlg.show()
-        // Конец списка на ощупь (09.10.2026): новостей на версию бывает много, а
-        // список тут — длинный ТЕКСТ: помощник сам найдёт, что прокручивается.
-        A11y.edgeVibrateDialog(dlg, "что нового")
     }
 }

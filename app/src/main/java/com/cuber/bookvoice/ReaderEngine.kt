@@ -2041,7 +2041,12 @@ internal object ReaderEngine {
         savePosition()
         pushPlayState()
         if (bk != null && chapterIdx != wasChapter) host?.onChapterLoaded() else host?.onShowCurrent()
-        host?.onAnnounce(ctx.getString(R.string.engine_silent_stop))
+        // СЛОВАМИ, А НЕ МОЛЧА (16.10.2026, сборка 264x). У Сержа движок не работал
+        // в системе вовсе: и наша читалка, и другая не издавали ни звука. Теперь
+        // здесь говорятся слова о синтезаторе ([TtsHealth.stopText]): если причина
+        // известна (движка нет, не выбран, нет голосов) — она, иначе «не дал ни
+        // звука, похоже, не работает, проверьте в настройках».
+        host?.onAnnounce(TtsHealth.stopText(ctx))
     }
 
     /** Сообщить UI и системе новое состояние play/pause. Зовётся на каждой фразе

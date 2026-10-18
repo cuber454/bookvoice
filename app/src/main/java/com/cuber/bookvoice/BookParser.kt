@@ -145,7 +145,13 @@ object BookParser {
                         val base = cleanBookName(entry.name)
                         if (en.endsWith(".fb2") || en.endsWith(".xml")) {
                             val m = metaFromText(prefix)
-                            val title = m?.title?.takeIf { it.isNotBlank() } ?: base
+                            // Своего названия внутри не нашлось (битый или
+                            // неполный архив) — берём имя записи: у книг,
+                            // скачанных как download.fb2.zip, все строки полки
+                            // иначе звучали бы одинаково (жалоба Сержа
+                            // 12.10.2026).
+                            val title = m?.title?.takeIf { it.isNotBlank() }
+                                ?: soleFb2Title(data) ?: base
                             fb2 = BookMeta(title, m?.author, m?.annotation, m?.series, m?.seriesNo)
                         } else if (anyTxt == null) {
                             // У TXT названия нет — показываем имя файла внутри архива.
@@ -185,6 +191,30 @@ object BookParser {
         val dot = base.lastIndexOf('.')
         val noExt = if (dot > 0) base.substring(0, dot) else base
         return noExt.trim().takeIf { it.isNotBlank() } ?: base
+    }
+
+    /** Название по имени файла ВНУТРИ архива, когда в самом fb2 названия нет
+     *  (битый или неполный архив). Годится только ЕДИНСТВЕННЫЙ `.fb2`: у книги из
+     *  нескольких файлов имя наугад назвало бы её чужой частью. Имя записи видно и
+     *  у неполного архива — перечисление идёт по заголовкам, — а подчёркивания
+     *  читаем как пробелы. Мусор отбрасываем правилом полки
+     *  ([BookRecord.usableTitle]): лучше тогда имя файла снаружи, чем «download». */
+    private fun soleFb2Title(data: ByteArray): String? {
+        var name: String? = null
+        var count = 0
+        ZipInputStream(ByteArrayInputStream(data)).use { zis ->
+            var entry = nextEntry(zis)
+            while (entry != null) {
+                if (!entry.isDirectory && entry.name.lowercase(Locale.ROOT).endsWith(".fb2")) {
+                    count++
+                    if (count > 1) return null
+                    name = entry.name
+                }
+                entry = nextEntry(zis)
+            }
+        }
+        val title = name?.let { cleanBookName(it).replace('_', ' ').trim() } ?: return null
+        return title.takeIf { BookRecord.usableTitle(it) }
     }
 
     private fun metaFromText(prefix: ByteArray): BookMeta? {

@@ -214,19 +214,6 @@ class LibraryActivity(private val act: SectionActivity) {
         }
         binding.bookList.setHasFixedSize(true)
         binding.bookList.adapter = adapter
-        // Конец полки на ощупь (08.10.2026, просьба Сержа — «и в каталогах»):
-        // свайп вниз за последней книгой и вверх перед первой отвечает толчком.
-        // Второй путь (09.10.2026): часть дикторов действий прокрутки не шлёт,
-        // поэтому край ловим ещё и по фокусу на последней/первой строке.
-        // Касания слушает ВСЁ окно полки (09.10.2026): и жест с шапки, и жест с
-        // нижних кнопок до слушателя списка не доходили вовсе.
-        A11y.edgeVibrate(
-            binding.bookList,
-            "полка",
-            rows = binding.bookList,
-            touch = false,
-            watch = { w -> act.watchTouches(w) },
-        )
         applyViewMode()
 
         // msg646/649: в шапке остались «Продолжить» (2/3 ряда) и «⋮» — «Ещё».
@@ -1168,16 +1155,22 @@ class LibraryActivity(private val act: SectionActivity) {
             val label = getString(LibraryActivity.tabLabelRes(filterMode))
             // На «Избранном» удалять нечего — там метка: пункт снимает её, книги
             // остаются на полке и файлы целы.
-            item(getString(
-                if (filterMode == FILTER_FAV) R.string.cat_unfav else R.string.cat_clear,
-                label, clearCount
-            )) { confirmClearCategory() }
+            //
+            // 16.10.2026 (264x, просьба Сержа): на вкладке «Все» строки без
+            // названия вкладки. Прежде было «Удалить всё из „Все“ (49)» — слова
+            // повторяются, и на слух непонятно, что именно удаляют. Здесь ясно
+            // сказано: «Удалить все книги (49)».
+            item(
+                when (filterMode) {
+                    FILTER_FAV -> getString(R.string.cat_unfav, label, clearCount)
+                    FILTER_ALL -> getString(R.string.cat_clear_all, clearCount)
+                    else -> getString(R.string.cat_clear, label, clearCount)
+                }
+            ) { confirmClearCategory() }
         }
-        // 30.09.2026 (разбор полки, просьба Сержа): убрать записи, за которыми
-        // файла нет. Пункт есть всегда, а число считается по нажатию: проверка
-        // чужого файла — запрос к провайдеру, и открывать из-за неё меню
-        // заметно медленнее. Место — рядом с другим разрушающим пунктом.
-        item(getString(R.string.lib_menu_dead)) { removeDeadRecordsMenu() }
+        // 12.10.2026: пункта «Убрать записи без файлов» больше нет (просьба
+        // Сержа: «чтобы не было пустых пунктов меню»). Пустая запись теперь
+        // отвечает сама — по нажатию на неё (см. openReader → askRemoveDead).
         // msg4693: «Настройки» — прямо перед «Выходом» (одно место во всех
         // меню): в конце списка её и ищут, а не в шапке. msg5939: «Удаление из
         // категории» — строкой выше: место редких разрушающих действий внизу,
@@ -1211,8 +1204,15 @@ class LibraryActivity(private val act: SectionActivity) {
             return
         }
         val files = booleanArrayOf(false)
+        // 16.10.2026 (264x): на «Все» в заголовке тоже без названия вкладки —
+        // «Удалить 49 книг с полки?» вместо «Удалить 49 книг из категории „Все“?».
+        val title = if (filterMode == FILTER_ALL) {
+            plurals(R.plurals.cat_clear_all_title, recs.size)
+        } else {
+            plurals(R.plurals.cat_clear_title, recs.size, label)
+        }
         MaterialAlertDialogBuilder(act)
-            .setTitle(plurals(R.plurals.cat_clear_title, recs.size, label))
+            .setTitle(title)
             .setMessage(R.string.cat_clear_msg)
             .setMultiChoiceItems(arrayOf(getString(R.string.cat_clear_files)), files) { _, which, on ->
                 files[which] = on
@@ -1227,16 +1227,37 @@ class LibraryActivity(private val act: SectionActivity) {
      *  только по галочке; без неё книгу всё равно прячем от скана, иначе
      *  автоскан вернёт её на полку следующей же строкой. */
     private fun clearCategory(recs: List<BookRecord>, withFiles: Boolean) {
-        recs.forEach { removeBook(it, withFiles) }
+        val outcomes = recs.map { removeBook(it, withFiles) }
+        // Файл стереть не удалось — книгу не убираем (см. [BookDelete.book]);
+        // таких считаем отдельно, иначе «удалено вместе с файлами» было бы неправдой.
+        val kept = outcomes.count { !it.removed }
+        val removed = recs.size - kept
         val label = getString(LibraryActivity.tabLabelRes(filterMode))
         Diag.log(
             act, "lib",
-            "очищена категория $label: ${recs.size} книг, файлы ${if (withFiles) "стёрты" else "оставлены"}"
+            "очищена категория $label: убрано $removed книг, " +
+                "файлы ${if (withFiles) "стёрты" else "оставлены"}; " +
+                "осталось $kept (файл стереть не удалось)"
         )
-        afterCategoryCleared(plurals(
-            if (withFiles) R.plurals.cat_cleared_files else R.plurals.cat_cleared,
-            recs.size, label
-        ))
+        val base = if (filterMode == FILTER_ALL) {
+            // 16.10.2026 (264x): «Удалено 49 книг с полки», без «из категории „Все“».
+            plurals(
+                if (withFiles) R.plurals.cat_cleared_files_all else R.plurals.cat_cleared_all,
+                removed
+            )
+        } else {
+            plurals(
+                if (withFiles) R.plurals.cat_cleared_files else R.plurals.cat_cleared,
+                removed, label
+            )
+        }
+        afterCategoryCleared(
+            when {
+                kept == 0 -> base
+                removed == 0 -> plurals(R.plurals.cat_cleared_file_stays, kept)
+                else -> base + " " + plurals(R.plurals.cat_cleared_file_stays, kept)
+            }
+        )
     }
 
     /** «Избранное»: снять метку у всех книг вкладки. Книги и файлы на месте. */
@@ -1257,7 +1278,14 @@ class LibraryActivity(private val act: SectionActivity) {
         toast(msg)
         Vibra.confirm(act)
         val empty = shownRecords.isEmpty()
-        val spoken = if (empty) msg + " " + getString(R.string.cat_cleared_empty, label) else msg
+        // 16.10.2026 (264x): на «Все» пустая полка звучит «На полке больше нет
+        // книг», а не «В категории „Все“ больше нет книг».
+        val emptyWord = if (filterMode == FILTER_ALL) {
+            getString(R.string.cat_cleared_empty_all)
+        } else {
+            getString(R.string.cat_cleared_empty, label)
+        }
+        val spoken = if (empty) msg + " " + emptyWord else msg
         binding.tvTitle.announceForAccessibility(spoken)
         if (empty) TabNav.a11yFocus(binding.tvEmpty) else TabNav.focusHeader(binding.tvTitle)
     }
@@ -1352,21 +1380,24 @@ class LibraryActivity(private val act: SectionActivity) {
 
     private fun treeUri(): String? = prefs.getString(KEY_TREE, null)
 
+    /**
+     * Пункт меню «Сканировать».
+     *
+     * 16.10.2026 (сборка 264x, просьба Сержа): ПАПКА ВЫБИРАЕТСЯ В НАСТРОЙКАХ,
+     * поэтому окна здесь больше нет — нажатие сразу запускает скан. Прежде
+     * открывался список «Сканировать сейчас / Другая папка», и чтобы просто
+     * просканировать, человеку приходилось выбирать пункт внутри пункта — Серж:
+     * «надо как-то это переделать… просто сканировать и ничего не открывать».
+     *
+     * Папки ещё нет — тогда выбирать нечего, открываем выбор папки (и скан
+     * запустится сам после выбора, как и раньше).
+     */
     private fun onFolderButton() {
         if (treeUri() == null) {
             act.openTreePicker { uri -> if (uri != null) onFolderPicked(uri) }
             return
         }
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.scan_folder)
-            .setItems(arrayOf(getString(R.string.rescan_now), getString(R.string.other_folder))) { _, which ->
-                when (which) {
-                    0 -> rescanFolder()
-                    1 -> act.openTreePicker { uri -> if (uri != null) onFolderPicked(uri) }
-                }
-            }
-            .setNegativeButton("Закрыть", null)
-            .show()
+        rescanFolder()
     }
 
     private fun onFolderPicked(tree: Uri) {
@@ -1383,14 +1414,103 @@ class LibraryActivity(private val act: SectionActivity) {
 
     private fun rescanFolder() {
         toast(getString(R.string.scanning_start))
-        scanInBackground { n ->
+        scanInBackground { r ->
             refresh()
-            toast(getString(R.string.folder_scan_result, n))
+            val msg = scanResultText(r)
+            toast(msg)
+            // Про пропущенное по метке говорим и вслух: «скан ничего не добавил»
+            // иначе неотличимо от «в папке пусто» (12.10.2026).
+            if (r.skippedHidden > 0) binding.tvTitle.announceForAccessibility(msg)
+        }
+    }
+
+    /** Итог скана словами: если скан что-то пропустил по метке «не возвращать при
+     *  скане», говорим и это — «добавлено 0» иначе неотличимо от «в папке пусто».
+     *  С 16.10.2026 (264x) добавляем, сколько названий исправили по титульному
+     *  листу: иначе «Добавлено новых книг: 0» после скана выглядит как «ничего не
+     *  произошло», хотя книги на полке переименовались. */
+    private fun scanResultText(r: ScanReport): String {
+        val base = if (r.skippedHidden > 0) {
+            getString(R.string.folder_scan_result_hidden, r.added, r.skippedHidden)
+        } else {
+            getString(R.string.folder_scan_result, r.added)
+        }
+        return if (r.titlesFixed > 0) {
+            base + " " + getString(R.string.folder_scan_titles_fixed, r.titlesFixed)
+        } else {
+            base
+        }
+    }
+
+    /** Что дал скан папки: сколько книг прибавилось, сколько документов он
+     *  пропустил по метке «не возвращать при скане» — она остаётся у книг,
+     *  которые убирали БЕЗ удаления файла (см. [BookDelete.book]) — и сколько
+     *  названий исправил по титульному листу ([repairShelfTitles]). */
+    private data class ScanReport(val added: Int, val skippedHidden: Int, val titlesFixed: Int = 0)
+
+    /** Сколько книг за один скан пробуем переименовать. Открыть PDF и прочитать
+     *  первые страницы стоит от 0,2 до 4,6 с (замер 16.10.2026: лёгкая книга
+     *  0,24 с, тяжёлый учебник на 38 МБ — 4,6 с), поэтому скан в сотню PDF не
+     *  должен тянуться десятки секунд; остальные доделаются следующими сканами. */
+    private val TITLE_REPAIR_MAX = 20
+
+    /**
+     * ПЕРЕИМЕНОВАТЬ КНИГИ, КОТОРЫЕ СТОЯТ ПОД ИМЕНЕМ ФАЙЛА (16.10.2026, 264x).
+     *
+     * Берём только PDF (у остальных форматов название есть в метаданных книги),
+     * только там, где на полке стоит имя файла или пусто, и никогда не трогаем
+     * своё «название для полки» ([BookRecord.customTitle]). Название читаем с
+     * титульного листа ([PdfParser.peekPageTitle]) — это те же крупные строки
+     * первых страниц, по которым книга называется при открытии.
+     *
+     * Возврат — сколько названий поправили. Ходит по чужим файлам, поэтому
+     * зовётся ТОЛЬКО из фонового потока скана.
+     */
+    private fun repairShelfTitles(): Int {
+        var fixed = 0
+        for (rec in BookStore.all(act)) {
+            if (fixed >= TITLE_REPAIR_MAX) break
+            if (!rec.customTitle.isNullOrBlank()) continue
+            val cur = rec.title?.trim().orEmpty()
+            if (cur.isNotEmpty() && !cur.equals(rec.name.trim(), ignoreCase = true)) continue
+            val ext = rec.uri.substringAfterLast('.', "")
+            if (!ext.equals("pdf", ignoreCase = true)) continue
+            val file = pdfFileFor(rec.uri) ?: continue
+            val t = try {
+                PdfParser.peekPageTitle(file, act.cacheDir)
+            } catch (_: Throwable) {
+                null
+            } finally {
+                if (file.absolutePath.startsWith(act.cacheDir.absolutePath)) file.delete()
+            }
+            if (t.isNullOrBlank() || t == cur) continue
+            runCatching { BookStore.upsert(act, rec.copy(title = t)) }
+            Diag.log(act, "shelf", "название из титульного листа: «$t» (было «$cur»)")
+            fixed++
+        }
+        return fixed
+    }
+
+    /** Файл книги для чтения без полного разбора: обычный путь — как есть,
+     *  а содержимое SAF-папки копируем во временный файл кэша (провайдер не даёт
+     *  pdfbox адрес на диске). Временный файл удаляет вызывающий. */
+    private fun pdfFileFor(uri: String): File? {
+        val u = Uri.parse(uri)
+        if (u.scheme == "file") return File(u.path ?: return null).takeIf { it.isFile }
+        val tmp = File(act.cacheDir, "title-${System.nanoTime()}.pdf")
+        return try {
+            contentResolver.openInputStream(u)?.use { input ->
+                tmp.outputStream().use { out -> input.copyTo(out, 256 * 1024) }
+            } ?: return null
+            tmp.takeIf { it.length() > 0 }
+        } catch (_: Throwable) {
+            tmp.delete()
+            null
         }
     }
 
     /** Скан в фоне — не вешаем UI, названия из файлов читаем отдельно. */
-    private fun scanInBackground(done: (Int) -> Unit) {
+    private fun scanInBackground(done: (ScanReport) -> Unit) {
         // «Доступ ко всем файлам» и слова о спрятанных книгах — это тост и
         // объявление, то есть вьюхи: спрашиваем на главном потоке, а по чужим
         // файлам ходим уже в фоне.
@@ -1418,11 +1538,23 @@ class LibraryActivity(private val act: SectionActivity) {
             } else {
                 ArrayList()
             }
-            val added = try {
+            val report0 = try {
                 scanFolderWithMeta(deadTwins)
+            } catch (_: Throwable) {
+                ScanReport(0, 0)
+            }
+            // НАЗВАНИЯ, ВЗЯТЫЕ ИЗ ТИТУЛЬНОГО ЛИСТА (16.10.2026, 264x, просьба
+            // Сержа: «когда мы будем запускать сканирование, наши неправильные
+            // названия в библиотеке переделываются?»). Скан смотрит только
+            // метаданные файла, а у таких PDF названия там нет вовсе — поэтому
+            // дочитываем первые страницы и переписываем запись. В фоне, после
+            // скана: список книг обновится уже с новыми названиями.
+            val fixedTitles = try {
+                repairShelfTitles()
             } catch (_: Throwable) {
                 0
             }
+            val report = report0.copy(titlesFixed = fixedTitles)
             // Записи, за которыми нет файла, убираем с полки сразу и без вопросов
             // (28.09.2026, просьба Сержа) — до пересборки списка, чтобы книга не
             // мелькнула на полке ещё раз.
@@ -1437,7 +1569,7 @@ class LibraryActivity(private val act: SectionActivity) {
             }
             runOnUiThread {
                 if (!act.isFinishing && !act.isDestroyed) {
-                    done(added)
+                    done(report)
                     if (dead.isNotEmpty()) announceDeadRecords(dead)
                 }
             }
@@ -1504,57 +1636,40 @@ class LibraryActivity(private val act: SectionActivity) {
         return gone
     }
 
-    /** Сказать словами об убранных записях: не больше трёх имён, дальше числом. */
+    /** Сказать словами об убранных записях: не больше трёх имён, дальше числом.
+     *  Тост скринридеры озвучивают не всегда, поэтому объявляем и на шапке. */
     private fun announceDeadRecords(gone: List<BookRecord>) {
         val names = gone.take(3).joinToString(", ") { it.name }
         val tail = if (gone.size > 3) " и ещё ${gone.size - 3}" else ""
-        toast(plurals(R.plurals.shelf_dead_removed, gone.size, names + tail))
+        val msg = plurals(R.plurals.shelf_dead_removed, gone.size, names + tail)
+        toast(msg)
+        binding.tvTitle.announceForAccessibility(msg)
     }
 
     /**
-     * Пункт меню «Убрать записи без файлов» (30.09.2026, просьба Сержа по полке).
+     * ПУСТАЯ ЗАПИСЬ (файла нет): сказать вслух и спросить, убрать ли её
+     * (12.10.2026, просьба Сержа: «тыкаем на неё — „файла нет“, и система
+     * спрашивает, удалить запись или нет»; пункт меню для этого не нужен).
      *
-     * Число мёртвых записей считаем в фоне: проверка чужого файла — запрос к
-     * провайдеру, а меню и его диалоги живут на главном потоке. Убираем только
-     * по подтверждению и говорим, что именно убираем: место чтения, закладки и
-     * цитаты этих книг возврату не подлежат.
-     *
-     * Защита «мёртвой оказалась половина полки — не трогаем» здесь НЕ работает:
-     * она про недоступное хранилище, а тут человек просит расчистить полку
-     * осознанно (решение Сержа 30.09.2026). Автоматическая уборка при скане
-     * остаётся как была, вместе с защитой.
+     * Одиночную запись убираем тем же [removeDead], что и раньше убирала пачка:
+     * он снимает запись с полки, чистит кэш и говорит об этом словами. Файлы на
+     * диске не трогаем — их и так нет.
      */
-    private fun removeDeadRecordsMenu() {
-        // Про доступ спрашиваем до фоновой работы: сказать об этом можно только
-        // здесь (тост и объявление), а без доступа проверка файлов врёт.
-        if (cannotCheckFiles()) return
-        toast(getString(R.string.shelf_dead_checking))
-        Thread {
-            val dead = try {
-                deadRecords()
-            } catch (_: Throwable) {
-                emptyList()
-            }
-            runOnUiThread {
-                if (act.isFinishing || act.isDestroyed) return@runOnUiThread
-                if (dead.isEmpty()) {
-                    val msg = getString(R.string.shelf_dead_none)
-                    toast(msg)
-                    binding.tvTitle.announceForAccessibility(msg)
-                    return@runOnUiThread
-                }
-                MaterialAlertDialogBuilder(act)
-                    .setTitle(plurals(R.plurals.shelf_dead_title, dead.size))
-                    .setMessage(R.string.shelf_dead_msg)
-                    .setPositiveButton(R.string.shelf_dead_yes) { _, _ -> removeDead(dead) }
-                    .setNegativeButton(getString(R.string.dialog_cancel), null)
-                    .show()
-            }
-        }.start()
+    private fun askRemoveDead(rec: BookRecord) {
+        val gone = getString(R.string.shelf_dead_row, rec.displayTitle)
+        toast(gone)
+        binding.tvTitle.announceForAccessibility(gone)
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.shelf_dead_one_title)
+            .setMessage(getString(R.string.shelf_dead_one_msg, rec.displayTitle))
+            .setPositiveButton(R.string.shelf_dead_one_yes) { _, _ -> removeDead(listOf(rec)) }
+            .setNegativeButton(R.string.shelf_dead_one_no, null)
+            .show()
     }
 
-    /** Убрать записи, за которыми нет файла, по ручной команде. Файлы на диске
-     *  не трогаем: книга вернётся на полку сканом папки, а место чтения — нет. */
+    /** Убрать запись, за которой нет файла (зовёт [askRemoveDead] после согласия
+     *  человека). Файлы на диске не трогаем: книга вернётся на полку сканом
+     *  папки, а место чтения — нет. */
     private fun removeDead(dead: List<BookRecord>) {
         for (r in dead) {
             BookStore.remove(act, r.uri)
@@ -1570,9 +1685,11 @@ class LibraryActivity(private val act: SectionActivity) {
      *  (добавлены прошлой версией по имени файла) дозаполнить настоящее
      *  название и автора из содержимого, битые кодировки заголовков — починить.
      *  [deadTwins] — записи, за которыми файла нет по старому адресу: скан берёт
-     *  их список и, найдя тот же файл заново, переписывает адрес (см. ниже). */
-    private fun scanFolderWithMeta(deadTwins: MutableList<BookRecord>): Int {
-        val treeStr = treeUri() ?: return 0
+     *  их список и, найдя тот же файл заново, переписывает адрес (см. ниже).
+     *  В итоге отдаём и число пропущенных по метке «не возвращать при скане»:
+     *  без него «добавлено 0» неотличимо от «в папке пусто» (12.10.2026). */
+    private fun scanFolderWithMeta(deadTwins: MutableList<BookRecord>): ScanReport {
+        val treeStr = treeUri() ?: return ScanReport(0, 0)
         val tree = Uri.parse(treeStr)
         val treeDocId = DocumentsContract.getTreeDocumentId(tree)
         val found = ArrayList<Pair<String, String>>() // (documentId, name)
@@ -1591,6 +1708,8 @@ class LibraryActivity(private val act: SectionActivity) {
         }
         var added = 0
         var repaired = 0
+        // Сколько документов скан не тронул из-за метки удаления (см. ниже).
+        var skippedHidden = 0
         for ((docId, name) in found) {
             val uri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
             val u = uri.toString()
@@ -1655,8 +1774,12 @@ class LibraryActivity(private val act: SectionActivity) {
             }
             // Файлы, которые владелец удалил из библиотеки, авто-скан не
             // возвращает: по точному uri и по реальному пути файла (запись могли
-            // удалить под другим адресом — msg1347).
-            if (docHiddenFromScan(u, hidden, hiddenPaths)) continue
+            // удалить под другим адресом — msg1347). Число пропущенного считаем:
+            // о нём надо сказать вслух (см. scanResultText).
+            if (docHiddenFromScan(u, hidden, hiddenPaths)) {
+                skippedHidden++
+                continue
+            }
             // 30.09.2026 (разбор полки): за записью файла нет, а он лежит здесь
             // же — значит умер не файл, а адрес: проводник (Mixplorer и подобные)
             // выдаёт адреса, живущие ровно столько, сколько живёт его грант на
@@ -1715,7 +1838,14 @@ class LibraryActivity(private val act: SectionActivity) {
         if (repaired > 0) {
             Diag.log(act, "shelf", "адресов книг починено при скане: $repaired")
         }
-        return added
+        if (skippedHidden > 0) {
+            Diag.log(
+                act, "shelf",
+                "скан пропустил по метке «не возвращать при скане»: $skippedHidden " +
+                    "(добавлено $added)"
+            )
+        }
+        return ScanReport(added, skippedHidden)
     }
 
     /** Путь документа внутри выбранного дерева: «primary:Books/flibusta.is/x.fb2»
@@ -2002,6 +2132,16 @@ class LibraryActivity(private val act: SectionActivity) {
     }
 
     private fun openReader(rec: BookRecord) {
+        // Файла нет — в читалку не пускаем: раньше человек попадал на непонятную
+        // ошибку внутри (жалоба Сержа 12.10.2026). Проверка та же, что у кнопки
+        // «Продолжить» (BookStore.openable): file:// — файл на месте, content:// —
+        // документ открывается. Тот же путь и у списка «недавние книги» — они зовут
+        // эту же функцию.
+        if (!BookStore.openable(act, rec.uri)) {
+            Diag.log(act, "shelf", "нажата запись без файла: ${rec.name}")
+            askRemoveDead(rec)
+            return
+        }
         // Первое открытие новой книги помечает её «читаю».
         if (rec.status == BookRecord.STATUS_NEW) {
             BookStore.upsert(act, rec.copy(
@@ -2055,8 +2195,6 @@ class LibraryActivity(private val act: SectionActivity) {
             .setNegativeButton(R.string.toc_close, null)
             .create()
         dlg.show()
-        // Конец списка на ощупь (09.10.2026): недавних книг бывает много.
-        A11y.edgeVibrateDialog(dlg, "недавние книги")
     }
 
     private fun queryDisplayName(uri: Uri): String? =
@@ -2446,27 +2584,45 @@ class LibraryActivity(private val act: SectionActivity) {
     /** Удаление из библиотеки (msg1351 — по решению владельца стираем и файл).
      *  Сначала пробуем стереть физический файл: file:// — напрямую (AllFiles);
      *  content:// из сканируемой папки — по реальному пути, если папка
-     *  сопоставлена, иначе через SAF. Затем убираем запись. Файл стереть не
-     *  вышло (нет прав/чужой провайдер) — прячем его от скана, чтобы книга не
-     *  вернулась следующей строкой. */
+     *  сопоставлена, иначе через SAF. Файл стереть не вышло — книгу НЕ трогаем
+     *  и говорим об этом: пусть остаётся на полке, а файл человек уберёт
+     *  проводником (12.10.2026, решение Сержа: «если книга не удаляется — пускай
+     *  она будет на полке... потом полка скажет, что книги нету, и запись удалит
+     *  сама»). Прежде такую книгу убирали с полки и прятали от скана — она
+     *  пропадала навсегда, хотя файл лежал в папке. */
     private fun deleteBook(rec: BookRecord) {
-        val deleted = removeBook(rec, withFiles = true)
-        Diag.log(act, "lib", "удалена книга ${rec.name}: файл ${if (deleted) "стёрт" else "не стёрт — скрыт от скана"}")
-        toast(getString(R.string.book_deleted))
-        Vibra.confirm(act)
+        val o = removeBook(rec, withFiles = true)
+        Diag.log(
+            act, "lib",
+            "удаление книги ${rec.name}: " + when {
+                !o.removed -> "файл стереть не удалось — книга осталась на полке"
+                o.fileGone -> "книга и файл удалены"
+                else -> "книга убрана с полки, файл остался"
+            }
+        )
+        if (o.removed) {
+            Vibra.confirm(act)
+            toast(getString(R.string.book_deleted))
+        } else {
+            // Не получилось — и толчок об этом: он у нас значит «готово»/«не вышло».
+            Vibra.error(act)
+            val msg = getString(R.string.book_delete_file_stays)
+            toast(msg)
+            binding.tvTitle.announceForAccessibility(msg)
+        }
         refresh()
     }
 
     /** Ядро удаления (msg1351, msg5947) переехало в [BookDelete] 07.10.2026: тот
      *  же вопрос понадобился читалке («книга дочитана — удалить?»), а две копии
      *  такого кода однажды разошлись бы. Здесь только вызов. */
-    private fun removeBook(rec: BookRecord, withFiles: Boolean): Boolean =
+    private fun removeBook(rec: BookRecord, withFiles: Boolean): BookDelete.Outcome =
         BookDelete.book(act, rec, withFiles)
 
     /** Проигравший дубль (msg1333/1336): файл-копию убираем с диска, а uri
      *  прячем в скрытый список — если файл ещё подхватил авто-скан папки, запись
-     *  он не вернёт. Удалить не вышло — прячем всё равно: дубль исчезает с полки,
-     *  копия файла остаётся на диске до ручной уборки. */
+     *  он не вернёт. Файл стереть не вышло — не прячем: скрывать то, что лежит на
+     *  диске, и есть та ошибка, из-за которой книги пропадали с полки. */
     private fun removeDupFile(uriStr: String) {
         val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return
         val deleted = try {
@@ -2479,9 +2635,9 @@ class LibraryActivity(private val act: SectionActivity) {
             false
         }
         BookCache.remove(act, uri)
-        hideFromScan(uriStr)
+        if (deleted) hideFromScan(uriStr)
         Diag.log(act, "lib", if (deleted) "файл дубля удалён: $uriStr"
-            else "файл дубля не удалось убрать, скрыт от скана: $uriStr")
+            else "файл дубля стереть не удалось — оставляю видимым: $uriStr")
     }
 
     // ——— Дубли «один файл — два адреса» (msg1345/1346) ———

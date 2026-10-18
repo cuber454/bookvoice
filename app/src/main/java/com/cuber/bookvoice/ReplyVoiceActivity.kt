@@ -36,11 +36,6 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
  */
 class ReplyVoiceActivity : RowsActivity() {
 
-    /** Толчок у края списка окну не нужен (просьба Сержа 09.10.2026): толчок
-     *  срабатывает на КАЖДОМ приходе фокуса на первую или последнюю строку, и на
-     *  коротком списке это помеха, а не подсказка. */
-    override val edgeTickAuto: Boolean get() = false
-
     companion object {
         /** Имя файла настроек чтения — то же, что у читалки и у строк настроек
          *  (RowsActivity держит его у себя приватно). */

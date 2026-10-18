@@ -49,11 +49,17 @@ object ExpertPrefs {
     const val KEY_PDF_SPACING = "expert_pdf_spacing"
     const val KEY_PDF_COLUMNS = "expert_pdf_columns"
 
+    /** Главы PDF по КЕГЛЮ (16.10.2026, сборка 263x): у книги без закладок
+     *  крупные абзацы становятся главами. Выключишь — книга снова делится по
+     *  страницам («Стр. 1», «Стр. 2»…), как было до 263x. */
+    const val KEY_PDF_HEADINGS = "expert_pdf_headings"
+
     /** Что делать при разборе PDF прямо сейчас (см. [PdfParser.Options]). */
     fun pdfOptions(c: Context): PdfParser.Options = PdfParser.Options(
         headers = prefs(c).getBoolean(KEY_PDF_HEADERS, true),
         spacing = prefs(c).getBoolean(KEY_PDF_SPACING, true),
         columns = prefs(c).getBoolean(KEY_PDF_COLUMNS, true),
+        headings = prefs(c).getBoolean(KEY_PDF_HEADINGS, true),
     )
 
     /** Отпечаток набора чисток — для кэша разбора: сменились галочки, старый

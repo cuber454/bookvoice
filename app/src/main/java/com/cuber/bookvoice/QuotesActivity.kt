@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.TypedValue
-import android.view.MotionEvent
 import android.view.View
 import android.widget.TextView
 import android.widget.Toast
@@ -65,18 +64,6 @@ class QuotesActivity : AppCompatActivity() {
         super.attachBaseContext(TextScale.wrap(newBase))
     }
 
-    /** Кто смотрит ВСЕ касания окна (09.10.2026): у касания один адресат, и жест,
-     *  начавшийся на шапке или на нижних кнопках, до слушателя списка не доходит.
-     *  Смотрим в [dispatchTouchEvent] — он проходит через любую ветку дерева и
-     *  события ни у кого не отбирает. */
-    private var touchWatchers: Array<(MotionEvent) -> Unit> = emptyArray()
-
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        val ws = touchWatchers
-        for (i in ws.indices) ws[i](ev)
-        return super.dispatchTouchEvent(ev)
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         // msg5730: тема окна (обычная или контрастная) — до создания разметки.
         Palette.applyTo(this)
@@ -94,19 +81,6 @@ class QuotesActivity : AppCompatActivity() {
         binding.btnBack.setOnClickListener { goBack() }
         binding.btnExport.setOnClickListener { onExportClick() }
         binding.btnMore.setOnClickListener { showMoreMenu() }
-
-        // Конец списка цитат на ощупь (08.10.2026) — тем же толчком, что в
-        // настройках, читалке, каталоге и на полке. Второй путь (09.10.2026):
-        // ещё и по фокусу на крайней строке, для дикторов без действий прокрутки.
-        // Касания слушает ВСЁ окно (09.10.2026): жест, начавшийся на шапке или на
-        // нижних кнопках, до слушателя списка не доходил вовсе.
-        A11y.edgeVibrate(
-            binding.scroll,
-            "цитаты",
-            rows = binding.content,
-            touch = false,
-            watch = { w -> touchWatchers += w },
-        )
 
         quotes = QuoteStore.all(this)
         rebuild()

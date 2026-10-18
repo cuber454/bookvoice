@@ -202,6 +202,15 @@ object BookStore {
         return try {
             if (u.scheme == "file") {
                 val p = u.path
+                // 14.10.2026: без «Доступа ко всем файлам» про внешний файл
+                // сказать нечего — File.exists() на разных версиях Android
+                // отвечает то «нет», то «да» (журнал Сержа на Android 17: файл
+                // «есть», а чтение падает). Молчание трактуем в пользу книги:
+                // иначе полка предлагала бы УБРАТЬ запись живого файла — так
+                // теряются место чтения, закладки и цитаты. Правду скажет
+                // читалка: [MainActivity.openBook] отвечает «нет доступа» и
+                // предлагает его включить.
+                if (p != null && externalPath(p) && !AllFiles.granted(context)) return true
                 p != null && File(p).exists()
             } else {
                 context.contentResolver.query(
@@ -301,8 +310,9 @@ object BookStore {
 
     /** Путь лежит во внешнем хранилище — там Android прячет чужие файлы без
      *  «Доступа ко всем файлам» (см. [fileGone]). Внутренние файлы приложения
-     *  (/data/user/0/…) видны всегда. */
-    private fun externalPath(path: String): Boolean =
+     *  (/data/user/0/…) видны всегда. Спрашивают и снаружи (MainActivity
+     *  отличает «файла нет» от «файл есть, а читать нечем»). */
+    fun externalPath(path: String): Boolean =
         path.startsWith("/storage/") || path.startsWith("/sdcard") || path.startsWith("/mnt/")
 
     /** Сколько записей полки лежит во внешнем хранилище (30.09.2026). Нужно,

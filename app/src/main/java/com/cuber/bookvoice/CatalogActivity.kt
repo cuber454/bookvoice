@@ -123,6 +123,14 @@ class CatalogActivity(private val act: SectionActivity) {
      *  текущей страницы книги (ставится в renderBookPage, сбрасывается там же). */
     private var dlButton: Button? = null
 
+    /** Строка процентов ПОД кнопкой скачивания (16.10.2026, просьба Сержа:
+     *  «надо сделать, чтобы когда скачивается книга проценты не проговаривались
+     *  скринридером»). Кнопка — то, на чём стоит диктор, и любая смена её подписи
+     *  читается вслух. Поэтому кнопка носит постоянное «Скачивание…», а проценты
+     *  живут в этой строке: она ВИДНА, но для диктора её нет
+     *  ([android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO]). */
+    private var dlProgressRow: TextView? = null
+
     /** Последняя попытка скачивания — по ней повторяем загрузку после входа в
      *  библиотеку (#20): служба сообщает, что книга просит логин. */
     private var lastDlBook: OpdsItem.Book? = null
@@ -344,28 +352,6 @@ class CatalogActivity(private val act: SectionActivity) {
         binding.btnCatLibrary.setOnClickListener { leaveToLibrary() }
 
         setupAutoLoad()
-        // Конец списка на ощупь (08.10.2026) — ПОСЛЕ автодогрузки: наш перехват
-        // стоит поверх её делегата. Пока впереди есть страницы, жест забирает
-        // автодогрузка (handOff) и толчка нет; он звучит только в самом конце
-        // каталога. Пока идёт ПЕРВАЯ загрузка ленты, толчок молчит: пустой
-        // список в этот момент — это «ещё не пришло», а не «конец».
-        A11y.edgeVibrate(
-            binding.scroll,
-            "каталог",
-            mayVibrate = { currentFeedSession()?.loadingFirst != true },
-            handOff = {
-                val s = currentFeedSession()
-                s != null && (hasMore(s) || s.loadingMore)
-            },
-            // Второй путь (09.10.2026): край ловим ещё и по фокусу на первой или
-            // последней строке — часть дикторов действий прокрутки не шлёт.
-            rows = binding.content,
-            // Касания слушает ВСЁ окно каталога (09.10.2026): жест, начавшийся на
-            // шапке, в поле поиска или на нижних кнопках, до слушателя ленты не
-            // доходил вовсе.
-            touch = false,
-            watch = { w -> act.watchTouches(w) },
-        )
         // 0.4.83 (msg7004): подписываемся на ход загрузки из службы — окно
         // показывает проценты на кнопке «Скачать», пока оно открыто.
         DownloadService.watcher = downloadWatcher
@@ -650,16 +636,49 @@ class CatalogActivity(private val act: SectionActivity) {
     // ---------------- msg1264: прогресс скачивания ----------------
 
     /** Подпись кнопки во время загрузки (без размера от сервера — просто
-     *  «Скачивание…»). Число берём у службы: она одна знает, сколько прочитано. */
+     *  «Скачивание…»). Число берём у службы: она одна знает, сколько прочитано.
+     *  ВО ВРЕМЯ ЗАГРУЗКИ КНОПКА ЧИСЛА НЕ НОСИТ (16.10.2026): проценты в её
+     *  подписи диктор читал вслух на каждом шаге. Теперь число показывает
+     *  отдельная строка, скрытая от диктора ([dlProgressRow]). */
     private fun dlProgressText(): String {
         val pct = DownloadService.progress
         return if (pct >= 0) getString(R.string.catalog_dl_progress_pct, pct)
         else getString(R.string.catalog_dl_progress)
     }
 
+    /** Постоянная подпись кнопки на время загрузки — без числа. */
+    private fun dlButtonIdle(): String = getString(R.string.catalog_dl_progress)
+
+    /** Поставить строку процентов под кнопкой (16.10.2026). Строка не фокусируется
+     *  и для диктора невидима: она для глаз, а не для слуха. */
+    private fun addDlProgressRow() {
+        val btn = dlButton ?: return
+        val host = content()
+        val row = dlProgressRow ?: TextView(act).apply {
+            textSize = 15f
+            setPadding(dp(12), 0, dp(12), 0)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        dlProgressRow = row
+        row.text = dlProgressText()
+        if (row.parent == null) {
+            val at = (host.indexOfChild(btn) + 1).coerceIn(0, host.childCount)
+            host.addView(row, at, lp().apply { topMargin = dp(2); bottomMargin = dp(2) })
+        }
+    }
+
+    /** Убрать строку процентов (загрузка кончилась или отменена). */
+    private fun clearDlProgressRow() {
+        val row = dlProgressRow ?: return
+        row.text = ""
+        (row.parent as? ViewGroup)?.removeView(row)
+        dlProgressRow = null
+    }
+
     /** Вернуть большой кнопке обычную подпись «Скачать %формат%» — после отмены
      *  или сбоя загрузки (при удаче страница просто перерисовывается). */
     private fun restoreDlButton() {
+        clearDlProgressRow()
         val cur = nav.lastOrNull()
         if (cur !is Nv.Book) return
         val key = dlFmtKey()
@@ -674,24 +693,22 @@ class CatalogActivity(private val act: SectionActivity) {
      *  потоке; окно может быть уже закрыто — тогда зовы просто не приходят. */
     private val downloadWatcher = object : DownloadService.Watcher {
 
-        /** Проценты — только в подписи кнопки. Вслух о ходе не говорим: вехи
-         *  «Скачано 25 процентов» перебивали чтение книги (msg1264 их читал,
-         *  0.4.83 убрал). */
+        /** Проценты — только в строке под кнопкой, и её диктор не видит
+         *  (16.10.2026, просьба Сержа). Прежде число стояло в подписи самой
+         *  кнопки, а кнопка эта — та, на которой стоит диктор: он читал вслух
+         *  каждый шаг загрузки. Вслух о ходе не говорим и теперь. */
         override fun onProgress(pct: Int) {
             if (act.isFinishing || act.isDestroyed) return
             val cur = nav.lastOrNull()
             if (cur !is Nv.Book || cur.item.url != DownloadService.bookUrl) return
-            dlButton?.let { btn ->
-                val label = dlProgressText()
-                btn.text = label
-                btn.contentDescription = label
-            }
+            dlProgressRow?.text = dlProgressText()
         }
 
         /** Файл на месте: перерисовываем страницу молча — кнопка становится
          *  «Открыть в читалке». Озвучку дал тост службы, повтор не нужен. */
         override fun onFinished(title: String, uri: String, fallback: Boolean) {
             if (act.isFinishing || act.isDestroyed) return
+            clearDlProgressRow()
             applyEnabled()
             val cur = nav.lastOrNull()
             if (cur is Nv.Book && cur.item.url == DownloadService.bookUrl) {
@@ -822,8 +839,6 @@ class CatalogActivity(private val act: SectionActivity) {
             .setNegativeButton(R.string.toc_close, null)
             .create()
         dlg.show()
-        // Конец списка на ощупь (09.10.2026): недавних книг бывает много.
-        A11y.edgeVibrateDialog(dlg, "недавние книги")
     }
 
     // ---------------- Список каталогов (корень) ----------------
@@ -1678,6 +1693,8 @@ class CatalogActivity(private val act: SectionActivity) {
         // msg1264: на новой странице ссылка на кнопку прогресса сбрасывается —
         // заново ставится ниже, если страница показывает кнопку «Скачать».
         dlButton = null
+        // 16.10.2026: строку процентов прошлой загрузки убираем вместе с кнопкой.
+        dlProgressRow = null
 
         val b = cur.item
         val authorsLine = b.authors.filter { it.isNotBlank() }.joinToString(", ")
@@ -1754,8 +1771,11 @@ class CatalogActivity(private val act: SectionActivity) {
                 // сразу показываем текущую подпись вместо «Скачать».
                 dlButton = primary
                 if (downloading && b.url == DownloadService.bookUrl) {
-                    primary.text = dlProgressText()
-                    primary.contentDescription = primary.text
+                    // Вошли на страницу посреди загрузки: кнопка называет ход
+                    // одним словом, проценты — в отдельной строке (16.10.2026).
+                    primary.text = dlButtonIdle()
+                    primary.contentDescription = dlButtonIdle()
+                    addDlProgressRow()
                 }
             }
         }
@@ -2387,9 +2407,6 @@ class CatalogActivity(private val act: SectionActivity) {
             .setNegativeButton(R.string.toc_close, null)
             .create()
         dlg.show()
-        // Конец списка на ощупь (09.10.2026): у книги в сетевом каталоге форматов
-        // бывает десяток, и последний пункт — не «конец сети».
-        A11y.edgeVibrateDialog(dlg, "форматы книги")
     }
 
     /** Начать скачивание книги (0.4.83, msg7004).
@@ -2414,12 +2431,15 @@ class CatalogActivity(private val act: SectionActivity) {
         lastDlFmt = fmt
         applyEnabled()
         // msg1264: подпись «Скачивание…» сразу, не дожидаясь первого байта.
+        // 16.10.2026: без числа — проценты идут в строку под кнопкой, которую
+        // диктор не читает (просьба Сержа).
         val curNow = nav.lastOrNull()
         if (curNow is Nv.Book && curNow.item.url == b.url) {
             dlButton?.let { btn ->
-                btn.text = getString(R.string.catalog_dl_progress)
-                btn.contentDescription = btn.text
+                btn.text = dlButtonIdle()
+                btn.contentDescription = dlButtonIdle()
             }
+            addDlProgressRow()
         }
         DownloadService.start(act, b, fmt)
     }
