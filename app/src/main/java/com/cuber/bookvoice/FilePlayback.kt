@@ -140,6 +140,16 @@ class FilePlayback(private val ctx: Context) {
         // а оно читает, хотя галочка автоматического чтения снята».
         val fresh = exo == null
         val p = player()
+        // 21.10.2026: ДОПИСЫВАНИЕ НЕ ПУСКАЕТ ЗВУК САМО. Раньше здесь стояло
+        // «список кончился — встаю на новую фразу и play()», и этого хватало,
+        // чтобы книга заговорила без спроса: пауза гасит список через stop()
+        // (состояние IDLE, а playWhenReady остаётся true), потом заготовка
+        // первой фразы дописывается — и prepare() оживлял звук. В журнале Сержа
+        // 21.10 это видно: «готовлю первую фразу заранее» → «exo: дописал фразу»
+        // → «exo: играю фразу» при выключенном авточтении. Поэтому намерение
+        // «играть» запоминаем ДО и восстанавливаем ровно каким было: играло —
+        // продолжим, стояло — молчим.
+        val wasPlaying = !fresh && p.playWhenReady
         // 29.09.2026 (журнал 18:43, «затормозил и вообще вставал»): плеер, доигравший
         // список до конца, сам с новых фраз НЕ заводится — он так и стоит в «кончил».
         // В журнале это видно без «играю фразу» и без «фраза доиграла» после
@@ -157,10 +167,13 @@ class FilePlayback(private val ctx: Context) {
             }
             ended -> {
                 p.seekTo(firstNew, 0L)
+                p.playWhenReady = wasPlaying
                 p.prepare()
-                p.play()
             }
-            p.playbackState == Player.STATE_IDLE -> p.prepare()
+            p.playbackState == Player.STATE_IDLE -> {
+                p.playWhenReady = wasPlaying
+                p.prepare()
+            }
         }
         Diag.log(ctx, "sound", "exo: дописал фраз ${list.size}, всего ${items.size}")
     }
@@ -232,6 +245,12 @@ class FilePlayback(private val ctx: Context) {
 
     fun stop() {
         val p = exo ?: return
+        // 21.10.2026: stop() — это ТИШИНА, и она обязана остаться тишиной.
+        // ExoPlayer запоминает playWhenReady сам, и после stop() он оставался
+        // «готов играть»: любая дописанная потом фраза (заготовка первой фразы)
+        // оживала от одного prepare(). Так книга начинала читаться сама при
+        // возврате в окно (журнал Сержа 21.10, авточтение выключено).
+        p.playWhenReady = false
         p.stop()
         p.clearMediaItems()
         items.clear()

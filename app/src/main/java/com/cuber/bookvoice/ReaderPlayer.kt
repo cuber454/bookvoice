@@ -97,10 +97,16 @@ class ReaderPlayer(
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
         when (seekCommand) {
             Player.COMMAND_SEEK_TO_NEXT,
-            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> onSkip(1)
+            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
+                log("media3: команда сессии «следующее»")
+                onSkip(1)
+            }
 
             Player.COMMAND_SEEK_TO_PREVIOUS,
-            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> onSkip(-1)
+            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
+                log("media3: команда сессии «предыдущее»")
+                onSkip(-1)
+            }
         }
         return Futures.immediateVoidFuture()
     }

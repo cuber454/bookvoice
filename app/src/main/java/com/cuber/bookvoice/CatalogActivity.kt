@@ -1847,7 +1847,11 @@ class CatalogActivity(private val act: SectionActivity) {
     }
 
     /** Блок ссылок внизу страницы книги (#42): «Все книги автора», «Все книги
-     *  серии», «Книга на сайте». Первые два — разделы каталога, третий — браузер. */
+     *  серии», «Перейти на сайт». Первые две — разделы каталога, третья — браузер.
+     *
+     *  19.10.2026, просьба Сержа (смотрел карточку журнала): это СТРОКИ, а не
+     *  кнопки — кнопочные плашки на карточке он попросил убрать, действия
+     *  остались прежние. */
     private fun addBottomLinks(b: OpdsItem.Book) {
         val links = ArrayList<Pair<String, () -> Unit>>()
         b.authorFeed?.let { r ->
@@ -1870,8 +1874,26 @@ class CatalogActivity(private val act: SectionActivity) {
         if (links.isEmpty()) return
         header(getString(R.string.catalog_links_title))
         for ((label, onClick) in links) {
-            addButton(label, null, onClick)
+            addActionText(label, onClick)
         }
+    }
+
+    /** Строка-действие на карточке книги: обычный текст, как «Год издания» и
+     *  «Формат» выше, но нажимается. Роли «кнопка» у TextView нет — диктор
+     *  читает сам текст и говорит про двойное нажатие. */
+    private fun addActionText(label: String, onClick: () -> Unit): TextView {
+        val tv = TextView(act).apply {
+            this.text = label
+            textSize = 16f
+            setTextColor(Palette.INK)
+            setLineSpacing(0f, 1.15f)
+            setPadding(dp(4), dp(6), dp(4), dp(6))
+            isFocusable = true
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        content().addView(tv, lp())
+        return tv
     }
 
     private fun openBrowser(url: String) {

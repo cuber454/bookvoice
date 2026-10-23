@@ -155,7 +155,7 @@ sealed class OpdsItem {
         val authorFeed: OpdsRelated? = null,
         /** Раздел «Все книги серии…», если книга в серии и каталог его отдаёт. */
         val seriesFeed: OpdsRelated? = null,
-        /** Веб-страница книги в каталоге («Книга на сайте»). */
+        /** Веб-страница книги в каталоге («Перейти на сайт»). */
         val siteUrl: String? = null,
     ) : OpdsItem() {
         /** Первый автор — для строки списка (вся страница книги хранит [authors]). */
@@ -484,7 +484,7 @@ object OpdsParser {
                 .firstOrNull { it.title?.contains(kw, ignoreCase = true) == true }
                 ?.let { OpdsRelated(it.title ?: "", resolve(it.href)) }
 
-        /** Веб-страница книги в каталоге (rel=alternate, text/html) — «Книга на сайте». */
+        /** Веб-страница книги в каталоге (rel=alternate, text/html) — «Перейти на сайт». */
         fun siteHref(): String? {
             val alts = eLinks.filter { it.rel == "alternate" && it.type?.contains("html") == true }
             if (alts.isEmpty()) return null

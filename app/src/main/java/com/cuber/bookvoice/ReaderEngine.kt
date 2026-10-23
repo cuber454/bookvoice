@@ -109,6 +109,15 @@ internal object ReaderEngine {
     var sentenceIdx = 0
     var playing = false
 
+    /** 19.10.2026 (просьба Сержа): «при выборе голоса этим голосом зачитать
+     *  последнюю единицу текста». Взведён — звучит РОВНО одна фраза с текущего
+     *  места, а дальше чтение встаёт на паузу ([stopAtEnd]), место в книге не
+     *  двигается. Ставится и снимается только в [startSpeakingCurrent]; снимает
+     *  его [onUtteranceDone], а пауза, стоп и прыжок — [resetPipeline] не нужен:
+     *  любое начало чтения проходит через [startSpeakingCurrent] и сбросит флаг
+     *  само. */
+    private var previewUnit = false
+
     /** msg4629: владелец нажал «Выход» в карточке шторки. Пока флаг стоит, окно
      *  читалки, закрываясь на паузе, карточку НЕ держит — иначе вышел бы и снова
      *  получил её. Снимается при возврате окна в движок ([attach]). */
@@ -598,6 +607,14 @@ internal object ReaderEngine {
                 val key = if (delta < 0) MainActivity.KEY_HS_PREV else MainActivity.KEY_HS_NEXT
                 val step = prefs.getString(key, MainActivity.HS_SENTENCE)
                     ?: MainActivity.HS_SENTENCE
+                // 19.10.2026: в журнал — какая кнопка пришла и какой шаг выбран в
+                // настройке. Без этой строки жалобу «гарнитура не переключает» не
+                // разобрать: не видно ни прихода клавиши, ни решения.
+                Diag.log(
+                    ctx, "session",
+                    "гарнитура: «${if (delta < 0) "назад" else "вперёд"}», шаг «$step»" +
+                        (if (step == MainActivity.HS_OFF) " — выключен в настройке" else "")
+                )
                 if (step == MainActivity.HS_OFF) return@post
                 navigateByHeadset(step, delta)
             }
@@ -613,26 +630,167 @@ internal object ReaderEngine {
      *  встали, иначе кнопка «молчит» (как свайп по жесту — jumpAndAnnounce в окне). */
     private fun navigateByHeadset(step: String, delta: Int) {
         val bk = book ?: return
-        val target = when (step) {
-            MainActivity.HS_SENTENCE -> headsetSentenceTarget(bk, delta)
-            MainActivity.HS_PARAGRAPH -> headsetParagraphTarget(bk, delta)
-            MainActivity.HS_SENT_N -> headsetJumpTarget(bk, delta) // msg5250: прыжок
-            // msg5295: у «главы» три уровня — как у свайпов и кнопок читалки
-            // (G_NEXT_CH/MAJOR/HEADER), а не одна настройка на все шаги.
-            MainActivity.HS_MAJOR -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_MAJOR)
-            MainActivity.HS_HEADER -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_ALL)
-            else -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_CHAPTERS)
-        } ?: return
-        if (target.chapter == chapterIdx && target.sentence == sentenceIdx) return
+        var use = step
+        // Шаг НАЗАД считаем от прошлой цели, если нажатия идут подряд
+        // ([backStepBase]): иначе выходит «встал на начало текущего предложения».
+        // Журнал пробы 255, слова Сержа: «предложение назад — а оно как-то на
+        // начало текущего предложения становится». В журнале: 199 → 198, чтение
+        // дочитывало фразу вперёд (199…201), и следующее нажатие снова давало 198.
+        // Та же беда была у кнопки «Пред.» в читалке 29.09.2026 — лечится так же.
+        val backFrom = delta < 0 && (step == MainActivity.HS_SENTENCE || step == MainActivity.HS_SENT_N)
+        val base = if (backFrom) backStepBase(bk) else Place(chapterIdx, sentenceIdx)
+        var target = headsetTarget(bk, step, delta, base)
+        // 19.10.2026, разбор журнала пробы 255 (Серж: «гарнитура по-прежнему
+        // управляет только play-паузой, а не перематывает»). Клавиши ДОШЛИ —
+        // в журнале «кнопка гарнитуры KEYCODE_MEDIA_NEXT → шаг 1», шаг был
+        // «chapter», а книга оказалась ОДНОЙ главой («Глава 1 из 1 · 204 из
+        // 8162»): шаг «глава» упирался сразу, и кнопка молчала. Теперь, если
+        // выбранный шаг не сдвинул место, идём следующим, более МЕЛКИМ шагом
+        // (глава → абзац → предложение). Молчания в ответ на нажатие не бывает:
+        // не вышло совсем — объясняем словами.
+        if (samePlace(target)) {
+            val fallbacks = when (step) {
+                MainActivity.HS_SENTENCE -> emptyList()
+                MainActivity.HS_PARAGRAPH, MainActivity.HS_SENT_N -> listOf(MainActivity.HS_SENTENCE)
+                else -> listOf(MainActivity.HS_PARAGRAPH, MainActivity.HS_SENTENCE)
+            }
+            for (fb in fallbacks) {
+                val t = headsetTarget(bk, fb, delta, base)
+                if (!samePlace(t)) {
+                    target = t
+                    use = fb
+                    break
+                }
+            }
+        }
+        if (target == null || samePlace(target)) {
+            Diag.log(
+                ctx, "session",
+                "гарнитура: шаг «$step» в эту сторону некуда (начало/конец книги) — " +
+                    "говорю место и стою"
+            )
+            if (!playing) host?.onAnnounce(positionPhrase())
+            return
+        }
+        if (use != step) {
+            Diag.log(
+                ctx, "session",
+                "гарнитура: шаг «$step» не сдвинул место (в книге всего " +
+                    "${bk.chapters.size} гл.) — иду шагом «$use»"
+            )
+            // Просьба Сержа 19.10.2026: о таком переходе сказать СЛОВАМИ, но не
+            // каждый раз — книгу листают долго, а подсказка нужна один раз.
+            if (headsetHintBook != currentUri) {
+                headsetHintBook = currentUri
+                hintSpeaking = false
+                hintText = ctx.getString(
+                    when {
+                        step == MainActivity.HS_MAJOR || step == MainActivity.HS_HEADER ->
+                            R.string.headset_step_from_headers
+
+                        use == MainActivity.HS_SENTENCE -> R.string.headset_step_sentence
+                        else -> R.string.headset_step_paragraph
+                    }
+                )
+            }
+        }
         goTo(target.chapter, target.sentence)
-        if (!playing) host?.onAnnounce(positionPhrase())
+        // Цели шагов назад помним, чтобы подряд идущие нажатия вели себя как в
+        // читалке: 203 → 202 → 201, а не «то же место снова». Вперёд память
+        // сбрасываем: после чтения вперёд «назад» должно считаться от места.
+        if (delta < 0) rememberBackStep(target.chapter, target.sentence) else forgetBackStep()
+        // Подсказку говорим ПОСЛЕ перехода: на паузе — диктором (чтение молчит),
+        // на ходу — голосом чтения, оборвав начатую фразу, и сразу продолжаем
+        // чтение с нового места (см. [speakHint]).
+        hintText?.let { speakHint(it) }
+        if (!playing && !hintSpeaking) host?.onAnnounce(positionPhrase())
     }
+
+    /** Текст подсказки, которую ещё не сказали (одна на книгу, см. [headsetHintBook]). */
+    private var hintText: String? = null
+
+    /** Книга, которой про «мелкий шаг» уже сказали. */
+    private var headsetHintBook: String? = null
+
+    /** Сейчас звучит служебная подсказка — по её концу продолжим чтение. */
+    private var hintSpeaking = false
+
+    /** Сказать подсказку про шаг. На паузе — диктором, на ходу — голосом чтения:
+     *  фраза книги уже оборвана переходом ([goTo]), и после подсказки чтение
+     *  продолжится с нового места (см. [onPlayerDone]). */
+    private fun speakHint(text: String) {
+        hintText = null
+        val p = player
+        if (!playing || p == null || !p.isReady) {
+            Diag.log(ctx, "session", "подсказка диктором: $text")
+            host?.onAnnounce(text)
+            return
+        }
+        Diag.log(ctx, "session", "подсказка голосом чтения: $text")
+        p.stop()
+        hintSpeaking = true
+        p.speak(text)
+    }
+
+    // ---------------- Шаг назад, который идёт назад (19.10.2026) ----------------
+    // Память ОДНА на всё приложение: кнопки читалки («Пред.», свайпы, «Прыжок») и
+    // кнопки гарнитуры. Раньше она жила только в окне, и гарнитура считала «назад»
+    // всегда от текущего места ([backStepBase]).
+
+    /** Куда встал последний шаг назад. */
+    private var backStepAt: Place? = null
+
+    /** Когда он был сделан (часы устройства; 0 — памяти нет). */
+    private var backStepTime = 0L
+
+    /** Сколько держим память шага назад: этого хватает, чтобы нажать несколько раз. */
+    private val backStepMs = 20_000L
+
+    /** Откуда считать шаг назад: от прошлой цели, если нажатия идут подряд. */
+    fun backStepBase(bk: BookDocument): Place {
+        val at = backStepAt
+        val fresh = backStepTime != 0L &&
+            android.os.SystemClock.uptimeMillis() - backStepTime < backStepMs
+        val ok = fresh && at != null &&
+            at.chapter in bk.chapters.indices &&
+            at.sentence in bk.chapters[at.chapter].sentences.indices
+        return if (ok) at!! else Place(chapterIdx, sentenceIdx)
+    }
+
+    fun rememberBackStep(ch: Int, s: Int) {
+        backStepAt = Place(ch, s)
+        backStepTime = android.os.SystemClock.uptimeMillis()
+    }
+
+    fun forgetBackStep() {
+        backStepTime = 0L
+    }
+
+    /** Шаг гарнитуры словами настройки: место, куда ведёт шаг [step]. */
+    private fun headsetTarget(bk: BookDocument, step: String, delta: Int, base: Place): Place? = when (step) {
+        MainActivity.HS_SENTENCE -> headsetSentenceTarget(bk, delta, base)
+        MainActivity.HS_PARAGRAPH -> headsetParagraphTarget(bk, delta)
+        MainActivity.HS_SENT_N -> headsetJumpTarget(bk, delta, base) // msg5250: прыжок
+        // msg5295: у «главы» три уровня — как у свайпов и кнопок читалки
+        // (G_NEXT_CH/MAJOR/HEADER), а не одна настройка на все шаги.
+        MainActivity.HS_MAJOR -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_MAJOR)
+        MainActivity.HS_HEADER -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_ALL)
+        else -> headsetChapterTarget(bk, delta, MainActivity.CH_NAV_CHAPTERS)
+    }
+
+    /** Цель шага совпадает с тем, где чтение стоит (или её нет) — сдвига не будет. */
+    private fun samePlace(target: Place?): Boolean =
+        target == null || (target.chapter == chapterIdx && target.sentence == sentenceIdx)
 
     /** Ближайшее предложение в сторону [delta] (граница главы переходит в соседнюю,
      *  как кнопки «Пред/След» в читалке). null — упёрлись в край книги. */
-    private fun headsetSentenceTarget(bk: BookDocument, delta: Int): Place? {
-        var ch = chapterIdx
-        var s = sentenceIdx + delta
+    private fun headsetSentenceTarget(
+        bk: BookDocument,
+        delta: Int,
+        base: Place = Place(chapterIdx, sentenceIdx),
+    ): Place? {
+        var ch = base.chapter
+        var s = base.sentence + delta
         if (s < 0) {
             if (ch <= 0) return null
             ch--
@@ -649,10 +807,14 @@ internal object ReaderEngine {
      *  что соседний шаг «предложение» (граница главы переходит в следующую). Число
      *  берётся из настроек прыжка: «вперёд» — своё, «назад» — своё. null — на
      *  этом краю книги двигаться некуда, шаг не состоялся. */
-    private fun headsetJumpTarget(bk: BookDocument, delta: Int): Place? {
+    private fun headsetJumpTarget(
+        bk: BookDocument,
+        delta: Int,
+        base: Place = Place(chapterIdx, sentenceIdx),
+    ): Place? {
         val count = MainActivity.jumpCount(prefs, delta > 0)
-        var ch = chapterIdx
-        var s = sentenceIdx
+        var ch = base.chapter
+        var s = base.sentence
         var left = count
         while (left > 0) {
             var nextCh = ch
@@ -813,26 +975,60 @@ internal object ReaderEngine {
      *  тот же файл и только через 6,6 с дошло до новой речи (21:14:15). ПРАВИЛО:
      *  любой путь смены голоса или движка обязан выбросить ВСЁ, что записано
      *  прежним голосом, — и когда чтение идёт, и когда оно стоит на паузе.
-     *  Откат — вернуть ранний выход `if (!playing || book == null) return`. */
-    fun restartAfterSwitch() {
+     *  Откат — вернуть ранний выход `if (!playing || book == null) return`.
+     *
+     *  19.10.2026, жалоба Сержа «остановил чтение, поменял голос, запустил снова —
+     *  последняя единица звучит старым синтезом». Чистка стояла ТОЛЬКО внутри
+     *  [whenVoicesReady]: пока движок отдаёт список голосов (после смены голоса
+     *  он бывает занят), окно это от 0 до 3 с, и в нём успевала начаться читка —
+     *  со старым звуком, потому что чистки ещё не было. Теперь чистка идёт
+     *  СРАЗУ и на том же плеере, что выбирал голос ([dropVoiceSwitched]), а
+     *  ожидание движка остаётся только для новой речи.
+     *
+     *  Здесь же — то, о чём Серж просил в том же письме: «при выборе голоса этим
+     *  голосом зачитать последнюю единицу текста». На паузе выбор голоса звучит
+     *  ПРОБОЙ: одна текущая фраза новым голосом, дальше тишина и пауза, место в
+     *  книге не двигается ([previewUnit]). Поэтому список голосов закрывать не
+     *  надо — он остаётся полезным: касание по голосу сразу слышно. */
+    fun restartAfterSwitch(withPreview: Boolean = true) {
         if (book == null) return
+        // Чистка — немедленно, до ожидания движка (см. вышеуказанную жалобу).
+        val wasPreview = previewUnit
+        dropVoiceSwitched()
+        previewUnit = false
         whenVoicesReady {
             val p = player ?: return@whenVoicesReady
             if (book == null) return@whenVoicesReady
-            // Сначала чистка (она и в паузе нужна), потом перечитка: в паузе
-            // перечитывать нечего — продолжение закажет синтез заново.
+            // Повторяем чистку: пока ждали, могли доиграть заготовки прежнего
+            // голоса. Стоит она дёшево, а промах — тот самый «старый звук».
             p.dropPrepared()
-            if (!playing) {
+            if (!playing || wasPreview) {
+                // Чтение стоит (или это была проба голоса). Пробу заказывает
+                // только окно книги — в Настройках вместо неё звучит образец
+                // фразы ([VoicePicker.speakSample]), и две речи разом там не
+                // нужны.
                 Diag.log(
                     ctx, "sound",
-                    "смена голоса/движка на паузе — звук и заготовки прежнего голоса выброшены, " +
-                        "продолжение синтезирую заново"
+                    "смена голоса/движка: звук прежнего голоса выброшен" +
+                        if (withPreview) ", пробую голос на текущей фразе" else " (проба не нужна)"
                 )
+                if (withPreview) startSpeakingCurrent(preview = true)
                 return@whenVoicesReady
             }
             Diag.log(ctx, "sound", "смена голоса/движка на ходу — перечитываю предложение заново")
             startSpeakingCurrent()
         }
+    }
+
+    /** Выбросить всё, что записано прежним голосом, на том плеере, который
+     *  выбирал голос. Синхронно и без условий: это первый шаг смены голоса или
+     *  движка, а не последний (19.10.2026, см. [restartAfterSwitch]). */
+    fun dropVoiceSwitched() {
+        player?.dropPrepared()
+        // Паузный звук и кэш сыгранных чистит сам dropPrepared; здесь снимаем
+        // ещё и «место, где встал паузный файл»: прежним голосом играть его уже
+        // нельзя, а новая фраза начнётся с начала.
+        previewUnit = false
     }
 
     /** Сколько предложений занимает фраза, которая ЗВУЧИТ сейчас (0 — чтение
@@ -1020,10 +1216,18 @@ internal object ReaderEngine {
      *  попросил человек (true: «повторить», шаг назад, прыжок, продолжение после
      *  паузы, смена голоса). Различие важно плееру: по ходу книги единица речи
      *  звучит ОДИН раз за проход, а по просьбе человека — повторяем, и звук для
-     *  этого берём из кэша сыгранных (08.10.2026, см. [SpeechPlayer.speak]). */
-    fun startSpeakingCurrent(userAsked: Boolean = true) {
+     *  этого берём из кэша сыгранных (08.10.2026, см. [SpeechPlayer.speak]).
+     *
+     *  [preview] — «проба голоса» (19.10.2026): звучит ровно эта фраза, дальше
+     *  чтение встаёт и место в книге не двигается (см. [previewUnit]). */
+    fun startSpeakingCurrent(userAsked: Boolean = true, preview: Boolean = false) {
         val bk = book ?: return
         val p = player ?: return
+        // Любое начало чтения снимает пробу, кроме той, что заказана пробой.
+        previewUnit = preview
+        // Плееру говорим то же самое: во время пробы он не заказывает фразы
+        // впрок (см. [SpeechPlayer.previewOnly]).
+        p.previewOnly = preview
         // Читатель снова взялся за книгу — незачем говорить «книга прочитана»
         // (и незачем договаривать её, если она уже звучит). Заодно снимаем
         // признак «пауза по перевороту»: дальше переворот экраном вверх уже
@@ -1611,6 +1815,24 @@ internal object ReaderEngine {
 
     private fun onUtteranceDone() {
         if (!playing) return
+        // Проба голоса (19.10.2026): звучит ОДНА фраза с текущего места — и
+        // чтение встаёт, место в книге не двигается. Куски той же фразы (слова
+        // автора, хвост реплики) дочитываем: голос слушают целиком.
+        if (previewUnit) {
+            if (pendingFragments.isNotEmpty()) {
+                val next = pendingFragments.first()
+                pendingFragments = pendingFragments.drop(1)
+                player?.speak(next, fragmentPos, userAsked = true)
+                return
+            }
+            previewUnit = false
+            Diag.log(
+                ctx, "sound",
+                "проба голоса: фраза прозвучала — чтение остаётся на паузе, место не сдвинуто"
+            )
+            stopAtEnd()
+            return
+        }
         if (!continuous) {
             stopAtEnd()
             return
@@ -1660,6 +1882,15 @@ internal object ReaderEngine {
     private fun onPlayerDone() {
         if (endAnnounceSpeaking) {
             finishEndAnnounce()
+            return
+        }
+        // Служебная подсказка гарнитуры доиграла — продолжаем чтение с места, куда
+        // только что перешли (см. [speakHint]). Место при этом НЕ двигаем: это была
+        // не фраза книги.
+        if (hintSpeaking) {
+            hintSpeaking = false
+            Diag.log(ctx, "session", "подсказка прозвучала — продолжаю чтение с нового места")
+            if (playing) startSpeakingCurrent(userAsked = true)
             return
         }
         if (!playing) return
@@ -1901,9 +2132,32 @@ internal object ReaderEngine {
         return ok
     }
 
-    /** Чтение дошло до конца книги (или было одноразовым) — отпускаем фокус. */
+    /** Чтение дошло до конца книги (или было одноразовым) — отпускаем фокус.
+     *
+     *  19.10.2026 (жалоба тестера: «выбрали голос — книга читается сама, а кнопка
+     *  стоит „Начать чтение“», и рядом «экран включается, чтение продолжается,
+     *  хотя в настройках стоит остановка»). Правило: ОСТАНОВКА ЧТЕНИЯ — ЭТО
+     *  ТИШИНА, а не только признак `playing = false`. Раньше здесь никто не гасил
+     *  плеер, и после пробы голоса (одна фраза) в списке ExoPlayer оставались
+     *  стоять заказанные впрок файлы следующих фраз: они звучали дальше сами.
+     *  Читалка считала чтение стоящим, пауза по экрану и по кнопке ничего не
+     *  делали (`pausePlayback` выходит по `!playing`), а книга читалась «другим
+     *  потоком». Теперь плеер гасим здесь, одной строкой на все выходы. */
     private fun stopAtEnd() {
         Diag.log(ctx, "activity", "чтение закончилось само (конец/остановка)")
+        // Сначала звук: тишина должна наступить в тот же миг, а не после
+        // сохранения позиции. Если что-то ещё звучало или стояло в очереди, это
+        // видно в журнале — по такой строке жалоба разбирается без догадок.
+        player?.let { sp ->
+            if (sp.pendingSound) {
+                Diag.log(ctx, "sound", "остановка чтения: звук ещё оставался — гашу плеер и очередь")
+            }
+            sp.stop()
+        }
+        // Подсказка гарнитуры оборвана остановкой — её «доиграла» уже не будет
+        // (см. pausePlayback); признак не должен пережить чтение.
+        hintSpeaking = false
+        hintText = null
         // msg4993: глава была дочитана ПО ТАЙМЕРУ — режим надо запомнить до
         // cancelSleepTimer(), который его гасит. Дальше либо окно ожидания
         // жеста (галочка включена), либо тихая пауза, как в 0.4.25.
@@ -1976,6 +2230,15 @@ internal object ReaderEngine {
         // (playing = false), поэтому её гасим ДО раннего выхода: «пауза» значит
         // тишина, а не «фраза доскажет себя и умолкнет».
         cancelEndAnnounce()
+        // Подсказка гарнитуры (проба 256): пауза её обрывает вместе со звуком, а
+        // «доиграла» от оборванной фразы уже не придёт. Признак снимаем ОБЯЗАТЕЛЬНО,
+        // иначе следующая настоящая фраза, доиграв, будет принята за конец подсказки
+        // и чтение перечитает её с начала (на слух — тот самый повтор).
+        if (hintSpeaking) {
+            hintSpeaking = false
+            hintText = null
+            Diag.log(ctx, "session", "пауза прервала подсказку гарнитуры — признак снят")
+        }
         if (!playing) return
         Diag.log(
             ctx, "activity",

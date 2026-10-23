@@ -978,7 +978,21 @@ class SettingsActivity(private val act: SectionActivity) {
             if (MainActivity.active?.player?.isReady == true) {
                 MainActivity.active?.player?.selectVoice(v.name)
             }
-            ReaderEngine.restartAfterSwitch()
+            // Проба голоса на текущей фразе книги — только в окне читалки
+            // (19.10.2026); здесь звучит образец фразы, см. VoicePicker.playSample.
+            //
+            // 19.10.2026, жалоба тестера: «выбрали голос — книга пошла читаться
+            // сама, вышли из выбора голосов, книга читается, а кнопка стоит
+            // „Начать чтение“». Причина — вот эта строка: здесь стоял
+            // restartAfterSwitch, а он ПЕРЕЧИТЫВАЕТ текущее предложение, если
+            // книга открыта в фоне. Вместе с образцом фразы (он тогда шёл через
+            // живого плеера книги) это давало запуск чтения из настроек и
+            // расхождение признаков: звук идёт, а чтение считает себя стоящим.
+            // ПРАВИЛО: НАСТРОЙКИ КНИГУ НЕ ЧИТАЮТ. Книга замолкает (пауза), звучит
+            // образец голоса, а своё чтение человек запускает в читалке сам — уже
+            // новым голосом.
+            if (ReaderEngine.playing) ReaderEngine.pausePlayback(keepFocus = true)
+            else ReaderEngine.dropVoiceSwitched()
         }
 
         override fun langApplied(code: String) {

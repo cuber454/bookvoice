@@ -1,6 +1,7 @@
 package com.cuber.bookvoice
 
 import android.Manifest
+import android.app.Dialog
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipData
@@ -40,6 +41,7 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.cuber.bookvoice.databinding.ActivityMainBinding
@@ -2584,36 +2586,24 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     // и через секунду-две уходило на фразу вперёд, а следующее нажатие снова
     // считало «назад» от нового места — то есть возвращало в то же предложение.
     // Теперь цель шага назад запоминается, и пока нажатия идут подряд (до
-    // [backStepMs]), каждый следующий шаг считается от прошлой цели: 1570 → 1569
+    // backStepMs), каждый следующий шаг считается от прошлой цели: 1570 → 1569
     // → 1568 → 1567. Любой другой переход (тап по тексту, оглавление, ползунок,
     // закладка) память сбрасывает — там человек сам выбрал место.
-
-    /** Куда встал последний шаг назад: глава и предложение. */
-    private var backStepAt = -1 to -1
-
-    /** Когда он был сделан (часы устройства; 0 — памяти нет). */
-    private var backStepTime = 0L
-
-    /** Сколько держим память шага назад: этого хватает, чтобы нажать несколько раз. */
-    private val backStepMs = 20_000L
+    //
+    // 19.10.2026: память переехала в движок ([ReaderEngine.backStepBase]) — она
+    // нужна и кнопкам гарнитуры (там была ровно та же жалоба: «предложение назад,
+    // а встаёт на начало текущего»). Здесь остались только короткие переходники,
+    // чтобы окно и движок считали шаг назад ОДНОЙ памятью.
 
     /** Откуда считать шаг назад: от прошлой цели, если нажатия идут подряд. */
     private fun backBase(bk: BookDocument): Pair<Int, Int> {
-        val fresh = backStepTime != 0L && SystemClock.uptimeMillis() - backStepTime < backStepMs
-        val ch = backStepAt.first
-        val s = backStepAt.second
-        val ok = fresh && ch in bk.chapters.indices && s in bk.chapters[ch].sentences.indices
-        return if (ok) ch to s else chapterIdx to sentenceIdx
+        val at = ReaderEngine.backStepBase(bk)
+        return at.chapter to at.sentence
     }
 
-    private fun rememberBackStep(ch: Int, s: Int) {
-        backStepAt = ch to s
-        backStepTime = SystemClock.uptimeMillis()
-    }
+    private fun rememberBackStep(ch: Int, s: Int) = ReaderEngine.rememberBackStep(ch, s)
 
-    private fun forgetBackStep() {
-        backStepTime = 0L
-    }
+    private fun forgetBackStep() = ReaderEngine.forgetBackStep()
 
     /** Двойной тап по предложению (при чтении TalkBack'ом — активация строки).
      *  Всегда переводит читаемую позицию на это предложение; если чтение ещё
@@ -3837,17 +3827,32 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     }
 
     /**
-     * Подменю «Разбор книги» из меню «⋮» читалки (15.10.2026; переделано
-     * 16.10.2026, сборка 263x).
+     * Окно «Разбор книги» из меню «⋮» читалки (15.10.2026; переделано
+     * 16.10.2026 и ещё раз 17.10.2026).
      *
-     * ЧТО ИЗМЕНИЛОСЬ И ПОЧЕМУ. Прежде это были ДВЕ КНОПКИ — «Разобрать книгу
-     * заново» и «Вернуть как в файле», — и Серж справедливо спросил: зачем
-     * «разобрать заново», если книга и так разобрана? Кнопки выглядели как два
-     * разных действия, хотя это ОДИН переключатель с двумя положениями, и на
-     * деле книга всегда стоит в одном из них. Теперь это СПИСОК С ОТМЕТКОЙ:
-     * галочка стоит на том, как книга читается СЕЙЧАС, а выбор другого
-     * положения сразу пересобирает книгу. Цифр по-прежнему нет (решение Сержа
+     * ЧТО ЭТО. ОДИН переключатель с двумя положениями, а не два действия.
+     * Прежде были две кнопки — «Разобрать книгу заново» и «Вернуть как в файле», —
+     * и Серж справедливо спросил: зачем «разобрать заново», если книга и так
+     * разобрана? Кнопки выглядели как два разных действия, хотя книга всегда
+     * стоит в одном из двух положений. Цифр нет намеренно (решение Сержа
      * 15.10.2026 — числа уходят в журнал).
+     *
+     * ПОЧЕМУ ТЕПЕРЬ РАДИОКНОПКИ, А НЕ СПИСОК ОКНА (17.10.2026, жалоба Сержа:
+     * «в пункте „Разбор книги“ нет никаких кликабельных элементов… там просто
+     * описание, что книга разбирается по правилам или не по правилам»). Окно было
+     * ЕДИНСТВЕННЫМ местом в приложении, где длинная поясняющая строка стояла в
+     * ОДНОМ окне со списком выбора: при крупном шрифте пояснение забирало высоту,
+     * списку оставался край экрана или нулевая высота, и диктору было нечего
+     * нажимать — человек слышал только заголовок и описание. Теперь выбор — свои
+     * строки-радиокнопки (`RadioGroup`): диктор читает их как «переключатель,
+     * выбрано», оба положения названы словами, а отметка «сейчас так» стоит прямо
+     * в подписи ТЕКУЩЕГО положения. Пояснение — одна короткая строка, полный текст
+     * говорится по касанию (`reader_parse_hint`), а не занимает окно.
+     *
+     * ПОЧЕМУ НЕ ГАЛОЧКА И НЕ ТУМБЛЕР (вопрос Сержа 17.10.2026). Галочка значит
+     * «включено/выключено» НЕЗАВИСИМО от других — здесь же выбор одного из двух
+     * равноправных положений; тумблер говорит «включено», но не говорит, что стоит
+     * вместо этого. Радиокнопка называет оба положения и показывает выбранное.
      *
      * Если человек выбрал положение, в котором книга уже стоит, пересобирать
      * нечего, но и молчать нельзя — говорим «Так уже и читается»: пустое нажатие
@@ -3856,24 +3861,78 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private fun showParseDialog() {
         val u = currentUri ?: return
         val mode = ParsePrefs.modeForBook(this, u)
-        val checked = if (mode == ParsePrefs.MODE_RULES) 0 else 1
-        val options = arrayOf(
-            getString(R.string.reader_parse_opt_rules),
-            getString(R.string.reader_parse_opt_file),
+
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val group = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        column.addView(group, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ))
+
+        var dlg: Dialog? = null
+        // Порядок положений постоянный: правила сверху, «как в файле» снизу.
+        val rows = listOf(
+            ParsePrefs.MODE_RULES to getString(R.string.reader_parse_opt_rules),
+            ParsePrefs.MODE_FILE to getString(R.string.reader_parse_opt_file),
         )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.reader_parse_title, ParsePrefs.modeWord(this, mode)))
-            .setMessage(R.string.reader_parse_hint)
-            .setSingleChoiceItems(options, checked) { dlg, which ->
-                dlg.dismiss()
-                if (which == checked) {
-                    binding.tvHeader.announceForAccessibility(getString(R.string.reader_parse_same))
-                    return@setSingleChoiceItems
+        for ((rowMode, label) in rows) {
+            val now = rowMode == mode
+            val radio = RadioButton(this).apply {
+                text = if (now) getString(R.string.reader_parse_now, label) else label
+                textSize = 17f
+                isChecked = now
+                isClickable = true
+                setPadding(dp2px(4f), dp2px(8f), dp2px(4f), dp2px(8f))
+                setOnClickListener {
+                    dlg?.dismiss()
+                    if (now) {
+                        binding.tvHeader.announceForAccessibility(
+                            getString(R.string.reader_parse_same)
+                        )
+                    } else {
+                        reparseCurrentBook(u, asFile = rowMode == ParsePrefs.MODE_FILE)
+                    }
                 }
-                reparseCurrentBook(u, asFile = which == 1)
             }
+            group.addView(radio, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ))
+        }
+
+        // Короткая подсказка. Она НАЖИМАЕМАЯ, а не пассивный текст: в окне, где
+        // диктор садится на кнопки, пассивную строку он пропускает (урок окна
+        // «Информация о книге», 09.10.2026). Касание говорит пояснение целиком.
+        val meaning = TextView(this).apply {
+            text = getString(R.string.reader_parse_short)
+            textSize = 15f
+            setTextColor(Palette.DIM)
+            setPadding(dp2px(8f), dp2px(10f), dp2px(8f), dp2px(4f))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { announceForAccessibility(getString(R.string.reader_parse_hint)) }
+        }
+        ViewCompat.setScreenReaderFocusable(meaning, true)
+        column.addView(meaning, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ))
+
+        dlg = MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.reader_parse_title, ParsePrefs.modeWord(this, mode)))
+            .setView(column)
             .setNegativeButton(R.string.toc_close, null)
-            .show()
+            .create()
+        dlg?.show()
+        // Диктора ставим на СТРОКУ ТЕКУЩЕГО положения, а не на заголовок окна:
+        // тогда первое, что человек слышит после открытия, — «переключатель,
+        // выбрано» с названием положения, и сразу понятно, где он и что менять.
+        // Задержка нужна, чтобы окно показалось и диктор отпустил меню «⋮».
+        val checkedRow = group.getChildAt(if (mode == ParsePrefs.MODE_RULES) 0 else 1)
+        checkedRow?.postDelayed({
+            if (dlg?.isShowing == true && checkedRow.isShown) TabNav.a11yFocus(checkedRow)
+        }, 500)
+        Diag.log(this, "ui", "окно разбора книги: сейчас ${ParsePrefs.modeWord(this, mode)}")
     }
 
     /**

@@ -129,14 +129,45 @@ class MediaSessionService : Service() {
                     val key = keyEventOf(intent) ?: return false
                     val toggle = key.keyCode == KeyEvent.KEYCODE_HEADSETHOOK ||
                         key.keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-                    if (!toggle) return false
+                    if (toggle) {
+                        if (key.action == KeyEvent.ACTION_DOWN) {
+                            Diag.log(
+                                this@MediaSessionService, "session",
+                                "переключение с кнопки/касания (медиа-сессия): решает движок, " +
+                                    "listener=${listener != null}"
+                            )
+                            post { toggleFromMedia() }
+                        }
+                        return true
+                    }
+                    // 19.10.2026, жалоба Сержа: «Bluetooth-гарнитура не переключает по
+                    // предложениям или по главам — что в настройке выбрано». Кнопки
+                    // «вперёд/назад» отдавали себя Media3 по умолчанию, а там для
+                    // нашего «теневого» плеера это могло не дойти вовсе (и в журнале
+                    // не оставалось следа). Теперь клавишу разбираем сами, как это уже
+                    // делает [onMediaButton] для кнопок из карточки: шаг (предложение,
+                    // абзац, глава…) берётся из настройки кнопки в движке чтения.
+                    // Вместе с KEYCODE_MEDIA_NEXT/PREVIOUS ловим FAST_FORWARD/REWIND и
+                    // SKIP_*: часть гарнитур шлёт именно их, а не «следующий трек».
+                    val delta = when (key.keyCode) {
+                        KeyEvent.KEYCODE_MEDIA_NEXT,
+                        KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
+                        KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> 1
+
+                        KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+                        KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD,
+                        KeyEvent.KEYCODE_MEDIA_REWIND -> -1
+
+                        else -> 0
+                    }
+                    if (delta == 0) return false
                     if (key.action == KeyEvent.ACTION_DOWN) {
                         Diag.log(
                             this@MediaSessionService, "session",
-                            "переключение с кнопки/касания (медиа-сессия): решает движок, " +
-                                "listener=${listener != null}"
+                            "кнопка гарнитуры ${KeyEvent.keyCodeToString(key.keyCode)} → " +
+                                "шаг $delta (listener=${listener != null})"
                         )
-                        post { toggleFromMedia() }
+                        post { listener?.onMediaSkip(delta) }
                     }
                     return true
                 }
