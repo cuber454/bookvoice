@@ -37,6 +37,11 @@ class BookVoiceApp : Application() {
         // поэтому «в prefs пусто» честно значит «приложение только поставили».
         // Окошко после обновления полка покажет сама (WhatsNew.showOnLaunch).
         WhatsNew.markFirstRunIfFresh(this)
+        // 24.10.2026: способы чтения поменялись местами — обычным стало чтение
+        // голосом движка, файловый путь стал обходным. Прежний выбор человека
+        // переносим здесь: это самое раннее место, где prefs ещё никто не читал, и
+        // решение должно быть готово до первого «Читать» (см. [PrefsMigration]).
+        PrefsMigration.migrate(this)
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {

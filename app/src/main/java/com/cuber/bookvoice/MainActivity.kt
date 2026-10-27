@@ -287,10 +287,10 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // местом книги, с него продолжит ▶. Читаемое на экране (обычная пауза,
         // конец главы) — трогать нечего. Ключ «Прокручивать экран за чтением»
         // выключен — лента за голосом не ходит, брать её верх нельзя.
-        if (!playing &&
-            prefs.getBoolean(KEY_SCROLL, true) &&
-            prefs.getBoolean(KEY_SCROLL_PLACE, true)
-        ) {
+        // 24.10.2026: галочек про прокрутку больше нет — прокрутка всегда идёт за
+        // чтением, и место чтения всегда переходит туда, куда прокрутил человек
+        // (решение Сержа: «прокрутка за чтением, место по прокрутке — всегда»).
+        if (!playing) {
             // msg6416: проверяем ещё раз на самом деле, а не «в момент паузы».
             // goTo останавливает плеер, чтобы перезапустить чтение с нового места:
             // пауза длится мгновение, и через 300 мс голос уже звучит снова. Тогда
@@ -428,6 +428,16 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 this, "app",
                 "экспериментальные настройки: включены (заготовок впрок ${ExpertPrefs.prefetch(this)})"
             )
+            // 24.10.2026: если осталась включённой проверка «сломанный движок»,
+            // это видно с первой строки журнала — иначе читалка «молчит» без
+            // объяснения, и причину пришлось бы искать вопросами.
+            if (ExpertPrefs.brokenEngine(this)) {
+                Diag.log(
+                    this, "app",
+                    "ВНИМАНИЕ: включена проверка «сломанный движок» — фразы синтезатору " +
+                        "не отдаются, программа рапортует «готово» без звука"
+                )
+            }
         }
         // 30.09.2026: чем закончился прошлый запуск — сразу в журнал, не дожидаясь
         // окна «Не засыпать». Причина от системы плюс наша отметка «читали» — это
@@ -1093,9 +1103,15 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         return getString(R.string.book_file_no_access, currentName ?: uri.lastPathSegment ?: path)
     }
 
-    /** Сказать причину и предложить включить «Доступ ко всем файлам» одним
-     *  касанием. Окно читалки закрываем тем же порядком, что и [failOpen]:
-     *  книга не открылась — пустого окна человек видеть не должен. */
+    /** Сказать причину и САМОМУ открыть «Доступ ко всем файлам». Окно читалки
+     *  закрываем тем же порядком, что и [failOpen]: книга не открылась — пустого
+     *  окна человек видеть не должен.
+     *
+     *  24.10.2026, просьба Сержа: «мне нужно, чтобы приложение само зашло, куда
+     *  нужно, а я просто нажал галочку разрешить». Прежде здесь было наше окно с
+     *  кнопкой «Открыть настройки» — лишний шаг и лишние слова. Своего окна
+     *  «Разрешить/Запретить» для этого разрешения в Android нет вовсе, поэтому
+     *  сразу открываем системный экран доступа; он же и есть единственный вход. */
     private fun askAllFiles(reason: String) {
         Diag.log(
             this, "activity",
@@ -1103,16 +1119,11 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         )
         toast(reason)
         binding.tvHeader.announceForAccessibility(reason)
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.all_files_title)
-            .setMessage(reason)
-            .setPositiveButton(R.string.all_files_open) { _, _ ->
-                AllFiles.openSettings(this)
-                finish()
-            }
-            .setNegativeButton(R.string.all_files_later) { _, _ -> finish() }
-            .setOnCancelListener { finish() }
-            .show()
+        // Пауза — чтобы объявление успело начаться: экран настроек забирает звук.
+        binding.tvHeader.postDelayed({
+            AllFiles.openSettings(this)
+            finish()
+        }, 1200)
     }
 
     private fun openBook(uri: Uri, chapter: Int, sentence: Int, rewindOnOpen: Boolean = false) {
@@ -1660,8 +1671,18 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         updatePosition()
     }
 
-    /** Прокрутить список к читаемому предложению, если в настройках включено
-     *  «Прокручивать к читаемому предложению». */
+    /** 24.10.2026: переставить читаемое предложение по новой настройке «сверху /
+     *  по центру» — зовут из настроек, чтобы человек увидел выбор сразу, а не после
+     *  следующего перехода. Обычная прокрутка за чтением работает как раньше
+     *  (включена всегда, галочки у неё больше нет). */
+    fun realignCurrent() {
+        if (book == null) return
+        scrollToSentence(chapterIdx, sentenceIdx)
+    }
+
+    /** Прокрутить список к читаемому предложению. С 24.10.2026 прокрутка включена
+     *  всегда, а ГДЕ встаёт предложение (сверху или по центру) решает
+     *  [KEY_SCROLL_WHERE_CENTER] в [alignSentence]. */
     private fun scrollToSentence(chapter: Int, sentence: Int) {
         val bk = book
         var row = adapter.flatOf(chapter, sentence)
@@ -1708,10 +1729,8 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                 "предл. ${pendingScrollTarget?.second})")
             return
         }
-        if (!prefs.getBoolean(KEY_SCROLL, true)) {
-            logScrollSkip("галочка «Прокручивать экран за чтением» снята")
-            return
-        }
+        // 24.10.2026: галочки больше нет — прокрутка за чтением не выключается.
+        // (Раньше здесь стоял выход по снятой галочке и строка в журнал.)
         markSelfScroll(row)
         layoutManager.scrollToPosition(row)
         logScrollDone(row, chapter, sentence)
@@ -1792,7 +1811,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
      *  внутри абзаца. Список короткий — дальше доедет сам, scrollBy обрежется. */
     private fun alignSentence(row: Int, sentence: Int, retry: Boolean = true) {
         if (suppressScroll) return
-        if (!prefs.getBoolean(KEY_SCROLL, true)) return
+        // 24.10.2026: прокрутка за чтением больше не выключается галочкой.
         val first = adapter.firstInRow(row)
         if (first < 0) return
         val v = layoutManager.findViewByPosition(row) as? ParagraphView
@@ -1807,7 +1826,23 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val top = v.sentenceTop(sentence - first)
         if (top < 0) return
         extendSelfScroll()
-        binding.sentenceList.scrollBy(0, v.top + top)
+        // 24.10.2026: читаемое можно держать сверху (как было) или по центру
+        // (настройка «Center the current sentence on the screen» у @Voice).
+        // Сверху отступа нет; по центру отступаем на столько, чтобы середина
+        // предложения встала в середину ленты.
+        val want = v.top + top
+        val shift = if (prefs.getBoolean(KEY_SCROLL_WHERE_CENTER, false)) {
+            val bottom = v.sentenceBottom(sentence - first)
+            if (bottom > top) {
+                val mid = (top + bottom) / 2
+                (want + mid - binding.sentenceList.height / 2).coerceAtLeast(0)
+            } else {
+                want
+            }
+        } else {
+            want
+        }
+        binding.sentenceList.scrollBy(0, shift)
     }
 
     /** Портянка (msg4330): читатель доехал рукой до места — оно и есть место
@@ -1831,7 +1866,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val target = pendingScrollTarget
         pendingScrollTarget = null
         if (target == null) return
-        if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
+        // 24.10.2026: место по прокрутке работает всегда (галочки больше нет).
         if (scrubbing) return
         if (bk.chapters.getOrNull(target.first)?.sentences.isNullOrEmpty()) return
         // msg6416: в журнал — куда лента ушла и читает ли голос в этот момент.
@@ -1845,7 +1880,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             // Вариант А (msg4372): чтение идёт, читатель отпустил прокрутку —
             // голос переезжает на верхнюю строку и читает дальше с неё. Галочка
             // выключена — во время чтения лента остаётся только «посмотреть».
-            if (!prefs.getBoolean(KEY_SCROLL_FOLLOW, true)) return
+            // 24.10.2026: переезд голоса по прокрутке работает всегда.
             goTo(target.first, target.second)
             Diag.log(
                 this, "activity",
@@ -1981,7 +2016,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg6416: лента едет за читаемым (переход по главе, оглавление, закладка,
         // возобновление чтения) — это не рука читателя, цель ставить нечего.
         if (selfScrolling()) return
-        if (!prefs.getBoolean(KEY_SCROLL_PLACE, true)) return
+        // 24.10.2026: место по прокрутке работает всегда (галочки больше нет).
         val top = layoutManager.findFirstVisibleItemPosition()
         if (top < 0) return
         val p = scrollPlaceOf(top) ?: return
@@ -2917,10 +2952,13 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
 
     private fun refreshSpeedValue() {
         binding.tvSpeed.text = speedText(currentSpeed())
-        // #57: альтернативный способ озвучки — подхватываем на возврате из
-        // «Настроек», не переоткрывая книгу.
-        val alt = prefs.getBoolean(KEY_ALT_VOICE, false)
-        ReaderEngine.player?.altDirect = alt
+        // 24.10.2026: обычное чтение — голосом движка (как у @Voice), файловый
+        // путь человек включает строкой «Читать файлами». Прежняя галочка
+        // «Альтернативный способ чтения» переехала в этот же смысл, поэтому
+        // altDirect = «не файловый путь» ([KEY_READ_FILES]).
+        // [PrefsMigration] уже перенёс её выбор (см. BookVoiceApp).
+        val voiceFirst = !prefs.getBoolean(KEY_READ_FILES, false)
+        ReaderEngine.player?.altDirect = voiceFirst
         // msg5604: строка «Пауза между фразами» — подхватываем так же, на возврате
         // из «Настроек» (движок уже играющие фразы не переигрывает, значение
         // работает для следующих заготовок).
@@ -5338,9 +5376,40 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // перекидывает голос на верхнюю строку — он читает дальше с неё.
         internal const val KEY_SCROLL_FOLLOW = "scroll_follows_reading"
 
-        /** #57: альтернативный способ озвучки — фразу целиком отдаём движку
-         *  (проба для сравнения на слух, msg5401/5409). По умолчанию выключено. */
+        /** 24.10.2026: ГДЕ держать читаемое предложение — сверху (было всегда) или
+         *  по центру. Серж: «Давай третий вариант и назовём где держать фокус чтение
+         *  сверху или по центру». Строка в «Чтении» одна, вместо двух галочек про
+         *  прокрутку (их убрали: «очень много настроек получается»). */
+        internal const val KEY_SCROLL_WHERE_CENTER = "scroll_where_center"
+
+        /** 24.10.2026: срок ожидания сетевого голоса, мс (0 — по таблице, как было).
+         *  Строка за дверью опытных настроек, как «Network timeout» у @Voice:
+         *  медленная сеть иначе не подкрутить. Читает [SpeechPlayer.netTimeout]. */
+        internal const val KEY_NET_TIMEOUT = "net_tts_timeout_ms"
+
+        /** 24.10.2026: «сетевые голоса только по Wi-Fi» (как у @Voice). Пока не
+         *  подключена к чтению — строку ставим вместе с лестницей отказов: без
+         *  локального голоса на замену выключать сетевое чтение нечем. */
+        internal const val KEY_NET_WIFI_ONLY = "net_tts_wifi_only"
+
+        /** 24.10.2026: сколько раз повторять запрос к сетевому голосу, прежде чем
+         *  признать отказ (у @Voice 1…10). */
+        internal const val KEY_NET_RETRIES = "net_tts_retries"
+
+        /** БЫВШИЙ ключ «Альтернативного способа чтения» (24.10.2026). Способ
+         *  чтения поменялся местами: обычный — голосом движка, файловый стал
+         *  обходным ([KEY_READ_FILES]). Этот ключ ОСТАВЛЕН только для миграции:
+         *  его не удаляем, чтобы откат на прежнюю версию не сломал настройки, и
+         *  больше нигде, кроме [PrefsMigration], не читаем. */
         internal const val KEY_ALT_VOICE = "alt_direct_voice"
+
+        /** 24.10.2026: «Читать файлами (обходной способ)» — человек сам просит
+         *  прежний файловый путь (движок пишет файл, играет наша читалка).
+         *
+         *  По умолчанию ВЫКЛЮЧЕН: обычное чтение — голосом движка, как у @Voice.
+         *  Миграция прежнего ключа — [PrefsMigration.migrate] (смысл старой
+         *  галочки не переворачиваем: снял её человек — значит хотел файлы). */
+        internal const val KEY_READ_FILES = "read_files"
 
         /** msg5604: сколько тишины оставлять на стыке фраз, мс. Значение строки
          *  «Пауза между фразами»: движок дописывает по краям файла свою тишину
@@ -5351,9 +5420,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         internal const val PAUSE_KEEP_DEFAULT = 130
         // msg4721: тихий поток на время чтения — не давать засыпать звуковому каналу
         // (Bluetooth-гарнитура не уходит в сон и не откусывает начало фразы).
-        // Галочка живёт в «Чтении», раздел «Звук и стыки» (msg5067), и включается
-        // сама, когда звук произносит движок, а не наш плеер (см. KeepAwake.
-        // enableSilenceAuto).
+        // Галочка живёт в «Чтении», раздел «Звук и стыки» (msg5067). 24.10.2026:
+        // САМА больше не включается — только человеком (просьба Сержа: «пускай по
+        // умолчанию будет выключена», см. KeepAwake.noteDirectNeedsSilence).
         internal const val KEY_SILENT_KEEPALIVE = "silent_keepalive"
 
         /** Уровень тихого потока: 1 — младший разряд (−90 дБ, ухо не слышит),

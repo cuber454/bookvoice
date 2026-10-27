@@ -283,6 +283,28 @@
             android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
+        <!-- КНОПКИ ДЛЯ САМОПРОВЕРКИ (24.10.2026). Журнал программы лежит в её
+             приватной папке, а run-as на телефоне Сержа не работает, поэтому
+             проверять сборку приходилось его руками. Приёмник принимает
+             широковещательные команды через adb (см. TestHooks): включить зеркало
+             журнала в logcat, включить/выключить проверку «сломанный движок»,
+             читать/пауза, ответ о состоянии. НИЧЕГО разрушающего: ни книг, ни
+             настроек чтения он не трогает. -->
+        <receiver
+            android:name=".TestHooks"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.cuber.bookvoice.TEST.mirror" />
+                <action android:name="com.cuber.bookvoice.TEST.broken" />
+                <action android:name="com.cuber.bookvoice.TEST.read" />
+                <action android:name="com.cuber.bookvoice.TEST.pause" />
+                <action android:name="com.cuber.bookvoice.TEST.state" />
+                <action android:name="com.cuber.bookvoice.TEST.log" />
+                <action android:name="com.cuber.bookvoice.TEST.goto" />
+                <action android:name="com.cuber.bookvoice.TEST.allfiles" />
+            </intent-filter>
+        </receiver>
+
         <!-- Медиа-сессия живёт в сервисе, а не в окне — так система отдаёт
              кнопки гарнитуры и «волшебное касание» нам, а не чужому плееру. -->
         <service

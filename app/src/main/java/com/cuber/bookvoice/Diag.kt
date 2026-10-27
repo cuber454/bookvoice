@@ -24,7 +24,7 @@ object Diag {
      *  телефона, по которому так и не удалось решить, есть ли в той сборке защита
      *  от «движок отвечает „готово“, не сказав ни слова»). Менять при КАЖДОЙ
      *  сборке, которую отправляем людям. */
-    const val BUILD = "257"
+    const val BUILD = "274"
 
     /** Порог, после которого журнал обрезаем, и сколько хвоста оставляем.
      *
@@ -45,6 +45,19 @@ object Diag {
     private const val MAX_LINE = 220
 
     private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+
+    /** ЗЕРКАЛО ЖУРНАЛА В LOGCAT (24.10.2026). Нужно для САМОПРОВЕРКИ: файл
+     *  журнала лежит в приватной папке приложения, а `run-as` на этом телефоне
+     *  сломан (SELinux: `targetSdkVersion=36:fromRunAs`), поэтому журнал иначе
+     *  видит только сам Серж и только из приложения.
+     *
+     *  Включается ТОЛЬКО командой из [TestHooks] и живёт в памяти процесса: у
+     *  обычного человека logcat не засоряется, после перезапуска флаг снова
+     *  false. Строки идут с тегом [LOGCAT_TAG]. */
+    @Volatile var mirrorToLogcat = false
+
+    /** Тег зеркала в logcat. Короткий: по нему фильтруем (`adb logcat -s BV`). */
+    const val LOGCAT_TAG = "BV"
 
     @Volatile private var dir: File? = null
 
@@ -82,6 +95,9 @@ object Diag {
             if (line.length > MAX_LINE) line = line.take(MAX_LINE) + "…"
             FileOutputStream(f, true).use { it.write((line + "\n").toByteArray(Charsets.UTF_8)) }
             if (f.length() > MAX_BYTES) trim(f)
+            // Зеркало для самопроверки (см. [mirrorToLogcat]): та же строка, только
+            // в системный журнал, откуда её можно прочитать по кабелю.
+            if (mirrorToLogcat) runCatching { android.util.Log.i(LOGCAT_TAG, line) }
         } catch (_: Exception) {
         }
     }

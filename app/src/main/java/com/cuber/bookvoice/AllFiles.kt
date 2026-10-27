@@ -31,22 +31,34 @@ object AllFiles {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
             Environment.isExternalStorageManager()
 
-    /** Открыть системный экран «Доступ ко всем файлам» для нашего приложения. */
+    /** Открыть системный экран «Доступ ко всем файлам» для нашего приложения.
+     *
+     *  24.10.2026 (у Сержа новая прошивка, и жалоба «приложение говорит, что
+     *  разрешения нет, а само никуда не заходит»): теперь переходов несколько и
+     *  каждый отказ пишется в журнал. Порядок: (1) страница доступа ИМЕННО нашего
+     *  приложения — там один переключатель и название BookVoice; (2) общий список
+     *  «Доступ ко всем файлам»; (3) страница приложения в системных настройках —
+     *  оттуда до доступа два касания, но она есть всегда. Молча ничего не
+     *  глотаем: без строки в журнале потом не отличить «система не дала» от
+     *  «мы не позвали». */
     fun openSettings(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
-        try {
-            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-            intent.data = Uri.parse("package:${context.packageName}")
+        val attempts = listOf(
+            "страница доступа приложения" to Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                .setData(Uri.parse("package:${context.packageName}")),
+            "общий список «Доступ ко всем файлам»" to
+                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+            "страница приложения в настройках" to Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:${context.packageName}")),
+        )
+        for ((what, intent) in attempts) {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-        } catch (_: Exception) {
-            try {
-                context.startActivity(
-                    Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            } catch (_: Exception) {
+            val r = runCatching { context.startActivity(intent) }
+            if (r.isSuccess) {
+                Diag.log(context, "settings", "доступ ко всем файлам: открыл $what")
+                return
             }
+            Diag.log(context, "settings", "доступ ко всем файлам: $what НЕ открылся — ${r.exceptionOrNull()}")
         }
     }
 

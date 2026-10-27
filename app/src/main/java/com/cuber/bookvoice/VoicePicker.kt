@@ -38,6 +38,11 @@ class VoicePicker(
 
     enum class Target { MAIN, REPLY }
 
+    /** Уже спросили у движка список голосов и ждём ответ (24.10.2026).
+     *  Спрашиваем в стороне — см. [refresh]: на главном потоке этот запрос
+     *  вешал окно, и Android предлагал «закрыть или подождать». */
+    private var askingVoices = false
+
     /** Ключи настроек: у реплик свои голос, движок и язык. */
     private val keyEngine: String
         get() = if (target == Target.REPLY) MainActivity.KEY_REPLY_ENGINE else MainActivity.KEY_ENGINE
@@ -266,6 +271,18 @@ class VoicePicker(
         dictRowView?.text = withHintText(ctx.getString(R.string.dict_row), dictValue())
         val p = host.playerOrNull()
         val voices = p?.voices ?: emptyList()
+        // 24.10.2026: список голосов спрашиваем В СТОРОНЕ. Прежде его спрашивали
+        // прямо отсюда, на главном потоке, — и на медленном движке окно висело
+        // 5-7 секунд, а телефон предлагал «закрыть или подождать» (журнал
+        // зависаний 24.10: главный поток стоял в TextToSpeech.getVoices). Пока
+        // список не приехал, строки говорят «читаю список голосов…».
+        if (p != null && p.isReady && voices.isEmpty() && !askingVoices) {
+            askingVoices = true
+            p.refreshVoices {
+                askingVoices = false
+                refresh()
+            }
+        }
         // Движок: у реплик он свой и берётся из настроек реплик — живого плеера
         // у чужого движка может и не быть.
         val pkg = if (target == Target.REPLY) {
@@ -286,8 +303,14 @@ class VoicePicker(
             pickLang = VoicePick.pickLangFor(voices, pickLang, host.currentVoice())
         }
         val langText = if (voices.isEmpty()) {
-            // Плеера ещё нет (Настройки без книги) — показываем просто язык.
-            pickLang?.let { VoicePick.langLabel(it) } ?: ctx.getString(R.string.voice_lang_unset)
+            if (askingVoices) {
+                // Список в пути — честнее сказать об этом, чем показывать
+                // «язык не выбран» (см. refresh).
+                ctx.getString(R.string.voice_list_loading)
+            } else {
+                // Плеера ещё нет (Настройки без книги) — показываем просто язык.
+                pickLang?.let { VoicePick.langLabel(it) } ?: ctx.getString(R.string.voice_lang_unset)
+            }
         } else {
             pickLang?.let { VoicePick.langTitle(ctx, it, VoicePick.voicesOf(voices, it).size) }
                 ?: ctx.getString(R.string.no_voices)

@@ -398,12 +398,20 @@ internal object ReaderEngine {
         sp.volume = prefs.getFloat(MainActivity.KEY_VOLUME, 1f)
         // msg4402/msg5254: короткие паузы между предложениями (просьба тестера) —
         // галочки нет, склейка и обрезка работают всегда.
-        // #57: альтернативный способ озвучки — фразу целиком играет движок
-        // (проба, по умолчанию выкл). Наш конвейер заготовок при нём молчит.
-        sp.altDirect = prefs.getBoolean(MainActivity.KEY_ALT_VOICE, false)
+        // 24.10.2026: обычное чтение — голосом движка (как у @Voice). Прежняя
+        // галочка «Альтернативный способ чтения» стала строкой «Читать файлами
+        // (обходной способ)», поэтому прямой путь включается по её ВЫКЛЮЧЕННОМУ
+        // состоянию ([MainActivity.KEY_READ_FILES]). Наш конвейер заготовок при
+        // прямом пути молчит.
+        sp.altDirect = !prefs.getBoolean(MainActivity.KEY_READ_FILES, false)
         // msg5604: сколько тишины оставлять на стыке фраз — строка «Пауза между
         // фразами» в настройках (по умолчанию как было: 50 мс + 83 мс).
         sp.pauseKeepMs = prefs.getInt(MainActivity.KEY_PAUSE_KEEP, MainActivity.PAUSE_KEEP_DEFAULT)
+        // 24.10.2026: срок ожидания сетевого голоса из опытных настроек (0 — по
+        // нашей таблице). Строка за дверью, по образцу «Network timeout» у @Voice.
+        sp.netTimeout = prefs.getLong(MainActivity.KEY_NET_TIMEOUT, 0L)
+        // 24.10.2026: сколько раз повторять запрос к сетевому голосу (1…10).
+        sp.retries = prefs.getInt(MainActivity.KEY_NET_RETRIES, 1)
         // Чтение всегда непрерывное: кнопка «по одному предложению» убрана.
         continuous = true
         voiceName = prefs.getString(MainActivity.KEY_VOICE, null)
@@ -1048,6 +1056,10 @@ internal object ReaderEngine {
     fun whenVoicesReady(attempt: Int = 0, on: SpeechPlayer? = player, block: () -> Unit) {
         val p = on ?: return
         if ((!p.isReady || p.voices.isEmpty()) && attempt < 15) {
+            // 24.10.2026: список сам не приедет — просим его В СТОРОНЕ (см.
+            // SpeechPlayer.refreshVoices). На главном потоке этот вопрос к движку
+            // вешал окно выбора голоса: телефон показывал «закрыть или подождать».
+            if (attempt % 4 == 0) p.refreshVoices()
             main.postDelayed({ whenVoicesReady(attempt + 1, on, block) }, 200)
             return
         }
@@ -1415,11 +1427,20 @@ internal object ReaderEngine {
         fragmentPos = chapterIdx * 1_000_000L + sentenceIdx
         // Укороченная фраза — эта (см. [shortPhrasePos]).
         shortPhrasePos = if (firstPhraseShort) fragmentPos else -1L
-        player?.speak(frags.first(), fragmentPos, userAsked)
+        // 23.10.2026: остальные куски отдаём ВМЕСТЕ с головой — четвёртым
+        // параметром [SpeechPlayer.speak]. В файловом пути их заказывает
+        // [SpeechPlayer.prefetchRest] (вызов ниже), а в прямом пути они обязаны
+        // встать в очередь движка СРАЗУ за головой и до заказа следующих фраз:
+        // иначе хвост фразы оказывается позади следующей фразы, и когда чтение
+        // попросит его, читалка гасит очередь движка (`tts.stop()`) посреди уже
+        // начавшейся чужой речи — на слух «фраза обрывается и начинается заново».
+        player?.speak(frags.first(), fragmentPos, userAsked, pendingFragments)
         // 05.10.2026: остальные куски (реплики после слов автора) заказываем
         // сразу, а не когда первый кусок доиграет — иначе реплика синтезируется
         // поздно и встаёт в конец очереди (за уже заготовленными следующими
         // фразами), и прямая речь пропускается или звучит не на месте.
+        // 23.10.2026: в прямом пути это уже сделал [SpeechPlayer.speak], здесь
+        // вызов ничего не заказывает повторно (сверка по ключу единицы).
         if (pendingFragments.isNotEmpty()) {
             player?.prefetchRest(pendingFragments, fragmentPos)
         }
@@ -1551,6 +1572,12 @@ internal object ReaderEngine {
      *  останется как есть. Больше ничего трогать не нужно. */
     private fun spanAt(ch: Int, s: Int, first: Boolean = false): Int = when {
         first && firstPhraseShort -> 1
+        // 24.10.2026: в ГОЛОСОВОМ (обычном) чтении фраза — ОДНО предложение.
+        // Так книга движется по предложениям, и пауза/откат повторяют только
+        // текущее предложение, а не склейку из четырёх (решение Сержа: «Один
+        // повтор текущей фразы допустим»). Склеивание осталось только в файловом
+        // (обходном) пути, где паузы срезаем мы сами.
+        player?.directNow == true -> 1
         player?.readsSlowly == true -> 1
         else -> chunkSpan(ch, s)
     }
@@ -1962,7 +1989,12 @@ internal object ReaderEngine {
         chapterIdx = ch
         sentenceIdx = s
         fragmentPos = pos
-        spokenUnits = spanAt(ch, s).coerceAtLeast(1)
+        // 23.10.2026: длину той фразы считаем ТЕМ ЖЕ правилом, каким её читали:
+        // если это была укороченная первая фраза после перехода — одно предложение
+        // ([shortPhrasePos]), а не склейка. Иначе [advanceUnits] уезжал на 2-4
+        // предложения, и часть книги пропускалась. Разбор неверной длины фразы —
+        // docs/HISTORY.md, 07.10.2026 (журнал 00:35).
+        spokenUnits = spanAt(ch, s, first = pos == shortPhrasePos).coerceAtLeast(1)
         pendingFragments = emptyList()
         host?.onShowCurrent()
     }
@@ -2281,15 +2313,151 @@ internal object ReaderEngine {
      *  плеер считает такие фразы подряд (см. `SpeechPlayer.noteSilentPhrase`) и,
      *  если их подряд слишком много, зовёт нас с позицией, где звук кончился.
      *  Здесь мы возвращаем место чтения туда, останавливаемся и говорим. */
-    private fun onEngineSilent(pos: Long) {
+    /** Уже переключились на локальный голос из-за молчания (24.10.2026). Второй
+     *  раз не переключаемся: если и локальный молчит, дело не в сети — тогда
+     *  останавливаемся и говорим словами. Живёт до закрытия читалки. */
+    private var autoVoiceSwitched = false
+
+    /** Шаг лестницы «локальный голос того же движка» (24.10.2026).
+     *
+     *  Возвращает true, если переключились и чтение перезапущено: тогда
+     *  останавливаться не надо. Молчим, только если менять не на что: голос уже
+     *  локальный (значит дело не в сети), локальных голосов у движка нет или
+     *  язык не совпадает — чужой язык читать нельзя.
+     *
+     *  ПАМЯТЬ: переключение запоминаем до закрытия читалки ([autoVoiceSwitched]).
+     *  Выбор человека не переписываем — в настройках остаётся его голос, и после
+     *  перезапуска приложения он снова главный (решение Сержа 24.10.2026).
+     *
+     *  СЛОВАМИ, А НЕ МОЛЧА: человек услышит не тот голос, что выбирал, и должен
+     *  знать почему. */
+    /** Объявили ли уже про «только по Wi-Fi» (24.10.2026). Один раз на читалку:
+     *  иначе фраза звучала бы при каждом переходе. */
+    private var wifiSwitchAnnounced = false
+
+    /** 24.10.2026: «сетевые голоса только по Wi-Fi» (как у @Voice). Если правило
+     *  включено, а сети Wi-Fi нет, сетевой голос не ставим: выбираем ЛОКАЛЬНЫЙ
+     *  голос того же языка и говорим об этом словами. Локального нет — оставляем
+     *  как выбрано и пишем в журнал: молча ломать выбор человека нельзя.
+     *  Зовётся в тех местах, где голос применяется к чтению. */
+    private fun voiceForNow(v: String?): String? {
+        if (v == null) return null
+        if (!prefs.getBoolean(MainActivity.KEY_NET_WIFI_ONLY, false)) return v
+        val p = player ?: return v
+        val list = runCatching { p.voices }.getOrNull().orEmpty()
+        if (list.isEmpty()) return v
+        val target = list.firstOrNull { it.name == v } ?: return v
+        val net = runCatching { target.isNetworkConnectionRequired }.getOrDefault(false)
+        if (!net) return v
+        if (NetNow.onWifi(ctx)) return v
+        val lang = runCatching { target.locale?.language }.getOrNull()
+        val local = list.firstOrNull { cand ->
+            runCatching { !cand.isNetworkConnectionRequired }.getOrDefault(false) &&
+                (lang == null || runCatching { cand.locale?.language == lang }.getOrDefault(true))
+        }
+        if (local == null) {
+            Diag.log(
+                ctx, "voice",
+                "только Wi-Fi: сети нет, а локального голоса на замену не нашлось — " +
+                    "оставляю сетевой «$v»"
+            )
+            return v
+        }
+        Diag.log(
+            ctx, "voice",
+            "только Wi-Fi: сети нет — ставлю локальный голос «${local.name}» вместо «$v»"
+        )
+        if (!wifiSwitchAnnounced) {
+            wifiSwitchAnnounced = true
+            host?.onAnnounce("Сетевые голоса только по Wi-Fi. Читаю локальным голосом ${local.name}.")
+        }
+        return local.name
+    }
+
+    /** Шаг лестницы «голос другого движка» (24.10.2026, решение Сержа).
+     *
+     *  Возвращает true, если попытку ВЗЯЛИ и она идёт своим ходом: тогда чтение
+     *  не останавливаем, а ждём ответа ([LocalVoiceFinder] поднимает чужие движки
+     *  по очереди). Не нашли — останавливаемся и говорим, как раньше.
+     *
+     *  ПАМЯТЬ: попытку делаем один раз до закрытия читалки ([autoEngineSwitched]) —
+     *  иначе на живом молчащем движке мы бы поднимали чужие по кругу.
+     *  ВЫБОР ЧЕЛОВЕКА НЕ ПЕРЕПИСЫВАЕМ: в настройках остаётся его движок и голос. */
+    private var autoEngineSwitched = false
+
+    private fun switchToOtherEngineAfterSilence(): Boolean {
+        if (autoEngineSwitched) return false
+        val p = player ?: return false
+        autoEngineSwitched = true
+        val list = runCatching { p.voices }.getOrNull().orEmpty()
+        val cur = list.firstOrNull { it.name == voiceName }
+        val lang = runCatching { cur?.locale?.language }.getOrNull()
+        val from = p.enginePackage
+        Diag.log(
+            ctx, "voice",
+            "движок молчит: ищу локальный голос того же языка в другом движке " +
+                "(нынешний $from, язык ${lang ?: "неизвестен"})"
+        )
+        LocalVoiceFinder.find(ctx, lang, from) { found ->
+            if (found == null) {
+                Diag.log(ctx, "voice", "другой движок не подошёл — останавливаю чтение")
+                stopAfterSilentEngine()
+                return@find
+            }
+            host?.onAnnounce(
+                "Этот движок не отвечает. Пробую другой движок, голос ${found.voice}."
+            )
+            player?.setEngine(found.engine) { ok ->
+                if (!ok) {
+                    Diag.log(ctx, "voice", "другой движок ${found.engine} не поднялся — встаю")
+                    stopAfterSilentEngine()
+                    return@setEngine
+                }
+                voiceName = found.voice
+                player?.selectVoice(found.voice)
+                restartAfterSwitch(withPreview = false)
+            }
+        }
+        return true
+    }
+
+    private fun switchToLocalVoiceAfterSilence(): Boolean {
+        if (autoVoiceSwitched) return false
+        val p = player ?: return false
+        val list = runCatching { p.voices }.getOrNull().orEmpty()
+        if (list.isEmpty()) return false
+        val cur = list.firstOrNull { it.name == voiceName }
+        val curNet = runCatching { cur?.isNetworkConnectionRequired == true }.getOrDefault(false)
+        // Голос локальный (или неизвестный) — сеть тут ни при чём, менять нечего.
+        if (cur != null && !curNet) return false
+        val lang = cur?.locale?.language
+        val local = list.firstOrNull { v ->
+            v.name != voiceName &&
+                runCatching { !v.isNetworkConnectionRequired }.getOrDefault(false) &&
+                (lang == null || runCatching { v.locale?.language == lang }.getOrDefault(true))
+        } ?: return false
+        autoVoiceSwitched = true
+        Diag.log(
+            ctx, "voice",
+            "движок замолчал: перехожу на локальный голос «${local.name}» " +
+                "вместо «$voiceName» (сетевой не отвечает)"
+        )
+        voiceName = local.name
+        p.selectVoice(local.name)
+        host?.onAnnounce("Сетевой голос не отвечает. Читаю локальным голосом ${local.name}.")
+        // Проба тут не нужна: чтение идёт, [restartAfterSwitch] сам перечитает
+        // текущее предложение новым голосом (и выбрасывает звук прежнего).
+        restartAfterSwitch(withPreview = false)
+        return true
+    }
+
+    /** Остановка после того, как лестница отказов кончилась (24.10.2026).
+     *  Прежний код onEngineSilent целиком: место возвращаем, чтение гасим и
+     *  говорим словами. Зовётся и напрямую, и из шага «другой движок», когда
+     *  замены не нашлось. */
+    private fun stopAfterSilentEngine() {
         val bk = book
         val wasChapter = chapterIdx
-        if (bk != null && pos > 0L) {
-            val ch = (pos / 1_000_000L).toInt().coerceIn(0, bk.chapters.lastIndex)
-            val cur = bk.chapters[ch].sentences
-            chapterIdx = ch
-            sentenceIdx = (pos % 1_000_000L).toInt().coerceIn(0, cur.lastIndex.coerceAtLeast(0))
-        }
         Diag.log(
             ctx, "activity",
             "движок не отвечает: чтение остановлено на главе ${chapterIdx + 1}, " +
@@ -2304,12 +2472,27 @@ internal object ReaderEngine {
         savePosition()
         pushPlayState()
         if (bk != null && chapterIdx != wasChapter) host?.onChapterLoaded() else host?.onShowCurrent()
-        // СЛОВАМИ, А НЕ МОЛЧА (16.10.2026, сборка 264x). У Сержа движок не работал
-        // в системе вовсе: и наша читалка, и другая не издавали ни звука. Теперь
-        // здесь говорятся слова о синтезаторе ([TtsHealth.stopText]): если причина
-        // известна (движка нет, не выбран, нет голосов) — она, иначе «не дал ни
-        // звука, похоже, не работает, проверьте в настройках».
+        // СЛОВАМИ, А НЕ МОЛЧА (16.10.2026, сборка 264x): причина по [TtsHealth].
         host?.onAnnounce(TtsHealth.stopText(ctx))
+    }
+
+    private fun onEngineSilent(pos: Long) {
+        val bk = book
+        val wasChapter = chapterIdx
+        if (bk != null && pos > 0L) {
+            val ch = (pos / 1_000_000L).toInt().coerceIn(0, bk.chapters.lastIndex)
+            val cur = bk.chapters[ch].sentences
+            chapterIdx = ch
+            sentenceIdx = (pos % 1_000_000L).toInt().coerceIn(0, cur.lastIndex.coerceAtLeast(0))
+        }
+        // 24.10.2026: ЛЕСТНИЦА ОТКАЗОВ (решение Сержа: «повтор → локальный голос
+        // того же движка → голос другого движка», каждый шаг объявляем словами).
+        // Первый шаг уже сделал плеер (перезапуск и перечитывание фразы), теперь
+        // пробуем локальный голос: сетевой мог просто не получить сеть, а
+        // локальный в том же движке молчит разве что вместе с движком.
+        if (switchToLocalVoiceAfterSilence()) return
+        if (switchToOtherEngineAfterSilence()) return
+        stopAfterSilentEngine()
     }
 
     /** Сообщить UI и системе новое состояние play/pause. Зовётся на каждой фразе
@@ -2338,13 +2521,42 @@ internal object ReaderEngine {
         MediaSessionService.setCardLine(line)
     }
 
+    /** Сколько прочитано, в процентах, по месту среди предложений книги
+     *  (24.10.2026). Книга тут целиком, поэтому считаем сами: у карточки в шторке
+     *  нет ни полоски прогресса, ни длительности звука в голосовом чтении.
+     *  -1 — считать не по чему (книги нет или в ней одно предложение). */
+    private fun readPercentNow(): Int {
+        val bk = book ?: return -1
+        var before = 0
+        var total = 0
+        for ((i, ch) in bk.chapters.withIndex()) {
+            val n = ch.sentences.size
+            if (i < chapterIdx) before += n
+            total += n
+        }
+        if (total <= 1) return -1
+        val g = (before + sentenceIdx).coerceIn(0, total - 1)
+        return g * 100 / (total - 1)
+    }
+
     private fun cardLineText(): String? {
         val bk = book
         return if (bk == null) {
             null
         } else {
             val size = bk.chapters.size
-            val base = if (size > 0) "Глава ${chapterIdx + 1} из $size" else ""
+            // 24.10.2026: в голосовом чтении у звука нет длины, и полоска прогресса
+            // в карточке шторки пустая. Поэтому место называем СЛОВАМИ и числом —
+            // «Глава N из M · 42%» (решение Сержа: «карточка показывает главу и
+            // процент»). Процент считаем по предложениям книги — той же линейкой,
+            // что полка и слайдер.
+            val pct = readPercentNow()
+            val base = if (size > 0) {
+                val head = "Глава ${chapterIdx + 1} из $size"
+                if (pct >= 0) "$head · $pct%" else head
+            } else {
+                ""
+            }
             val title = bk.chapters.getOrNull(chapterIdx)?.title?.trim().orEmpty()
             // Длинный заголовок в шторке не поместится и на слух тянется долго.
             val short = if (title.length > CARD_TITLE_LIMIT) {
@@ -2782,12 +2994,23 @@ internal object ReaderEngine {
         lastRecordWriteAt = System.currentTimeMillis()
         val u = currentUri ?: return
         val ex = BookStore.byUri(ctx, u) ?: return
+        val pct = readPercentAt(p)
         BookStore.upsert(ctx, ex.copy(
             chapter = p.chapter,
             sentence = p.sentence,
-            readPct = readPercentAt(p),
+            readPct = pct,
             lastOpenedAt = System.currentTimeMillis(),
-            status = if (ex.status == BookRecord.STATUS_NEW) BookRecord.STATUS_READING else ex.status,
+            // 24.10.2026: ЗАПИСЬ ИДЁТ ЗА МЕСТОМ, А НЕ ЗА ПРОШЛЫМ СТАТУСОМ.
+            // Прежде «дочитанная» книга навсегда оставалась дочитанной: человек
+            // начинал её заново, а полка продолжала писать «100% прочитано» и
+            // ставила её в конец вкладки «Непрочитанные» (жалоба Сержа 24.10:
+            // «в библиотеке 100%, а внутри книжки ноль»). Теперь — как только
+            // место ушло от конца книги, статус снова «читается».
+            status = when {
+                ex.status == BookRecord.STATUS_NEW -> BookRecord.STATUS_READING
+                ex.status == BookRecord.STATUS_FINISHED && pct < 99 -> BookRecord.STATUS_READING
+                else -> ex.status
+            },
         ))
     }
 
@@ -2866,8 +3089,12 @@ internal object ReaderEngine {
         val now = System.currentTimeMillis()
         val existing = BookStore.byUri(ctx, u)
         prefs.edit().putString(MainActivity.KEY_URI, u).apply()
+        // 24.10.2026: статус «дочитана» держится только на конце книги. Книгу,
+        // которую открыли заново с начала, полка снова считает читаемой — иначе
+        // она оставалась со 100% и уезжала в конец вкладки «Непрочитанные».
         val status = when (existing?.status) {
-            BookRecord.STATUS_FINISHED -> BookRecord.STATUS_FINISHED
+            BookRecord.STATUS_FINISHED ->
+                if (readPercent() < 99) BookRecord.STATUS_READING else BookRecord.STATUS_FINISHED
             else -> BookRecord.STATUS_READING
         }
         BookStore.upsert(ctx, BookRecord(
@@ -2940,8 +3167,8 @@ internal object ReaderEngine {
             p.setEngine(gEngine) { ok ->
                 main.post {
                     if (ok && gVoice != null) {
-                        p.selectVoice(gVoice)
-                        voiceName = gVoice
+                        p.selectVoice(voiceForNow(gVoice) ?: gVoice)
+                        voiceName = voiceForNow(gVoice) ?: gVoice
                     }
                     host?.onSpeedUiRefresh()
                     prewarmCurrent() // движок поднялся — готовим первую фразу
@@ -2949,8 +3176,8 @@ internal object ReaderEngine {
             }
         } else {
             if (gVoice != null && gVoice != voiceName) {
-                p.selectVoice(gVoice)
-                voiceName = gVoice
+                p.selectVoice(voiceForNow(gVoice) ?: gVoice)
+                voiceName = voiceForNow(gVoice) ?: gVoice
             }
             host?.onSpeedUiRefresh()
             prewarmCurrent() // голос применён — можно готовить первую фразу
@@ -2989,8 +3216,8 @@ internal object ReaderEngine {
                 main.post {
                     if (ok) {
                         if (vce != null) {
-                            p.selectVoice(vce)
-                            voiceName = vce
+                            p.selectVoice(voiceForNow(vce) ?: vce)
+                            voiceName = voiceForNow(vce) ?: vce
                         }
                         // Движок перезапустился — список голосов поедет заново
                         // (пустой). Проходим тем же циклом, а не проверяем сразу.
@@ -3007,8 +3234,8 @@ internal object ReaderEngine {
             }
         } else {
             if (vce != null && vce != voiceName) {
-                p.selectVoice(vce)
-                voiceName = vce
+                p.selectVoice(voiceForNow(vce) ?: vce)
+                voiceName = voiceForNow(vce) ?: vce
             }
             announceIfBookVoiceMissing(vce)
             host?.onSpeedUiRefresh()

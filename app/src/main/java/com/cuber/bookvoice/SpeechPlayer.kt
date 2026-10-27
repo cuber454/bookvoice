@@ -12,6 +12,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import java.io.File
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Плеер озвучки, в котором звук играет САМО приложение, а не движок синтеза.
@@ -116,6 +118,13 @@ class SpeechPlayer(context: Context) {
      *  которые играют звук сами, а этот — про отчёт без звука вовсе. */
     private var ackFastLogged = 0
 
+    /** Сколько раз писали в журнал про проверку «сломанный движок» (см.
+     *  [queueDirect]). Ограничено: иначе журнал распухнет — фраз в книге много. */
+    private var brokenEngineLogged = 0
+
+    /** То же для проверки «движок отказывается» (см. [queueDirect]). */
+    private var brokenRefusedLogged = 0
+
     private var tts: TextToSpeech? = null
     private var ready = false
     private var engineReadyCallback: ((Boolean) -> Unit)? = null
@@ -206,11 +215,10 @@ class SpeechPlayer(context: Context) {
             // 30.09.2026: включился прямой режим — тихий поток встаёт вместе с ним.
             // В этом режиме звук играет движок, и без тихого потока система не
             // видит нас играющими: кнопки на наушниках уходят чужому плееру.
-            // Раньше это делала галочка альтернативного способа в настройках, но
-            // способ включается и не только ею (голосом, из читалки) — поэтому
-            // следим здесь, в единственном месте, где режим и меняется.
+            // 24.10.2026: сам поток НЕ включаем (просьба Сержа: «пускай по
+            // умолчанию будет выключена») — только пишем причину в журнал.
             if (value && !was) {
-                KeepAwake.enableSilenceAuto(appContext, "выбран альтернативный способ озвучки")
+                KeepAwake.noteDirectNeedsSilence(appContext, "выбран альтернативный способ озвучки")
             }
         }
 
@@ -262,13 +270,18 @@ class SpeechPlayer(context: Context) {
      *  всей автоматики. */
     private var forceMode: Int = ExpertPrefs.MODE_AUTO
 
-    /** Читать движку напрямую: так выбрано человеком (галочка либо опытная
-     *  настройка), либо сетевой движок не отдаёт файлы (см. [netDirect]). */
+    /** Читать движку напрямую: так у нас ТЕПЕРЬ ПО УМОЛЧАНИЮ (24.10.2026 — обычный
+     *  способ, как у @Voice), либо сетевой движок не отдаёт файлы (см. [netDirect]). */
     private val directMode: Boolean get() = when (forceMode) {
         ExpertPrefs.MODE_DIRECT -> true
         ExpertPrefs.MODE_FILE -> false
         else -> altDirect || netDirect
     }
+
+    /** Читаем ли СЕЙЧАС голосом движка (прямой путь). Нужно читалке: с 24.10.2026
+     *  в обычном режиме фраза = ОДНО предложение, чтобы пауза и откат повторяли
+     *  только его (решение Сержа: «пусть повтор текущей фразы» станет коротким). */
+    val directNow: Boolean get() = directMode
 
     /** Почему читаем напрямую — словами. Ставится там, где решается [netDirect]
      *  ([applySpeedAndVoice], [markNetDirect]).
@@ -279,13 +292,13 @@ class SpeechPlayer(context: Context) {
      *  тексту человек (и журнал) видит настоящую причину. */
     private var directWhyText: String? = null
 
-    /** Каким способом читаю СЕЙЧАС, словами; null — обычным (файловым).
+    /** Каким способом читаю СЕЙЧАС, словами; null — файловым (обходным).
      *  Читает [ReadingMode] — и строку настроек, и ответ вслух. */
     val directWhy: String?
         get() = when {
             forceMode == ExpertPrefs.MODE_DIRECT -> "так выбрано в опытных настройках: только движком"
             forceMode == ExpertPrefs.MODE_FILE -> null
-            altDirect -> "так выбрано галочкой «Альтернативный способ чтения»"
+            altDirect -> "обычный способ: голосом движка, как у @Voice"
             netDirect -> directWhyText ?: "движок не отдаёт файлы"
             else -> null
         }
@@ -561,8 +574,77 @@ class SpeechPlayer(context: Context) {
 
     val isReady: Boolean get() = ready
 
-    val voices: List<Voice>
-        get() = tts?.voices?.toList() ?: emptyList()
+    // ——— СПИСОК ГОЛОСОВ СПРАШИВАЕМ В СТОРОНЕ (24.10.2026, сборка 260) ———
+    //
+    // Жалоба Сержа: «переключил синтезатор — приложение предлагает закрыть или
+    // подождать». Телефон записал три зависания за вечер, и во всех трёх главный
+    // поток стоял в `TextToSpeech.getVoices(...)`: это запрос к САМОМУ ДВИЖКУ по
+    // binder'у, и медленный движок отвечает секундами. Пока он думает, мы не
+    // рисуем экран и не принимаем касания — Android и показывает «закрыть или
+    // подождать». Заодно из-за этого рвалась фраза: пока поток стоял, сторож
+    // считал речь оборванной и заказывал её заново (её и слышно дважды).
+    //
+    // ПРАВИЛО: `tts.voices` с главного потока не спрашиваем НИКОГДА. Спрашиваем
+    // [refreshVoices] отдельным потоком, а здесь держим последний полученный
+    // список. [voices] теперь читается мгновенно и безопасно откуда угодно.
+
+    /** Последний полученный от движка список голосов (см. [refreshVoices]). */
+    @Volatile private var voiceCache: List<Voice> = emptyList()
+
+    /** Один поток на все вопросы к движку о голосах: заказы к движку не должны
+     *  копиться и мешать друг другу. */
+    private val voiceIo: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "bookvoice-voices").apply { isDaemon = true }
+    }
+
+    /** Дольше этого движок список голосов думать не должен — попадает в журнал
+     *  (см. [refreshVoices]). */
+    private val voicesSlowMs = 700L
+
+    /** Спросить у движка список голосов. Ответ кладём в [voiceCache], [then]
+     *  зовём на главном потоке — когда ответ пришёл или движок молчит. */
+    fun refreshVoices(then: (() -> Unit)? = null) {
+        val t = tts
+        if (t == null || !ready) {
+            then?.let { cb -> main.post { cb() } }
+            return
+        }
+        voiceIo.execute {
+            val from = SystemClock.elapsedRealtime()
+            val list = runCatching { t.voices?.toList() }.getOrNull()
+            // Пустой ответ не затирает прежний список: движок мог ответить «не
+            // готово», а голоса, которые он называл раньше, никуда не делись.
+            if (!list.isNullOrEmpty() || voiceCache.isEmpty()) voiceCache = list.orEmpty()
+            // Строка для будущих разборов: сколько движок думал над списком. Если
+            // однажды снова начнут приходить «закрыть или подождать», по ней сразу
+            // видно, тот ли это запрос (см. шапку [voiceCache]).
+            val took = SystemClock.elapsedRealtime() - from
+            if (took > voicesSlowMs) {
+                Diag.log(
+                    appContext, "tts",
+                    "движок отдавал список голосов $took мс — в стороне это пустяк, " +
+                        "а на главном потоке было бы «закрыть или подождать»",
+                )
+            }
+            main.post { then?.invoke() }
+        }
+    }
+
+    val voices: List<Voice> get() = voiceCache
+
+    /** Голоса ДВИЖКА РЕПЛИК — тем же правилом, что и [voiceCache]: спрашиваем в
+     *  стороне ([refreshReplyVoices]), читаем мгновенно. */
+    @Volatile private var replyVoiceCache: List<Voice> = emptyList()
+
+    /** Спросить список голосов у движка реплик (в стороне от главного потока). */
+    private fun refreshReplyVoices() {
+        val t = replyTts ?: return
+        if (!replyReady) return
+        voiceIo.execute {
+            val list = runCatching { t.voices?.toList() }.getOrNull()
+            if (!list.isNullOrEmpty() || replyVoiceCache.isEmpty()) replyVoiceCache = list.orEmpty()
+        }
+    }
 
     /** Пакет системного движка по умолчанию (может быть null до инициализации). */
     val defaultEngine: String?
@@ -684,10 +766,49 @@ class SpeechPlayer(context: Context) {
      *  параллельно: у сетевых голосов он это умеет.
      *
      *  Порядок набора = порядок заказа = порядок звучания, поэтому набор
-     *  упорядоченный. 05.10.2026: значение — позиция фразы в книге (текст →
-     *  pos): по ней считаем, сколько ФРАЗ (а не кусков) уже в работе, — у фразы
-     *  с прямой речью кусков два и больше, и они занимают одну позицию. */
-    private val prefetchInFlight = LinkedHashMap<String, Long>()
+     *  упорядоченный. 05.10.2026: считаем ФРАЗЫ, а не куски, — у фразы с прямой
+     *  речью кусков два и больше, и они занимают одну позицию.
+     *
+     *  23.10.2026 (рефакторинг «текст — не опознание»). Отдельного набора здесь
+     *  больше НЕТ: единственный источник правды о заявках — [pending]. Раньше тут
+     *  лежала карта «ТЕКСТ → позиция», и в книге с одинаковыми репликами («— Да.»)
+     *  она путала две разные фразы: вторую не заказывали, а ответ движка
+     *  приписывали не той заявке. Теперь «в работе» — это заявка с ключом единицы
+     *  речи ([Pending.key]) и признаком «заказана впрок» ([Pending.prefetch]),
+     *  а не текст. */
+    private fun fileInFlight(key: Long): Pending? =
+        if (key < 0) {
+            null
+        } else {
+            pending.values.firstOrNull {
+                it.kind == Pending.Kind.FILE && !it.cancelled && it.key == key
+            }
+        }
+
+    /** Заявка на файл для единицы БЕЗ места в книге (служебная фраза, страховка):
+     *  ключа у неё нет (-1), и различить её можно только по тексту. Это
+     *  единственное место, где текст остаётся опознанием, — и только потому, что
+     *  у такой единицы больше ничего нет. Фразы книги сюда не попадают. */
+    private fun fileInFlightText(text: String): Pending? =
+        pending.values.firstOrNull {
+            it.kind == Pending.Kind.FILE && !it.cancelled && it.pos < 0 && it.text == text
+        }
+
+    /** Какая-либо заявка на файл по этой единице уже в работе. */
+    private fun fileInFlightAny(pos: Long, part: Int, text: String): Pending? {
+        val key = Units.key(pos, part)
+        return fileInFlight(key) ?: if (key < 0) fileInFlightText(text) else null
+    }
+
+    /** Сколько заявок на файл сейчас в работе (для журнала). */
+    private fun fileInFlightCount(): Int =
+        pending.values.count { it.kind == Pending.Kind.FILE && !it.cancelled }
+
+    /** Ключ той единицы речи, которую сейчас ЖДЁТ чтение; -1 — никто не ждёт.
+     *  [awaitingPart] = -1 означает «любой кусок этой позиции» — тогда считаем
+     *  нулевой (нужно только для сверок вроде «звучащая ли это единица»). */
+    private fun awaitingKey(): Long =
+        if (awaitingPlayText == null) -1L else Units.key(awaitingPos, awaitingPart.coerceAtLeast(0))
 
     /** Сколько заявок держим у движка одновременно. У сетевого — все места
      *  очереди (в этом весь смысл: файлы готовятся, пока звучит текущая фраза),
@@ -823,6 +944,12 @@ class SpeechPlayer(context: Context) {
      *  заказ повторим сами (27.09.2026, см. [retryDirectLater]). */
     private var directWaitReply = false
 
+    /** Почему движок НЕ взял фразу в прямой очереди (24.10.2026, см.
+     *  [queueDirect] и [speakDirectQueued]): «не готов», «отказался (код 3)» и
+     *  т. п. Нужна для журнала: без неё жалоба «книжка убежала» разбиралась
+     *  догадками — в журнале не было ни одной строки про отказ. */
+    private var directRefusedReason: String? = null
+
     /** Заявка фразы, которую чтение назвало ПОСЛЕДНЕЙ, и текст фразы, которая
      *  ЗВУЧИТ прямо сейчас (29.09.2026).
      *
@@ -835,6 +962,30 @@ class SpeechPlayer(context: Context) {
      *  командой «стоп» — на слух это и есть «бред с речью». */
     private var directAskedId: Long? = null
     private var directSpeakingText: String? = null
+
+    /** КАКАЯ ЕДИНИЦА РЕЧИ звучит прямо сейчас ([Units.key]): место и кусок.
+     *  23.10.2026, рефакторинг прямого пути. До него прямой путь опознавал фразы
+     *  по ТЕКСТУ: короткие реплики в книгах повторяются дословно («— Да.»,
+     *  «— Нет.»), и по тексту нельзя понять ни «это та же фраза», ни «это уже
+     *  другая». Теперь и сверки, и отчёт «доиграла» идут по ключу, как в файловом
+     *  пути. -1 — фраза без места (служебная, страховка): тогда опознание по тексту,
+     *  другого не остаётся. */
+    private var directSpeakingPos = -1L
+    private var directSpeakingPart = 0
+
+    /** Ключ звучащей единицы; -1 — места нет (см. [directSpeakingPos]). */
+    private val directSpeakingKey: Long get() = Units.key(directSpeakingPos, directSpeakingPart)
+
+    /** Куски ТЕКУЩЕЙ фразы, которые чтение попросило прочитать после головы
+     *  (слова автора, хвост реплики, «хвост» после укороченной фразы).
+     *
+     *  Зачем помнить. Прямой путь отдаёт движку фразу ЦЕЛИКОМ — сначала голову,
+     *  потом эти куски, — и только потом заказывает следующие фразы. Без этого
+     *  хвост попадал в очередь ПОСЛЕ следующей фразы, и чтение, попросив его,
+     *  гасило очередь движка (`tts.stop()`) посреди чужой речи: на слух — фраза
+     *  обрывается и начинается заново. Здесь же эти куски переживают смену
+     *  скорости в прямом чтении (см. [restartDirectForRate]). */
+    private var currentRest: List<String> = emptyList()
 
     /** Заявка, которую [queueDirect] отдала движку последней: по ней чтение и
      *  [directAskedId] узнают, какая фраза считается «текущей» у движка. */
@@ -949,7 +1100,7 @@ class SpeechPlayer(context: Context) {
 
     /** Сроки ожидания одного класса движка. Поля названы по вопросам, на
      *  которые отвечают, а не по прежним константам. */
-    private class Timing(
+    private data class Timing(
         /** Окно прогрева нового голоса: движок поднимает голос, не трогаем. */
         val warmupMs: Long,
         /** Окно терпения на холодный старт: прыжок, начало чтения, смена голоса. */
@@ -1046,8 +1197,54 @@ class SpeechPlayer(context: Context) {
         silentStopAt = 4,
     )
 
-    /** Сроки по нынешнему движку с нынешним голосом. */
-    private val timing: Timing get() = if (netSynth) SLOW_TIMING else LOCAL_TIMING
+    /** 24.10.2026: срок ожидания СЕТЕВОГО голоса, выставленный человеком
+     *  (строка за дверью, как «Network timeout (sec, 0: default)» у @Voice).
+     *  0 — таблицу не трогаем, живём по [SLOW_TIMING]. */
+    private var netTimeoutMs: Long = 0L
+
+    /** 24.10.2026: сколько раз повторять запрос к сетевому голосу, прежде чем
+     *  считать, что он не отвечает (у @Voice «Retry count, if error downloading»
+     *  1…10). 1 — как было: одна попытка и перезапуск движка. */
+    private var netRetries: Int = 1
+
+    /** Число повторов запроса из настроек (1…10). */
+    var retries: Int
+        get() = netRetries
+        set(value) {
+            val v = value.coerceIn(1, 10)
+            if (v == netRetries) return
+            netRetries = v
+            Diag.log(appContext, "voice", "повторов запроса к сетевому голосу: $v")
+        }
+
+    /** Сколько повторов уже израсходовано в этой череде молчащих фраз. */
+    private var silentRetries = 0
+
+    /** Срок ожидания сетевого голоса из настроек; меняется на ходу. */
+    var netTimeout: Long
+        get() = netTimeoutMs
+        set(value) {
+            val v = value.coerceIn(0L, NET_TIMEOUT_MAX_MS)
+            if (v == netTimeoutMs) return
+            netTimeoutMs = v
+            Diag.log(
+                appContext, "voice",
+                if (v == 0L) "срок сетевого голоса: по таблице (${SLOW_TIMING.coldStartMs} мс)"
+                else "срок сетевого голоса из настроек: $v мс"
+            )
+        }
+
+    /** Сроки по нынешнему движку с нынешним голосом. 24.10.2026: у сетевого
+     *  голоса окно прогрева и холодный старт можно задать настройкой — иначе
+     *  «долгие паузы» на медленной сети не подкрутить (как у @Voice:
+     *  «Network timeout (sec, 0: default)»). */
+    private val timing: Timing
+        get() {
+            if (!netSynth) return LOCAL_TIMING
+            if (netTimeoutMs <= 0L) return SLOW_TIMING
+            val ms = netTimeoutMs
+            return SLOW_TIMING.copy(warmupMs = ms, coldStartMs = ms)
+        }
 
     /** Сколько раз подряд движок не отдал фразу даже после переспроса и
      *  перезапусков. На втором таком разе помечаем его медленным — с этого
@@ -1134,9 +1331,9 @@ class SpeechPlayer(context: Context) {
         if (netDirect) return
         netDirect = true
         directWhyText = "движок не отдал файл ($reason)"
-        // 30.09.2026: переход на прямую речь — тихий поток включаем сами (см.
-        // [altDirect]): без него кнопки на наушниках уходят чужому плееру.
-        KeepAwake.enableSilenceAuto(appContext, "движок файлов не отдаёт — читаю его голосом")
+        // 24.10.2026: тихий поток сам не поднимаем (просьба Сержа), только
+        // отмечаем причину в журнале — см. [KeepAwake.noteDirectNeedsSilence].
+        KeepAwake.noteDirectNeedsSilence(appContext, "движок файлов не отдаёт — читаю его голосом")
         Diag.log(
             appContext, "tts",
             "движок файлов не отдаёт ($reason) — читаю его голосом напрямую, " +
@@ -1152,7 +1349,6 @@ class SpeechPlayer(context: Context) {
      *  будет занят ими, пока мы ждём звука, — в журнале 02:30 из-за этого
      *  замолчала даже прямая речь (сторож насчитал 8 с на фразу в три секунды). */
     private fun dropFilePipeline(reason: String) {
-        prefetchInFlight.clear()
         pending.entries.removeAll { (_, p) ->
             if (p.kind == Pending.Kind.FILE) {
                 p.cancelled = true
@@ -1244,7 +1440,7 @@ class SpeechPlayer(context: Context) {
     private fun switchPipeline(wasDirect: Boolean) {
         if (directMode && !wasDirect) {
             dropFilePipeline("переход на прямой способ чтения")
-            KeepAwake.enableSilenceAuto(appContext, "выбран прямой способ чтения")
+            KeepAwake.noteDirectNeedsSilence(appContext, "выбран прямой способ чтения")
         } else if (!directMode && wasDirect) {
             flushDirectQueue("переход на обычный способ чтения")
         }
@@ -1287,12 +1483,18 @@ class SpeechPlayer(context: Context) {
     /** Текст, который надо переспросить, когда движок поднимется после перезапуска. */
     private var retryAfterRestart: String? = null
     private var retryAfterRestartPos: Long = -1L
+    private var retryAfterRestartPart = 0
 
     /** Фраза, которую надо перечитать ГОЛОСОМ движка, когда он поднимется после
      *  пересоздания соединения из-за смены скорости (см. [restartDirectForRate]).
      *  Отдельно от [retryAfterRestart]: тот перечитывает файлом, а тут движок
      *  файлов не отдаёт вовсе. */
     private var retryDirectAfterRestart: String? = null
+
+    /** Куски фразы, которую надо перечитать после пересоздания соединения
+     *  (см. [restartDirectForRate]): без них хвост фразы снова встал бы в очередь
+     *  после следующих фраз и стоил бы `tts.stop()` посреди живой речи. */
+    private var retryDirectAfterRestartRest: List<String> = emptyList()
 
     /** Сколько раз движок уже терял заявку на КОНКРЕТНЫЙ текст (msg4103): первый
      *  обрыв лечим повторной заявкой без перезапуска движка, второй — следующей
@@ -1339,6 +1541,15 @@ class SpeechPlayer(context: Context) {
         enum class Kind { FILE, DIRECT }
         enum class Role { MAIN, REPLY }
         var cancelled = false
+
+        /** Заявка заказана ВПРОК ([requestPrefetch], [prefetchRest], [prewarm]),
+         *  а не по просьбе чтения. По этому признаку [synthFinished] решает, копить
+         *  ли файл в [readyQueue] или считать синтез осиротевшим. Раньше это
+         *  выяснялось по тексту в отдельном наборе — и одинаковые фразы путались. */
+        var prefetch = false
+
+        /** Ключ единицы речи (см. [Units.key]) — опознание заявки. */
+        val key: Long get() = Units.key(pos, part)
     }
 
     /** Поколение запусков движка. Ответ об инициализации приходит от КОНКРЕТНОГО
@@ -1381,7 +1592,9 @@ class SpeechPlayer(context: Context) {
             "движок ${enginePackage ?: "системный"}: init status=$status, готов=$ok"
         )
         if (ok) {
-            logVoiceLanguages()
+            // 24.10.2026: строку про голоса и языки печатаем из ОТВЕТА, который
+            // придёт в стороне (см. [refreshVoices]) — прежде [logVoiceLanguages]
+            // сам спрашивал движок и вешал главный поток.
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 // msg1818: засечка фактического старта произнесения движком —
                 // для сопоставления с фразой TalkBack «управление мультимедиа».
@@ -1468,7 +1681,18 @@ class SpeechPlayer(context: Context) {
             // 0.4.25: setOnVoicesChangedListener не резолвится), поэтому
             // спрашиваем сами несколько раз.
             applySpeedAndVoice()
-            if (tts?.voices.isNullOrEmpty()) waitForVoices(voiceWaitSteps.size)
+            // 24.10.2026: список голосов спрашиваем В СТОРОНЕ и только потом
+            // ставим выбранный голос окончательно (см. [voiceCache]). Именно этот
+            // запрос вешал главный поток на 5-7 секунд — телефон показывал
+            // «закрыть или подождать».
+            refreshVoices {
+                logVoiceLanguages()
+                if (voiceCache.isEmpty()) {
+                    waitForVoices(voiceWaitSteps.size)
+                } else {
+                    applySpeedAndVoice()
+                }
+            }
             // Сторож (msg4077): движок перезапущен после молчания — переспросить
             // фразу, которую он не досказал. Скорость и голос уже применены
             // выше. Состояние «эту фразу ждут» восстанавливаем руками: start()
@@ -1478,22 +1702,31 @@ class SpeechPlayer(context: Context) {
                 retryAfterRestart = null
                 currentText = t
                 currentPos = retryAfterRestartPos
+                currentPart = retryAfterRestartPart
                 awaitingPlayText = t
                 awaitingPos = retryAfterRestartPos
-                synthToFile(t, retryAfterRestartPos)
+                awaitingPart = retryAfterRestartPart
+                synthToFile(t, retryAfterRestartPos, retryAfterRestartPart)
             }
             // Пересоздали соединение ради смены скорости (см.
             // [restartDirectForRate]) — фразу перечитываем ГОЛОСОМ: файлов этот
-            // движок не отдаёт.
+            // движок не отдаёт. 23.10.2026: единицей речи целиком, вместе с её
+            // кусками — иначе хвост фразы снова попал бы в очередь после
+            // следующей фразы и стоил бы `tts.stop()` посреди живой речи.
             retryDirectAfterRestart?.let { t ->
                 retryDirectAfterRestart = null
                 currentText = t
-                awaitingPlayText = t
-                awaitingPos = currentPos
-                speakDirectNow(
-                    t, currentPos,
-                    "движок поднят заново ради смены скорости — читаю фразу его голосом",
+                currentPos = retryAfterRestartPos
+                currentPart = retryAfterRestartPart
+                Diag.log(
+                    appContext, "tts",
+                    "движок поднят заново ради смены скорости — читаю фразу его голосом"
                 )
+                speakDirectQueued(
+                    t, retryAfterRestartPos, retryAfterRestartPart,
+                    userAsked = true, rest = retryDirectAfterRestartRest,
+                )
+                retryDirectAfterRestartRest = emptyList()
             }
         } else {
             retryAfterRestart?.let {
@@ -1552,6 +1785,7 @@ class SpeechPlayer(context: Context) {
         if (rememberAwaiting && awaitingPlayText != null && retryAfterRestart == null) {
             retryAfterRestart = awaitingPlayText
             retryAfterRestartPos = awaitingPos
+            retryAfterRestartPart = if (awaitingPart >= 0) awaitingPart else currentPart
             Diag.log(
                 appContext, "tts",
                 "перезапуск движка: фразу, которую ждёт чтение, перечитаю после подъёма"
@@ -1565,7 +1799,8 @@ class SpeechPlayer(context: Context) {
         // (тем же путём, что [retryAfterRestart] для потерянных заявок на файл).
         if (directSpeakingText != null && retryAfterRestart == null) {
             retryAfterRestart = directSpeakingText
-            retryAfterRestartPos = currentPos
+            retryAfterRestartPos = if (directSpeakingPos >= 0) directSpeakingPos else currentPos
+            retryAfterRestartPart = directSpeakingPart
             Diag.log(
                 appContext, "tts",
                 "перезапуск движка застал его за живой речью — перечитаю эту фразу файлом"
@@ -1770,6 +2005,7 @@ class SpeechPlayer(context: Context) {
     /** Фраза, из-за которой ждём движок реплик (null — не ждём). */
     private var replyWaitText: String? = null
     private var replyWaitPos: Long = -1L
+    private var replyWaitPart = 0
 
     /** С какого момента ждём: по нему видно, не пора ли перестать. */
     private var replyWaitFrom = 0L
@@ -1780,13 +2016,14 @@ class SpeechPlayer(context: Context) {
     /** Поднять движок реплик и сказать, ждать ли его ещё.
      *  true — фразу пока НЕ заказываем: повторим сами, когда движок поднимется.
      *  false — ждать нечего: движок поднялся (или отказал) — читаем как обычно. */
-    private fun waitForReply(text: String, pos: Long = -1L): Boolean {
+    private fun waitForReply(text: String, pos: Long = -1L, part: Int = 0): Boolean {
         if (replyReady && replyTts != null) return false
         if (replyBroken) return false
         val now = System.currentTimeMillis()
         if (replyWaitText != text) {
             replyWaitText = text
             replyWaitPos = pos
+            replyWaitPart = part
             replyWaitFrom = now
         }
         if (now - replyWaitFrom > REPLY_WAIT_MS) {
@@ -1807,10 +2044,14 @@ class SpeechPlayer(context: Context) {
                 val t = replyWaitText
                 // Фраза всё ещё ждёт нас? Иначе заказ не нужен: человек ушёл
                 // вперёд, поставил паузу или закрыл книгу.
+                // 23.10.2026: сверка по ЕДИНИЦЕ РЕЧИ (место + кусок), а не по
+                // «есть такой текст в работе»: одинаковых реплик в книге много.
                 if (t != null &&
-                    (awaitingPlayText == t || prefetchInFlight.containsKey(t) || keptPhrase?.text == t)
+                    (awaitingPlayText == t ||
+                        fileInFlight(Units.key(replyWaitPos, replyWaitPart)) != null ||
+                        keptPhrase?.text == t)
                 ) {
-                    synthToFile(t, replyWaitPos)
+                    synthToFile(t, replyWaitPos, replyWaitPart)
                 }
             }, REPLY_WAIT_STEP_MS)
         }
@@ -1895,10 +2136,10 @@ class SpeechPlayer(context: Context) {
                 "голос ${t.voice?.name ?: "движковый"} (${replyCountersLine()})"
         )
         // Голоса у чужого движка приезжают позже init (как и у основного) —
-        // тогда выбранный голос поставить нечем. Спрашиваем ещё раз.
-        if (t.voices.isNullOrEmpty()) {
-            main.postDelayed({ if (replyReady) applyReplyParams(replyTts) }, 700)
-        }
+        // тогда выбранный голос поставить нечем. Спрашиваем в СТОРОНЕ (24.10.2026:
+        // на главном потоке этот запрос вешал окно) и ещё раз применяем настройки.
+        refreshReplyVoices()
+        main.postDelayed({ if (replyReady) applyReplyParams(replyTts) }, 700)
     }
 
     /** Скорость, тон и выбранный голос на репликовом экземпляре. Зовётся перед
@@ -1909,21 +2150,28 @@ class SpeechPlayer(context: Context) {
         runCatching {
             val name = replyVoiceName
             if (name != null && !(replyVoiceApplied == name && t.voice?.name == name)) {
-                val v = t.voices?.firstOrNull { it.name == name }
+                // 24.10.2026: голос ищем в готовом списке, полученном в стороне;
+                // пусто — просим список и применим его на следующей реплике.
+                val v = replyVoiceCache.firstOrNull { it.name == name }
                 if (v != null) {
                     t.voice = v
                     replyVoiceApplied = name
                     if (replyVoiceWarned == name) replyVoiceWarned = null
                     Diag.log(appContext, "tts", "реплики: голос применён — $name")
                 } else if (replyVoiceWarned != name) {
+                    if (replyVoiceCache.isEmpty()) {
+                        // Список ещё не приехал — это не «движок не знает голос».
+                        refreshReplyVoices()
+                    } else {
                     // Молчать тут нельзя: именно это выглядит как «выбрал голос, а
                     // читает прежний». Пишем, сколько голосов движок вообще отдал.
                     replyVoiceWarned = name
                     Diag.log(
                         appContext, "tts",
                         "движок реплик ${replyEnginePackage ?: "системный"} не знает голос $name " +
-                            "(голосов у него ${t.voices?.size ?: 0}) — читаю его голосом"
+                            "(голосов у него ${replyVoiceCache.size}) — читаю его голосом"
                     )
+                    }
                 }
             }
             // Скорость и тон — СВОИ у реплик: книжные ползунки их не трогают.
@@ -1949,7 +2197,8 @@ class SpeechPlayer(context: Context) {
         runCatching {
             val name = replyVoiceName
             if (name != null) {
-                val v = t.voices?.firstOrNull { it.name == name }
+                // 24.10.2026: голос берём из готового списка (см. [voiceCache]).
+                val v = voiceCache.firstOrNull { it.name == name }
                 if (v != null) {
                     t.voice = v
                     replyVoiceApplied = name
@@ -1957,7 +2206,7 @@ class SpeechPlayer(context: Context) {
                     replyVoiceWarned = name
                     Diag.log(
                         appContext, "tts",
-                        "движок не знает голос реплик $name (голосов у него ${t.voices?.size ?: 0}) — " +
+                        "движок не знает голос реплик $name (голосов у него ${voiceCache.size}) — " +
                             "реплики звучат его голосом"
                     )
                 }
@@ -1972,7 +2221,8 @@ class SpeechPlayer(context: Context) {
         runCatching {
             val name = selectedVoiceName
             if (name != null) {
-                val v = t.voices?.firstOrNull { it.name == name }
+                // 24.10.2026: из готового списка (см. [voiceCache]).
+                val v = voiceCache.firstOrNull { it.name == name }
                 if (v != null) t.voice = v
             }
             t.setSpeechRate(speed)
@@ -2026,8 +2276,20 @@ class SpeechPlayer(context: Context) {
      *  паузы, «повторить», шаг назад, прыжок), а не само чтение по ходу книги.
      *  Это различие решает две вещи: из кэша сыгранных фразу отдаём только по
      *  просьбе человека (вперёд повтор не нужен) и с этого места начинается
-     *  новый проход, в котором единицы снова могут звучать (см. [playedKeys]). */
-    fun speak(text: String, pos: Long = -1L, userAsked: Boolean = true) {
+     *  новый проход, в котором единицы снова могут звучать (см. [playedKeys]).
+     *
+     *  [rest] — остальные куски ЭТОЙ ЖЕ фразы (слова автора, реплика, «хвост»
+     *  после укороченной первой фразы). В файловом пути их заказывает
+     *  [prefetchRest]; в прямом пути их НАДО отдать движку сразу за головой —
+     *  иначе они попадут в его очередь после следующих фраз, и когда чтение
+     *  попросит их, придётся гасить очередь (`tts.stop()`) посреди живой речи:
+     *  на слух — фраза обрывается и начинается заново. */
+    fun speak(
+        text: String,
+        pos: Long = -1L,
+        userAsked: Boolean = true,
+        rest: List<String> = emptyList(),
+    ) {
         val t = tts
         if (t == null || !ready || text.isBlank()) return
         // 08.10.2026: человек просит фразу — она начинается С НАЧАЛА, то есть с
@@ -2045,6 +2307,7 @@ class SpeechPlayer(context: Context) {
         currentText = text
         currentPos = pos
         currentPart = part
+        currentRest = rest
         if (userAsked) playedKeys.clear()
         // Читалка просит фразу — упреждающая подготовка ([prewarm]) своё дело
         // сделала, дальше очередь наполняется обычным порядком.
@@ -2067,7 +2330,7 @@ class SpeechPlayer(context: Context) {
                 "альтернативный способ: отдаю фразу движку (${text.length} знаков, " +
                     "скорость ${RateSteps.label(speed)}): ${text.take(40)}"
             )
-            speakDirectQueued(text, pos, part)
+            speakDirectQueued(text, pos, part, userAsked, rest)
             return
         }
 
@@ -2108,7 +2371,8 @@ class SpeechPlayer(context: Context) {
         // продолжить) ждал бы ответа по заявке, которой уже нет, и чтение
         // замолкало бы навсегда. Именно это и видно в логе пользователя
         // (ivona.tts): pause → «старт чтения (предл. 145)» → тишина.
-        prefetchInFlight.clear()
+        // 23.10.2026: отдельного набора «в работе» больше нет — заявки живут в
+        // [pending], и чистить его отдельно не надо (сами заявки отменяются ниже).
         // msg5309: а вот след лестницы мер ([synthMisses]) пауза НЕ стирает.
         // Раньше стирала — и у тестера Ивана это съедало всю эскалацию: он жмёт
         // паузу через 5–12 с, сторож не успевает досчитать, а после продолжения
@@ -2144,6 +2408,10 @@ class SpeechPlayer(context: Context) {
         // (29.09.2026, см. [directAskedId]).
         directAskedId = null
         directSpeakingText = null
+        directSpeakingPos = -1L
+        directSpeakingPart = 0
+        currentRest = emptyList()
+        lastDirectQueuedId = null
         // 08.10.2026: след прохода снимаем. После паузы продолжение — это уже
         // просьба человека (чтение зовёт [speak] с userAsked = true), и та же
         // фраза обязана звучать снова; а после прыжка проход другой вовсе.
@@ -2286,7 +2554,9 @@ class SpeechPlayer(context: Context) {
         var applied = "движковый"
         var chosen: Voice? = null
         if (name != null) {
-            val v = t.voices?.firstOrNull { it.name == name }
+            // 24.10.2026: голос ищем в ГОТОВОМ списке (см. [voiceCache]), а не
+            // спрашиваем движок — на главном потоке этот запрос вешал окно.
+            val v = voiceCache.firstOrNull { it.name == name }
             if (v != null) {
                 t.voice = v
                 chosen = v
@@ -2327,7 +2597,7 @@ class SpeechPlayer(context: Context) {
         // Запомнить, есть ли у движка сетевые голоса: окно «Движки» показывает
         // движку без них три положения вместо четырёх ([ExpertPrefs.engineHasNetwork]).
         // Про «нет» можно судить только когда голос у движка ОДИН.
-        val voiceCount = runCatching { tts?.voices?.size ?: 0 }.getOrDefault(0)
+        val voiceCount = voiceCache.size
         ExpertPrefs.noteEngineVoice(appContext, modeEngine(), netDeclared, voiceCount == 1)
         val marked = slowMarks().contains(synthMark())
         val was = netSynth
@@ -2359,12 +2629,10 @@ class SpeechPlayer(context: Context) {
         // Профиль сменил направление прямо на этом применении голоса — конвейер
         // прежнего способа больше не нужен.
         if (forceWas != forceMode) switchPipeline(wasDirect)
-        // Прямой режим включился на этом применении голоса — тихий поток встаёт
-        // вместе с ним (30.09.2026, см. [altDirect]). Условие без «!wasDirect»:
-        // принудительный прямой способ включён ещё до первого применения голоса,
-        // и прежнее условие оставило бы человека без кнопок на наушниках.
+        // Прямой режим включился — 24.10.2026 тихий поток сам не встаёт (просьба
+        // Сержа: «пускай по умолчанию будет выключена»), только журнал.
         if (directMode) {
-            KeepAwake.enableSilenceAuto(
+            KeepAwake.noteDirectNeedsSilence(
                 appContext,
                 when {
                     forceMode == ExpertPrefs.MODE_DIRECT ->
@@ -2454,11 +2722,14 @@ class SpeechPlayer(context: Context) {
         val delay = voiceWaitSteps[voiceWaitSteps.size - stepsLeft]
         main.postDelayed({
             if (!ready) return@postDelayed
-            if (tts?.voices.isNullOrEmpty()) {
-                waitForVoices(stepsLeft - 1)
-            } else {
-                applySpeedAndVoice()
-                Diag.log(appContext, "tts", "голоса движка приехали не сразу (через $delay мс)")
+            // 24.10.2026: спрашиваем в стороне — см. [voiceCache].
+            refreshVoices {
+                if (voiceCache.isEmpty()) {
+                    waitForVoices(stepsLeft - 1)
+                } else {
+                    applySpeedAndVoice()
+                    Diag.log(appContext, "tts", "голоса движка приехали не сразу (через $delay мс)")
+                }
             }
         }, delay)
     }
@@ -2642,7 +2913,8 @@ class SpeechPlayer(context: Context) {
             p.file?.delete()
             pending.remove(id)
         }
-        prefetchInFlight.remove(text) // заявка была впрок — больше не в работе
+        // 23.10.2026: набор «в работе» больше не отдельный — заявки сняты выше,
+        // из [pending] они уже ушли, и больше про них помнить нечего.
         val wanted = text == awaitingPlayText
         // 05.10.2026 (журнал 20:12, «непонятная пауза при листании»): ЗАГОТОВКА
         // ВПРОК не стоит перезапуска движка. Её никто не ждёт, и очередь закажет
@@ -2708,7 +2980,11 @@ class SpeechPlayer(context: Context) {
                 appContext, "tts",
                 "движок молчит $waited с (${text.take(40)}…) — перезапускаю движок, попытка $retriesInRow"
             )
-            if (wanted) { retryAfterRestart = text; retryAfterRestartPos = stuckPos }
+            if (wanted) {
+                retryAfterRestart = text
+                retryAfterRestartPos = stuckPos
+                retryAfterRestartPart = stuck.values.first().part
+            }
             start(enginePackage)
             return
         }
@@ -2853,10 +3129,12 @@ class SpeechPlayer(context: Context) {
         }
         main.postDelayed({
             if (token != directWatchToken) return@postDelayed
-            if (pending.remove(id) == null) return@postDelayed
+            // 23.10.2026: заявку не выбрасываем сразу — в ней место и кусок
+            // потерянной единицы, по ним сообщим чтению и по ним же её спасём.
+            val lost = pending.remove(id) ?: return@postDelayed
             // Сетевому движку даём ещё попытку, прежде чем терять фразу
             // (29.09.2026, см. [rescueAgain]).
-            if (netSynth && text != null && rescueAgain(text)) return@postDelayed
+            if (netSynth && rescueAgain(lost.text, lost.pos, lost.part)) return@postDelayed
             // Движок стоит на этой фразе, а следующие уже за ней у него в
             // очереди: без очистки они прозвучат после молчания, и наша закладка
             // разъедется со звуком. Гасим очередь и просим заново со следующей
@@ -2869,30 +3147,45 @@ class SpeechPlayer(context: Context) {
             // 30.09.2026: заминка прямой речи — в память окна «Не засыпать».
             StallLog.record(appContext, "прямая речь молчала ${fuse / 1000} с")
             retriesInRow = 0
-            reportDone()
+            reportDone(lost.pos, lost.part, lastOfPhrase(lost.pos, lost.part))
         }, fuse)
     }
 
-    /** Фраза прямой речи от читалки. Обычный случай — она уже стоит В ГОЛОВЕ
+    /** Единица речи прямой речи от читалки. Обычный случай — она уже стоит В ГОЛОВЕ
      *  очереди движка (мы наполнили её заранее, [topUpDirectQueue]): тогда не
      *  трогаем ничего, движок сам её скажет, и паузы на стыке не будет вовсе.
-     *  Другой текст (прыжок по тексту, повтор предложения, пауза → продолжить) —
-     *  старая очередь движку больше не нужна, выбрасываем и начинаем с этой фразы.
+     *  Другая единица (прыжок по тексту, повтор предложения, пауза → продолжить) —
+     *  старая очередь движку больше не нужна, выбрасываем и начинаем с этой.
      *
-     *  26.09.2026: раньше здесь искали фразу по ВСЕМУ тексту очереди
-     *  ([isDirectQueued]). В сборнике анекдотов короткие реплики повторяются
-     *  («— Да.», «— Нет.»), и повторная фраза считалась уже заказанной: своего
-     *  места в очереди она не получала, движок её не произносил, а читалка шла
-     *  дальше — на слух это «фраза зациклилась» и «не могу остановить».
-     *  Теперь сверяемся с ГОЛОВОЙ очереди: она и есть та фраза, что прозвучит
-     *  следующей. Повторы при этом получают каждая свою заявку. */
-    private fun speakDirectQueued(text: String, pos: Long = -1L, part: Int = 0) {
+     *  26.09.2026: раньше здесь искали фразу по ВСЕМУ тексту очереди. В сборнике
+     *  анекдотов короткие реплики повторяются («— Да.», «— Нет.»), и повторная
+     *  фраза считалась уже заказанной: своего места в очереди она не получала,
+     *  движок её не произносил, а читалка шла дальше — на слух это «фраза
+     *  зациклилась» и «не могу остановить». Теперь сверяемся с ГОЛОВОЙ очереди.
+     *
+     *  23.10.2026, рефакторинг: сверки идут по КЛЮЧУ единицы речи ([Units.key] =
+     *  место в книге + кусок), а не по тексту, и в очередь кладутся ВСЕ куски
+     *  этой фразы ([rest]) сразу за головой. Текст опознанием быть не может: две
+     *  одинаковые реплики из разных мест книги — разные единицы. */
+    private fun speakDirectQueued(
+        text: String,
+        pos: Long = -1L,
+        part: Int = 0,
+        userAsked: Boolean = false,
+        rest: List<String> = emptyList(),
+    ) {
+        val key = Units.key(pos, part)
         // 29.09.2026: фраза, которая ЗВУЧИТ прямо сейчас, — не повод гасить движок.
         // Чтение иногда называет её повторно, и ветка «пришла другая фраза» ниже
         // обрывала её на полуслове командой «стоп» (а по документации stop() —
         // это ровно «прервать текущее произнесение и выбросить очередь»). Фраза и
         // так звучит: её «доиграла» и будет тем сигналом, которого чтение ждёт.
-        if (directSpeakingText != null && text == directSpeakingText && directQueue.isNotEmpty()) {
+        val sounding = if (key >= 0) {
+            key == directSpeakingKey
+        } else {
+            directSpeakingText != null && text == directSpeakingText
+        }
+        if (sounding && directQueue.isNotEmpty()) {
             Diag.log(
                 appContext, "sound",
                 "альтернативный способ: эта фраза уже звучит (${text.length} знаков) — очередь не трогаю"
@@ -2900,7 +3193,13 @@ class SpeechPlayer(context: Context) {
             return
         }
         val front = directQueue.firstOrNull()
-        if (front != null && pending[front]?.text == text) {
+        val frontPending = front?.let { pending[it] }
+        val frontSame = frontPending != null && if (key >= 0) {
+            frontPending.key == key
+        } else {
+            frontPending.pos == pos && frontPending.text == text
+        }
+        if (frontSame) {
             directAskedId = front
             Diag.log(
                 appContext, "sound",
@@ -2910,36 +3209,86 @@ class SpeechPlayer(context: Context) {
             topUpDirectQueue()
             return
         }
+        // 23.10.2026: эта единица уже звучала в этом проходе, а просит её САМА
+        // читалка (по ходу книги) — второй раз вперёд не читаем. Та же защита,
+        // что в файловом пути ([speakExo], ветка «уже прозвучала»).
+        if (!userAsked && key >= 0 && playedKeys.contains(key)) {
+            Diag.log(
+                appContext, "sound",
+                "альтернативный способ: единица ${Units.labelOfKey(key)} уже звучала — " +
+                    "второй раз по ходу книги не читаю"
+            )
+            reportDone(pos, part, lastOfPhrase(pos, part))
+            return
+        }
         flushDirectQueue("пришла другая фраза: «${text.take(40)}» (${text.length} знаков)")
         if (!queueDirect(text, pos, part)) {
             // Движок реплик поднимается — фразу не теряем и не отдаём чужому
             // голосу: повторим заказ, когда он поднимется (27.09.2026).
             if (directWaitReply) {
-                retryDirectLater(text)
+                retryDirectLater(text, pos, part, userAsked, rest)
                 return
             }
-            reportDone()
+            // ——— ДВИЖОК НЕ ВЗЯЛ ФРАЗУ — ЭТО НЕ ЗВУК (24.10.2026, проба 264) ———
+            //
+            // Жалоба Сержа «текст убежал»: 17:33 книжка прошла с главы 46 до
+            // «Книга прочитана» за 1,7 секунды без единого звука. В журнале —
+            // НИ ОДНОЙ строки «начал речь», «готово» или «считаю фразу молчащей»:
+            // движок (dev.msvoice.tts, голос «MS Dariya RU») ОТКАЗЫВАЛСЯ принять
+            // заявку, `queueDirect` возвращал false, и здесь сразу шёл
+            // [reportDone] — то есть чтение считало, что фраза прозвучала.
+            // Вся защита от убегания ([noteSilentPhrase], [ackLooksSilent],
+            // придержка отчёта) стоит на путях, где фраза ХОТЬ КУДА-ТО попала:
+            // отказ движка проходил мимо неё.
+            //
+            // Теперь отказ считается тем, чем он и является: «движок не дал
+            // звука». Счётчик фраз подряд поднимет движок заново, а после
+            // `timing.silentStopAt` (на первой фразе после старта — двух) чтение
+            // встанет, вернётся на место и скажет об этом вслух.
+            Diag.log(
+                appContext, "tts",
+                "движок не взял фразу (${directRefusedReason ?: "причина неизвестна"}): " +
+                    "«${text.take(40)}» (${text.length} знаков) — считаю это молчанием, а не звуком",
+            )
+            if (!noteSilentPhrase(pos)) reportDone(pos, part, lastOfPhrase(pos, part))
             return
         }
+        // Остальные куски ТОЙ ЖЕ фразы — сразу за головой и ДО заказа впрок:
+        // иначе они встанут после следующих фраз, и чтение, попросив их, погасит
+        // очередь движка посреди уже начавшейся чужой речи.
+        var p = part
+        for (t in rest) {
+            p++
+            registerParts(pos, p + 1)
+            if (t.isBlank()) continue
+            if (directQueue.any { pending[it]?.key == Units.key(pos, p) }) continue
+            if (!queueDirect(t, pos, p)) break
+        }
+        if (rest.isNotEmpty()) registerParts(pos, part + rest.size + 1)
         directAskedId = lastDirectQueuedId
         topUpDirectQueue()
     }
 
     /** Повторить заказ в альтернативном способе, когда поднимется движок реплик.
-     *  [text] — фраза, которую ждёт читалка; null — просто наполнить очередь. */
-    private fun retryDirectLater(text: String?) {
+     *  null в [text] — просто наполнить очередь. 23.10.2026: повторяется ТА ЖЕ
+     *  единица речи (место + кусок + куски фразы), а не «текст, который сейчас
+     *  считается текущим». */
+    private fun retryDirectLater(
+        text: String?,
+        pos: Long = -1L,
+        part: Int = 0,
+        userAsked: Boolean = false,
+        rest: List<String> = emptyList(),
+    ) {
         main.postDelayed({
             if (!directWaitReply) return@postDelayed
-            if (text != null && currentText != text) return@postDelayed
-            if (text == null) topUpDirectQueue() else speakDirectQueued(text)
+            // Фразу уже сменили — повторять нечего (сверка по ключу, не по тексту).
+            if (text != null && Units.key(pos, part) != Units.key(currentPos, currentPart)) {
+                return@postDelayed
+            }
+            if (text == null) topUpDirectQueue() else speakDirectQueued(text, pos, part, userAsked, rest)
         }, REPLY_WAIT_STEP_MS)
     }
-
-    /** Стоит ли [text] в очереди движка. Оставлено только для журнала и
-     *  разбора: заказ и сверка идут по ГОЛОВЕ очереди (см. [speakDirectQueued]) —
-     *  по тексту нельзя, повторы коротких реплик тогда пропадают. */
-    private fun isDirectQueued(text: String): Boolean =
-        directQueue.any { pending[it]?.text == text }
 
     /** Отдать движку ещё одну фразу В КОНЕЦ очереди. false — движок отказался
      *  или очередь занята репликой другой роли (тогда ждём, пока доиграет).
@@ -2956,8 +3305,17 @@ class SpeechPlayer(context: Context) {
      *  экземпляра нет — основной берётся в долг под реплику, как в файловом
      *  способе (см. [borrowMainForReply]). Роли работают и здесь. */
     private fun queueDirect(text: String, pos: Long = -1L, part: Int = 0): Boolean {
-        if (tts == null || !ready) return false
+        if (tts == null || !ready) {
+            directRefusedReason = "движок ещё не готов"
+            return false
+        }
+        directRefusedReason = null
         directWaitReply = false
+        val key = Units.key(pos, part)
+        // 23.10.2026: эта единица уже отдана движку — второй раз не отдаём
+        // (иначе она прозвучит дважды). Опознание по ключу: по тексту нельзя,
+        // короткие реплики в книгах повторяются дословно.
+        if (key >= 0 && directQueue.any { pending[it]?.key == key }) return true
         // 30.09.2026 (Серж: «в настройках написано, что роли здесь не работают,
         // а они работают»): в этом способе реплики читаются ТАК ЖЕ, как в
         // файловом. Свой экземпляр нужен, только когда голос реплик живёт в
@@ -2969,17 +3327,33 @@ class SpeechPlayer(context: Context) {
         val wantReply = replyOn && Roles.looksReplica(text) && (!own || !replyBroken)
         // 27.09.2026: движок реплик ещё поднимается — реплику основному голосу
         // не отдаём (это слышно), а просто ждём его: заказ повторим сами.
-        if (wantReply && own && waitForReply(text)) {
+        if (wantReply && own && waitForReply(text, pos, part)) {
             directWaitReply = true
+            directRefusedReason = "поднимается движок реплик"
             return false
         }
         forgetReplyWait()
         val rt = if (wantReply && own) replyInstance() else null
         val sameEngine = wantReply && !own
         val role = if (rt != null || sameEngine) Pending.Role.REPLY else Pending.Role.MAIN
-        val lastRole = directQueue.lastOrNull()?.let { pending[it]?.role }
-        if (lastRole != null && lastRole != role) return false
-        val t = rt ?: tts ?: return false
+        // 23.10.2026: очередь делим по ДВИЖКАМ, а не по ролям. Когда движок один
+        // (реплики читаются его же голосом, см. [borrowMainForReply]), очередь у
+        // него общая: голос ставится на объект перед каждым заказом и запоминается
+        // вместе с заявкой. Прежняя сверка по роли рвала здесь очередь на каждой
+        // смене роли, и следующий кусок фразы снова стоил `tts.stop()` посреди
+        // речи. Два РАЗНЫХ экземпляра по-прежнему не смешиваем: у них разные
+        // очереди, и внахлёст они зазвучат.
+        if (own) {
+            val lastRole = directQueue.lastOrNull()?.let { pending[it]?.role }
+            if (lastRole != null && lastRole != role) {
+                directRefusedReason = "ждём, пока доиграет фраза другой роли"
+                return false
+            }
+        }
+        val t = rt ?: tts ?: run {
+            directRefusedReason = "нет экземпляра движка"
+            return false
+        }
         val borrowed = role == Pending.Role.REPLY && sameEngine
         if (role == Pending.Role.REPLY) {
             if (borrowed) borrowMainForReply(t) else applyReplyParams(t)
@@ -2988,6 +3362,53 @@ class SpeechPlayer(context: Context) {
         val id = reqSeq++
         pending[id] = Pending(Pending.Kind.DIRECT, text, null, role = role, pos = pos, part = part)
         directAskedAt[id] = SystemClock.elapsedRealtime()
+
+        // ——— ПРОВЕРКА «СЛОМАННЫЙ ДВИЖОК» (24.10.2026, за секретной дверью) ———
+        //
+        // Жалоба Сержа: «синтезатор был нерабочий, нажал читать — книжка начала
+        // быстро прокручиваться». Настоящую поломку ловить долго, а повторять её
+        // надо по заказу. Эта галочка заставляет НАШ плеер вести себя ровно так:
+        // фразу движку НЕ отдаём, а через мгновение рапортуем «готово» и звука не
+        // даём. Дальше всё идёт обычным путём ([synthFinished] → `directAckHoldMs`
+        // → [ackLooksSilent]), поэтому по журналу видно, ловит ли защита такой
+        // отчёт и говорит ли об этом вслух. В телефоне ничего не ломается.
+        if (ExpertPrefs.brokenEngine(appContext)) {
+            if (brokenEngineLogged < BROKEN_ENGINE_LOG_MAX) {
+                brokenEngineLogged++
+                Diag.log(
+                    appContext, "tts",
+                    "ПРОВЕРКА «сломанный движок»: фразу движку не отдаю, через " +
+                        "$BROKEN_ENGINE_ACK_MS мс рапортую «готово» без звука " +
+                        "(${text.length} знаков): ${text.take(40)}"
+                )
+            }
+            directQueue.addLast(id)
+            lastDirectQueuedId = id
+            main.postDelayed({ synthFinished(id) }, BROKEN_ENGINE_ACK_MS)
+            return true
+        }
+
+        // ——— ПРОВЕРКА «ДВИЖОК ОТКАЗЫВАЕТСЯ» (24.10.2026, за секретной дверью) ———
+        //
+        // Ровно то, что было у Сержа 17:33: каждая заявка получает отказ. Раньше
+        // такой отказ считался прозвучавшей фразой, и книжка убегала (см.
+        // [speakDirectQueued]). Галочка нужна, чтобы эту дорогу можно было
+        // проверить по заказу.
+        if (ExpertPrefs.brokenRefuse(appContext)) {
+            if (brokenRefusedLogged < BROKEN_ENGINE_LOG_MAX) {
+                brokenRefusedLogged++
+                Diag.log(
+                    appContext, "tts",
+                    "ПРОВЕРКА «движок отказывается»: заявку не отдаю, отвечаю отказом " +
+                        "(${text.length} знаков): ${text.take(40)}"
+                )
+            }
+            pending.remove(id)
+            directAskedAt.remove(id)
+            directRefusedReason = "проверка «движок отказывается»"
+            return false
+        }
+
         val baseVol = if (role == Pending.Role.REPLY) replyVolume else volume
         val vol = baseVol.coerceIn(0f, 1f)
         val params = android.os.Bundle().apply {
@@ -3010,12 +3431,17 @@ class SpeechPlayer(context: Context) {
             // Второй движок отказался — фразу читает основной, порядок не рвём.
             val main = tts ?: return false
             Diag.log(appContext, "tts", "движок реплик отказался говорить — читаю фразу основным голосом")
-            pending[id] = Pending(Pending.Kind.DIRECT, text, null, role = Pending.Role.MAIN)
+            pending[id] = Pending(
+                Pending.Kind.DIRECT, text, null,
+                role = Pending.Role.MAIN, pos = pos, part = part,
+            )
             r = runCatching { main.speak(Roles.stripped(text), TextToSpeech.QUEUE_ADD, null, id.toString()) }
                 .getOrDefault(TextToSpeech.ERROR)
         }
         if (r != TextToSpeech.SUCCESS) {
             pending.remove(id)
+            // Отказ движка — это НЕ звук (см. [speakDirectQueued], 24.10.2026).
+            directRefusedReason = "движок отказался принять заявку (код $r)"
             return false
         }
         directQueue.addLast(id)
@@ -3033,60 +3459,90 @@ class SpeechPlayer(context: Context) {
         return true
     }
 
-    /** Держать у движка [prefetchDepth] фраз впереди — тогда он берёт их подряд
-     *  без пауз. Сколько именно, спрашиваем у читалки тем же [onNeedNext], каким
-     *  в обычном режиме заказываем заготовки: она единственный источник правды о
-     *  том, что звучит следующим, и сама обрывает список на конце главы, конце
-     *  книги и на границе выделенного куска. */
+    /** Сколько РАЗНЫХ ФРАЗ книги стоит в очереди движка ДАЛЬШЕ той, которую чтение
+     *  назвало последней. Куски одной фразы считаются ОДНОЙ фразой — иначе
+     *  двухкусковая фраза сдвигала бы отсчёт, и чтение называло бы фразу через
+     *  одну (23.10.2026, П2: очередь считает куски, `onNeedNext` ждёт фразы). */
+    private fun directPhrasesAhead(): Int {
+        val from = currentPos
+        val seen = HashSet<Long>()
+        for (id in directQueue) {
+            val p = pending[id] ?: continue
+            if (p.pos < 0) continue
+            if (from >= 0 && p.pos <= from) continue
+            seen.add(p.pos)
+        }
+        return seen.size
+    }
+
+    /** Эта фраза уже отдана движку (любой её кусок стоит в очереди). */
+    private fun directQueuedPhrase(pos: Long): Boolean =
+        if (pos < 0) false else directQueue.any { pending[it]?.pos == pos }
+
+    /** Держать у движка [directAhead] ФРАЗ впереди — тогда он берёт их подряд
+     *  без пауз. Что звучит следующим, спрашиваем у читалки тем же [onNeedNext],
+     *  каким в обычном режиме заказываем заготовки: она единственный источник
+     *  правды о том, что дальше, и сама обрывает список на конце главы, конце
+     *  книги и на границе выделенного куска.
+     *
+     *  29.09.2026, история про счёт (остаётся в силе). Очередь отсчитывается от
+     *  фразы, которую чтение назвало ПОСЛЕДНЕЙ. Без этого та же фраза вставала в
+     *  очередь второй раз: журнал Сержа 13:41:28 — фраза в 80 знаков прозвучала
+     *  дважды, а следующую мы оборвали.
+     *
+     *  23.10.2026, рефакторинг (П2, П3). Было: `ahead = directQueue.size + …`, то
+     *  есть считали КУСКИ в очереди, а `onNeedNext` ждёт смещение в ФРАЗАХ. У
+     *  фразы с репликой кусков два, поэтому смещение выходило вдвое больше
+     *  нужного: фраза сразу после текущей в очередь НЕ попадала. Когда чтение
+     *  доходило до неё, голова очереди была уже другой фразой, и
+     *  [speakDirectQueued] гасил всю очередь (`tts.stop()`) — посреди уже
+     *  начавшейся чужой фразы. На слух: фраза начинается, обрывается и звучит
+     *  снова. Теперь: (1) считаем ФРАЗЫ ([directPhrasesAhead]); (2) кладём в
+     *  очередь ВСЕ куски фразы с их номерами; (3) уже заказанную фразу не
+     *  заказываем второй раз ([directQueuedPhrase]), а если она попала в
+     *  смещение — берём следующую. */
     private fun topUpDirectQueue() {
-        // Сколько фраз держим у движка: у движка-прослойки — одну (см. [directAhead]).
-        val limit = directAhead
-        while (directQueue.size < limit) {
-            // 29.09.2026: на сколько фраз вперёд спрашивать чтение. Очередь
-            // отсчитывается от фразы, которую чтение назвало ПОСЛЕДНЕЙ: пока она
-            // в очереди, вся очередь стоит впереди неё — значит заказ идёт на
-            // «размер очереди». А если движок её уже доиграл и выбросил, а чтение
-            // ещё не сдвинулось (его «доиграла» идёт по главному потоку и может
-            // прийти позже сигнала движка «начал следующую»), очередь целиком
-            // стоит впереди, и заказывать надо НА ОДНУ ДАЛЬШЕ. Без этой поправки
-            // та же фраза вставала в очередь второй раз: журнал Сержа 13:41:28 —
-            // фраза в 80 знаков прозвучала дважды, а следующую мы оборвали.
-            // Считаем по НОМЕРУ заявки, а не по тексту: короткие реплики в книгах
-            // повторяются дословно, и по тексту «уже в очереди» не отличить.
-            val askedInQueue = directAskedId?.let { directQueue.contains(it) } == true
-            val ahead = directQueue.size + if (askedInQueue) 0 else 1
-            // 06.10.2026 (журнал 00:12, «большая пауза, потом фраза повторяется»):
-            // кладём в очередь ВСЕ куски фразы, а не только первый. Читалка режет
-            // фразу на слова автора и реплики ([Roles.splitSpeech]) и отдаёт их
-            // движку по одному: первый сразу, остальные — когда доиграет
-            // предыдущий (см. [ReaderEngine.onUtteranceDone]). Мы же заказывали
-            // только первый кусок, поэтому второй приходил как «другая фраза»:
-            // [speakDirectQueued] гасил очередь (`tts.stop` обрывал звук!) и
-            // начинал фразу заново — на слух это «фраза повторяется», а на
-            // сетевом голосе ещё и пауза, пока он соберётся. В файловом пути
-            // этой болезни нет: там [peekNextFragments] отдаёт все куски, и
-            // заказываются они все (см. [requestPrefetch]).
-            val frags = onNeedNext?.invoke(ahead) ?: return
+        // Сколько ФРАЗ держим у движка впереди. Режим «по одной фразе» (движок-
+        // прослойка, см. [directAhead]) — это ровно ноль фраз впереди: в очереди
+        // стоит только текущая фраза со всеми её кусками (куски обязаны стоять
+        // рядом с головой, иначе их заказ гасит очередь). Иначе — [directAhead]
+        // фраз, как и было задумано.
+        val ahead = directAhead
+        val limit = if (ahead <= 1) 0 else ahead - 1
+        // Страховка от бесконечного шага: фразу могли уже заказать (тогда смещение
+        // растёт дальше) или чтение может назвать не больше, чем есть.
+        val guard = limit + 4
+        var steps = 0
+        var offset = 0
+        while (directPhrasesAhead() < limit && steps++ < guard) {
+            offset++
+            val frags = onNeedNext?.invoke(offset) ?: return
             if (frags.isEmpty()) return
+            val pos = frags.first().second
+            if (pos < 0) return
+            if (directQueuedPhrase(pos)) continue
+            // Сколько кусков у фразы — по этому числу [lastOfPhrase] решает,
+            // можно ли двигать место в книге (см. [registerParts]).
+            registerParts(pos, frags.count { it.second == pos })
             var queuedAny = false
-            for ((next, _) in frags) {
+            for ((next, _, part) in frags) {
                 if (next.isBlank()) continue
-                if (directQueue.size >= limit) break
-                // Никаких сверок по тексту: очередь движка — это ПОРЯДОК фраз, и
-                // каждая заявка получает своё место, даже если текст совпадает с
-                // предыдущей (короткие реплики в диалогах повторяются постоянно).
-                if (!queueDirect(next)) {
-                    // Движок реплик поднимается или сменилась роль (у неё своя
-                    // очередь) — очередь наполним, когда он будет готов
-                    // (27.09.2026).
+                // Никаких сверок по тексту: очередь движка — это ПОРЯДОК единиц
+                // речи, и каждая заявка получает своё место, даже если текст
+                // совпадает с соседней (короткие реплики повторяются постоянно).
+                if (!queueDirect(next, pos, part)) {
+                    // Движок реплик поднимается или очередь занята другим
+                    // экземпляром — наполним, когда он будет готов (27.09.2026).
                     if (directWaitReply) retryDirectLater(null)
                     return
                 }
                 queuedAny = true
                 Diag.log(
                     appContext, "sound",
-                    "альтернативный способ: в очереди движка ${directQueue.size}/$limit фраз " +
-                        "(заказал «${next.take(30)}», ${next.length} знаков)"
+                    "альтернативный способ: в очереди движка ${directQueue.size} " +
+                        "(фраз впереди ${directPhrasesAhead()} из $limit; " +
+                        "заказал ${Units.label(pos, part)} «${next.take(30)}», " +
+                        "${next.length} знаков)"
                 )
             }
             if (!queuedAny) return
@@ -3141,6 +3597,9 @@ class SpeechPlayer(context: Context) {
         )
         directAskedId = null
         directSpeakingText = null
+        directSpeakingPos = -1L
+        directSpeakingPart = 0
+        lastDirectQueuedId = null
     }
 
     /** Скорость сменилась, а чтение идёт ПРЯМО в движок ([directMode]).
@@ -3189,9 +3648,28 @@ class SpeechPlayer(context: Context) {
         // движения книжного ползунка реплику не перечитываем.
         val head = directQueue.firstOrNull()
         if (head != null && pending[head]?.role == Pending.Role.REPLY) return
-        val current = directSpeakingText
-            ?: directQueue.firstOrNull()?.let { pending[it]?.text }
-            ?: return
+        // 23.10.2026: перечитываем ЕДИНИЦУ РЕЧИ (место + кусок) и всю фразу с её
+        // кусками ([currentRest]) — иначе хвост фразы остался бы в очереди после
+        // следующих фраз, и его заказ стоил бы `tts.stop()` посреди живой речи.
+        val headPending = head?.let { pending[it] }
+        val current = directSpeakingText ?: headPending?.text ?: return
+        // Место и кусок берём у ТОЙ единицы, о которой речь: что звучит — у неё,
+        // иначе у головы очереди. «Что звучит» важнее: перечитываем именно его.
+        val curPos: Long
+        val curPart: Int
+        if (directSpeakingText != null) {
+            curPos = directSpeakingPos
+            curPart = directSpeakingPart
+        } else {
+            curPos = headPending?.pos ?: currentPos
+            curPart = headPending?.part ?: 0
+        }
+        // Куски, которые ещё не звучали: их тоже надо перечитать вместе с головой.
+        val curRest = if (curPos >= 0 && curPos == currentPos) {
+            currentRest.drop(curPart.coerceAtLeast(0))
+        } else {
+            emptyList()
+        }
         // 06.10.2026 (журнал 18:07:25: ползунок 7.0, а голос читал 13,5 знака в
         // секунду). Движок-прослойка (MultiTTSLexx) передаёт наш темп внутрь
         // MultiTTS только тогда, когда число ОТЛИЧАЕТСЯ от того, что она помнит
@@ -3207,7 +3685,12 @@ class SpeechPlayer(context: Context) {
                     "с движком и перечитываю фразу (${current.length} знаков)"
             )
             retryDirectAfterRestart = current
+            retryDirectAfterRestartRest = curRest
+            retryAfterRestartPos = curPos
+            retryAfterRestartPart = curPart
             directSpeakingText = null
+            directSpeakingPos = -1L
+            directSpeakingPart = 0
             retryAfterRestart = null
             start(enginePackage, rememberAwaiting = false)
             return
@@ -3218,7 +3701,7 @@ class SpeechPlayer(context: Context) {
                 "(${current.length} знаков) новым темпом"
         )
         flushDirectQueue("скорость сменилась на ${RateSteps.label(speed)}")
-        speakDirectQueued(current)
+        speakDirectQueued(current, curPos, curPart, userAsked = true, rest = curRest)
     }
 
     /** Сигнал движка «начал говорить» пришёл — переводим надзор на срок по длине
@@ -3237,8 +3720,12 @@ class SpeechPlayer(context: Context) {
         }
         if (p.kind != Pending.Kind.DIRECT) return
         // Фраза, которая звучит сейчас, — по ней [speakDirectQueued] узнаёт
-        // повторный заказ той же фразы и не гасит движок (29.09.2026).
+        // повторный заказ той же единицы и не гасит движок (29.09.2026).
+        // 23.10.2026: помним не только текст, но и КЛЮЧ (место + кусок): по тексту
+        // одинаковые реплики неразличимы.
         directSpeakingText = p.text
+        directSpeakingPos = p.pos
+        directSpeakingPart = p.part
         // Засечка «движок начал говорить» — по ней считаем НАСТОЯЩИЙ темп речи
         // (см. [noteSpokenRate]): у сетевого голоса он втрое медленнее нашей
         // константы, и от него зависят сроки ожидания.
@@ -3248,6 +3735,7 @@ class SpeechPlayer(context: Context) {
         // (см. [noteSilentPhrase]).
         silentInRow = 0
         silentFromPos = -1L
+        silentRetries = 0
         armDirectWatch(real, started = true)
         // 29.09.2026: очередь движка наполняем сразу, как только он НАЧАЛ фразу, а
         // не когда закончил. Идея Сержа: «следующая фраза готовится чуть раньше и
@@ -3258,6 +3746,11 @@ class SpeechPlayer(context: Context) {
         // очереди, и наполнять её там нельзя — движок заговорил бы фразы, которые
         // читалка собирается синтезировать в файл.
         if (directMode) topUpDirectQueue()
+        // 26.10.2026: движок начал фразу — держим свой тихий поток и подновляем его
+        // следом за движком, иначе медиа-клавиша (волшебное касание скринридера,
+        // кнопки гарнитуры) уходит движку, а не читалке (см. SilentKeepAlive, блок
+        // «ПЕРВОЕ МЕСТО В ОЧЕРЕДИ МЕДИА-КЛАВИШ»).
+        SilentKeepAlive.directPhraseStarted(appContext)
     }
 
     /** Сколько ждать прямую речь по длине фразы: сколько ей звучать при текущей
@@ -3325,8 +3818,14 @@ class SpeechPlayer(context: Context) {
     // ---------- Синтез ----------
 
     /** Запустить синтез [text] в файл. По завершении судьба файла решается в
-     *  [synthFinished]: текст ждёт [awaitingPlayText] — играем, иначе копим впрок. */
-    private fun synthToFile(text: String, pos: Long = -1L, part: Int = 0) {
+     *  [synthFinished]: текст ждёт [awaitingPlayText] — играем, иначе копим впрок.
+     *
+     *  [prefetch] — заявка заказана ВПРОК ([requestPrefetch], [prefetchRest],
+     *  [prewarm]), а не по просьбе чтения. Признак уезжает в заявку, и по нему
+     *  [synthFinished] решает, копить файл в [readyQueue] или считать синтез
+     *  осиротевшим. Раньше эту роль играл отдельный набор «текстов в работе» —
+     *  на одинаковых репликах он путал заявки. */
+    private fun synthToFile(text: String, pos: Long = -1L, part: Int = 0, prefetch: Boolean = false) {
         if (tts == null || !ready) return
         // Реплика, режим включён и движок реплик уже поднялся — заказываем у него.
         // Не поднялся (или отказал) — читает основной: чтение не ждёт. Исключение
@@ -3341,7 +3840,7 @@ class SpeechPlayer(context: Context) {
         }
         val looksLikeReply = replyOn && Roles.looksReplica(text)
         val wantReply = looksLikeReply && (!ownInstance || !replyBroken)
-        if (wantReply && ownInstance && waitForReply(text, pos)) return
+        if (wantReply && ownInstance && waitForReply(text, pos, part)) return
         // Пока ждали, движок мог отказать (не поднялся за отведённый срок) —
         // тогда фразу читает основной голос и второй экземпляр не поднимаем.
         val replyRole = wantReply && (!ownInstance || !replyBroken)
@@ -3373,7 +3872,9 @@ class SpeechPlayer(context: Context) {
         // голоса, и по этому числу плеер доводит тон, если ползунок сдвинули
         // (см. [exoSyncSpeed]).
         rememberFilePitch(file.name, pitchFor(role))
-        pending[id] = Pending(Pending.Kind.FILE, text, file, rate, role, pos, part)
+        pending[id] = Pending(Pending.Kind.FILE, text, file, rate, role, pos, part).apply {
+            this.prefetch = prefetch
+        }
         if (role == Pending.Role.REPLY) {
             replyPhrases++
             replyFiles.add(file.name)
@@ -3578,6 +4079,10 @@ class SpeechPlayer(context: Context) {
         awaitingPos = -1L
         directQueue.clear()
         directAskedAt.clear()
+        directAskedId = null
+        directSpeakingText = null
+        directSpeakingPos = -1L
+        directSpeakingPart = 0
         runCatching { tts?.stop() }
         runCatching { replyTts?.stop() }
         onEngineSilent?.invoke(from)
@@ -3606,6 +4111,8 @@ class SpeechPlayer(context: Context) {
             Pending.Kind.DIRECT -> {
                 // Фраза доиграла — «звучит сейчас» больше никого нет (29.09.2026).
                 directSpeakingText = null
+                directSpeakingPos = -1L
+                directSpeakingPart = 0
                 if (directAskedId == id) directAskedId = null
                 // Звучащая фраза прямой речи (или разовая страховка) закончилась.
                 retriesInRow = 0 // движок жив — счётчик перезапусков обнуляем
@@ -3640,6 +4147,10 @@ class SpeechPlayer(context: Context) {
                     val pos = if (p.pos >= 0L) p.pos else currentPos
                     if (ackLooksSilent(pos)) return
                 }
+                // 23.10.2026: единица ПРОЗВУЧАЛА — запоминаем её ключ. Прямой путь
+                // теперь работает с теми же ключами, что файловый, поэтому и здесь
+                // действует правило «вперёд единица звучит один раз» (см. [speakDirectQueued]).
+                noteUnitPlayed(p.pos, p.part)
                 if (hold != 0L) {
                     // Не даём чтению убежать вперёд: ждём, пока фраза могла бы
                     // прозвучать, и только потом двигаем место.
@@ -3747,7 +4258,6 @@ class SpeechPlayer(context: Context) {
                             emptySoundFails >= EMPTY_SOUND_HITS
                         if (give) {
                             f.delete()
-                            prefetchInFlight.remove(p.text)
                             if (forceMode != ExpertPrefs.MODE_AUTO) {
                                 Diag.log(
                                     appContext, "sound",
@@ -3764,7 +4274,7 @@ class SpeechPlayer(context: Context) {
                             // прямой путь, и место чтения от этого не сдвинется.
                             if (awaited) {
                                 speakDirectNow(
-                                    p.text, p.pos,
+                                    p.text, p.pos, p.part,
                                     "файл от движка пустой ($EMPTY_SOUND_HITS раза подряд) — " +
                                         "читаю фразу его голосом, дальше без файлов",
                                 )
@@ -3782,7 +4292,6 @@ class SpeechPlayer(context: Context) {
                         // фраза зазвучит голосом движка. Заготовку просто
                         // выбрасываем: её закажут снова, когда до неё дойдёт чтение.
                         f.delete()
-                        prefetchInFlight.remove(p.text)
                         Diag.log(
                             appContext, "sound",
                             "пустой файл не играю — фраза «${p.text.take(40)}» " +
@@ -3824,7 +4333,6 @@ class SpeechPlayer(context: Context) {
                     // чтение замолкало НАВСЕГДА (в журнале после 19:03:54 нет ни
                     // «играю фразу», ни «фраза доиграла», хотя файлы приходили).
                     // Фразу оставляем жданной: тогда переспрос доедет до [playFile].
-                    prefetchInFlight.remove(p.text)
                     f.delete()
                     Diag.log(
                         appContext, "sound",
@@ -3832,12 +4340,16 @@ class SpeechPlayer(context: Context) {
                     )
                     synthToFile(p.text, p.pos, p.part)
                 } else if (isAwaited(p)) {
-                    // Это тот текст, который уже попросили говорить.
+                    // Это та единица речи, которую уже попросили говорить.
                     awaitingPlayText = null
                     awaitingPos = -1L
                     awaitingPart = -1
-                    prefetchInFlight.remove(p.text)
-                    playFile(f, p.rate)
+                    // 23.10.2026: играем ровно ту единицу, за которую пришёл файл
+                    // ([Pending.key]), а не «текущую фразу чтения». Иначе при
+                    // задержке синтеза файл одной фразы вставал в список под ключом
+                    // другой, и проверка порядка ([expectedNextKey]) считала от
+                    // чужого места.
+                    playFile(p)
                     // 05.10.2026, журнал Сержа 17:12-17:14: «после первой фразы
                     // после переключения — большая пауза, дальше терпимо». Так и
                     // было: после смены голоса эта фраза приходит ФАЙЛОМ в ответ
@@ -3852,8 +4364,10 @@ class SpeechPlayer(context: Context) {
                     // ниже.
                     requestPrefetch()
                     exoTopUp()
-                } else if (prefetchInFlight.remove(p.text) != null) {
+                } else if (p.prefetch) {
                     // Упреждающий синтез завершился, пока его ещё не просили.
+                    // 23.10.2026: признак «заказана впрок» стоит в самой заявке
+                    // ([Pending.prefetch]) — по тексту его больше не выясняем.
                     // msg4077: засечка в лог — без неё по логу не видно, доспела
                     // заготовка или синтез молча повис.
                     // 07.10.2026: предел очереди теперь по потолку запаса в фразах
@@ -3904,7 +4418,7 @@ class SpeechPlayer(context: Context) {
                             appContext, "sound",
                             "файл пришёл без заявки (${f.name}), звука нет — играю его"
                         )
-                        playFile(f, p.rate)
+                        playFile(p)
                     } else {
                         if (!waiting && !soundPlaying()) {
                             Diag.log(
@@ -3962,13 +4476,15 @@ class SpeechPlayer(context: Context) {
             // через прямой путь (`speakDirectNow`) кладёт заявку МИМО очереди, и
             // проверка «голова ли это» такой отказ пропускала — читалка молчала, а
             // Серж ждал слов. Теперь отказ считается, если фраза сейчас звучит или
-            // её ждёт чтение.
-            val sounding = head || p.text == directSpeakingText || p.text == awaitingPlayText
+            // её ждёт чтение. 23.10.2026: сверка по КЛЮЧУ единицы (место + кусок).
+            val sounding = head ||
+                (p.key >= 0 && p.key == directSpeakingKey) ||
+                (p.key >= 0 && p.key == awaitingKey())
             if (sounding && noteSynthError()) return
             if (!head) return
             flushDirectQueue("движок вернул ошибку")
             retriesInRow = 0
-            reportDone()
+            reportDone(p.pos, p.part, lastOfPhrase(p.pos, p.part))
             return
         }
         Diag.log(appContext, "tts", "синтез в файл не удался (код $errorCode)")
@@ -3983,7 +4499,9 @@ class SpeechPlayer(context: Context) {
      *  «можно ли выбрать синтезатор для белорусского», а сперва надо понять, есть
      *  ли на устройстве такой голос вообще. Печатаем не больше восьми языков. */
     private fun logVoiceLanguages() {
-        val vs = runCatching { tts?.voices?.toList() }.getOrNull().orEmpty()
+        // 24.10.2026: берём ГОТОВЫЙ список (см. [voiceCache]) — сам запрос к
+        // движку отсюда убран: он вешал главный поток.
+        val vs = voiceCache
         if (vs.isEmpty()) {
             Diag.log(appContext, "tts", "голосов у движка нет вовсе")
             return
@@ -4045,6 +4563,26 @@ class SpeechPlayer(context: Context) {
             )
             retryAfterRestart = currentText
             retryAfterRestartPos = currentPos
+            retryAfterRestartPart = currentPart
+            start(enginePackage, rememberAwaiting = false)
+            return true
+        }
+        // 24.10.2026: «повторов запроса к сетевому голосу» (1…10, как у @Voice).
+        // Первый перезапуск выше — как было; сверх него у сетевого голоса есть
+        // ещё (netRetries − 1) попыток перечитать ту же фразу, прежде чем решим,
+        // что он не отвечает. Только у сетевого: локальный отвечает за доли
+        // секунды, и повторять его молчание бессмысленно (Серж 17.10.2026:
+        // «если локальный синтезатор, то не делаем такую большую паузу»).
+        val extraRetries = if (netSynth) (netRetries - 1).coerceAtLeast(0) else 0
+        if (silentInRow >= stopAt && silentRetries < extraRetries) {
+            silentRetries++
+            Diag.log(
+                appContext, "tts",
+                "сетевой голос молчит: повтор запроса $silentRetries из $extraRetries"
+            )
+            retryAfterRestart = currentText
+            retryAfterRestartPos = currentPos
+            retryAfterRestartPart = currentPart
             start(enginePackage, rememberAwaiting = false)
             return true
         }
@@ -4061,7 +4599,6 @@ class SpeechPlayer(context: Context) {
             currentText = null
             awaitingPlayText = null
             awaitingPos = -1L
-            prefetchInFlight.clear()
             readyQueue.clear()
             runCatching { tts?.stop() }
             runCatching { replyTts?.stop() }
@@ -4096,7 +4633,7 @@ class SpeechPlayer(context: Context) {
         // кнопкой «Попробовать снова» в окне, которое при этом показывается.
         if (coldPhrasePending && noteSynthError()) return
         speakDirectNow(
-            text, pos,
+            text, pos, currentPart,
             "страховка: движок говорит напрямую (media-кнопки на это время не наши)",
         )
     }
@@ -4118,15 +4655,14 @@ class SpeechPlayer(context: Context) {
      *  чтение уже ждёт: молчание хуже разового возврата к движковому звуку.
      *  [logLine] — что написать в журнал: у «страховки» и у перехода на прямой
      *  путь из-за пустого файла причины разные, и по журналу их надо различать. */
-    private fun speakDirectNow(text: String, pos: Long, logLine: String) {
-        prefetchInFlight.remove(text)
+    private fun speakDirectNow(text: String, pos: Long, part: Int = 0, logLine: String) {
         val wanted = text == awaitingPlayText
         awaitingPlayText = null
         val t = tts
         if (t == null || !ready || !wanted) return
         Diag.log(appContext, "tts", logLine)
         val id = reqSeq++
-        pending[id] = Pending(Pending.Kind.DIRECT, text, null)
+        pending[id] = Pending(Pending.Kind.DIRECT, text, null, pos = pos, part = part)
         directAskedAt[id] = SystemClock.elapsedRealtime()
         val r = runCatching { t.speak(Roles.stripped(text), TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
             .getOrDefault(TextToSpeech.ERROR)
@@ -4134,8 +4670,8 @@ class SpeechPlayer(context: Context) {
             pending.remove(id)
             // Совсем ничего не вышло. Сетевому движку даём ещё попытку: терять
             // фразу хуже, чем подождать (29.09.2026, просьба Сержа).
-            if (netSynth && rescueAgain(text)) return
-            if (!noteSilentPhrase(pos)) reportDone()
+            if (netSynth && rescueAgain(text, pos, part)) return
+            if (!noteSilentPhrase(pos)) reportDone(pos, part, lastOfPhrase(pos, part))
         } else {
             armDirectWatch(id)
         }
@@ -4160,7 +4696,7 @@ class SpeechPlayer(context: Context) {
      *  сначала синтез в файл ещё раз (движок мог просто залипнуть на минуту),
      *  потом прямую речь ещё раз. Локальные движки не трогаем — у них своя
      *  лестница мер и своё поведение. */
-    private fun rescueAgain(text: String): Boolean {
+    private fun rescueAgain(text: String, pos: Long = -1L, part: Int = 0): Boolean {
         val tries = if (rescueText == text) rescueTries + 1 else 1
         if (tries > RESCUE_TRIES) return false
         rescueText = text
@@ -4174,7 +4710,7 @@ class SpeechPlayer(context: Context) {
                 appContext, "tts",
                 "фразу потеряли — пробую ещё раз (попытка $tries из $RESCUE_TRIES): прямая речь"
             )
-            speakDirectAgain(text)
+            speakDirectAgain(text, pos, part)
             return true
         }
         Diag.log(
@@ -4184,28 +4720,34 @@ class SpeechPlayer(context: Context) {
         )
         if (tries == 1) {
             currentText = text
+            currentPos = pos
+            currentPart = part
             awaitingPlayText = text
-            synthToFile(text)
+            awaitingPos = pos
+            awaitingPart = part
+            synthToFile(text, pos, part)
         } else {
-            speakDirectAgain(text)
+            speakDirectAgain(text, pos, part)
         }
         return true
     }
 
-    /** Ещё раз прямая речь той же фразы (спасение, см. [rescueAgain]). */
-    private fun speakDirectAgain(text: String) {
+    /** Ещё раз прямая речь той же фразы (спасение, см. [rescueAgain]).
+     *  23.10.2026: с местом и куском — иначе спасённая фраза возвращалась в
+     *  очередь без ключа, и «доиграла» по ней место не двигала. */
+    private fun speakDirectAgain(text: String, pos: Long = -1L, part: Int = 0) {
         val t = tts ?: return
         // Прежняя очередь движку больше не нужна: фраза не зазвучала, а её место
         // займёт эта. Заодно tts.stop() выметает у движка то, что он ещё держит.
         flushDirectQueue("спасаю фразу заново")
         val id = reqSeq++
-        pending[id] = Pending(Pending.Kind.DIRECT, text, null)
+        pending[id] = Pending(Pending.Kind.DIRECT, text, null, pos = pos, part = part)
         directAskedAt[id] = SystemClock.elapsedRealtime()
         val r = runCatching { t.speak(Roles.stripped(text), TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
             .getOrDefault(TextToSpeech.ERROR)
         if (r != TextToSpeech.SUCCESS) {
             pending.remove(id)
-            reportDone()
+            reportDone(pos, part, lastOfPhrase(pos, part))
         } else {
             armDirectWatch(id)
         }
@@ -4535,7 +5077,7 @@ class SpeechPlayer(context: Context) {
                         "exo: позиция стоит ${EXO_POS_STUCK_HITS * EXO_POS_STEP_MS / 1000} с — " +
                             "фраза потерялась, говорю напрямую",
                     )
-                    fallbackDirect(currentText)
+                    fallbackDirect(currentText, currentPos, currentPart)
                     return
                 }
             }
@@ -4824,7 +5366,10 @@ class SpeechPlayer(context: Context) {
             requestPrefetch()
             return
         }
-        if (prefetchInFlight.containsKey(text)) {
+        // 23.10.2026: заявка по этой единице уже в пути? Спрашиваем по КЛЮЧУ
+        // (место + кусок), а не по тексту: две одинаковые реплики из разных мест
+        // книги — разные единицы, и по тексту вторая не нашла бы свою заявку.
+        if (fileInFlightAny(pos, part, text) != null) {
             // Заявка уже в пути: ждём её, файл придёт в synthFinished.
             awaitingPlayText = text
             awaitingPos = pos
@@ -4869,7 +5414,7 @@ class SpeechPlayer(context: Context) {
         // уже написанное. На круг выходило 15 с тишины и прямая речь: в журнале
         // предл. 61 и 62 так и пропали. Поэтому первой фразе без запаса даём окно
         // терпения ([armVoiceWarmup]) — тогда она просто доспевает.
-        if (coldStart(text)) {
+        if (coldStart(pos, part, text)) {
             // Первая фраза после начала чтения: пока она не прозвучала, человек
             // слышит ТОЛЬКО тишину, и ждать долго нельзя (17.10.2026, просьба
             // Сержа «не говори, что синтезатор не готов, долго жду»).
@@ -4899,8 +5444,8 @@ class SpeechPlayer(context: Context) {
      *  готового звука нет ни одной — ни в плеере, ни в очереди заготовок. Так
      *  бывает после прыжка, в начале чтения, после смены голоса и после
      *  настоящего «стоп» (не паузы). */
-    private fun coldStart(text: String): Boolean =
-        waitingSilently() && !prefetchInFlight.containsKey(text)
+    private fun coldStart(pos: Long, part: Int, text: String): Boolean =
+        waitingSilently() && fileInFlightAny(pos, part, text) == null
 
     /** Что вышло из попытки дописать единицу в список плеера. */
     private enum class AppendResult { ADDED, HELD, DROPPED }
@@ -5141,7 +5686,9 @@ class SpeechPlayer(context: Context) {
             exoPending.drop(1).forEach { count(it.pos) }
         }
         readyQueue.forEach { count(it.pos) }
-        prefetchInFlight.values.forEach { count(it) }
+        // 23.10.2026: заявки в работе берём из [pending] (отдельного набора
+        // «текстов в работе» больше нет) — по позиции и куску, а не по тексту.
+        pending.values.forEach { if (it.kind == Pending.Kind.FILE && !it.cancelled) count(it.pos) }
         return seen.size
     }
 
@@ -5161,7 +5708,9 @@ class SpeechPlayer(context: Context) {
             exoPending.drop(1).forEach { add(it.text, it.pos) }
         }
         readyQueue.forEach { add(it.text, it.pos) }
-        prefetchInFlight.forEach { (t, p) -> add(t, p) }
+        pending.values.forEach {
+            if (it.kind == Pending.Kind.FILE && !it.cancelled) add(it.text, it.pos)
+        }
         return sum
     }
 
@@ -5182,7 +5731,7 @@ class SpeechPlayer(context: Context) {
                 Diag.log(appContext, "sound", "exo: звук не начался — говорю фразу напрямую")
                 // 30.09.2026: заминка — в память окна «Не засыпать» (StallLog).
                 StallLog.record(appContext, "фраза не зазвучала за ${PLAY_STALL_MS / 1000} с")
-                fallbackDirect(text)
+                fallbackDirect(text, currentPos, currentPart)
             }
         }, PLAY_STALL_MS)
     }
@@ -5234,9 +5783,11 @@ class SpeechPlayer(context: Context) {
                 val t = awaitingPlayText ?: currentText
                 if (!t.isNullOrBlank()) {
                     val tPos = if (t == awaitingPlayText) awaitingPos else currentPos
+                    val tPart = if (t == awaitingPlayText && awaitingPart >= 0) awaitingPart else currentPart
                     awaitingPlayText = t
                     awaitingPos = tPos
-                    synthToFile(t, tPos)
+                    awaitingPart = tPart
+                    synthToFile(t, tPos, tPart)
                 }
             }
             armSoundWatch()
@@ -5288,7 +5839,12 @@ class SpeechPlayer(context: Context) {
             // берём скорость, роль и позицию для кэша сыгранных (07.10.2026).
             val done = exoPending.firstOrNull { it.file.name == item.file.name }
             // Фраза ушла из зеркала: она больше не «впереди».
-            if (exoPending.isNotEmpty() && exoPending.first().text == item.text) exoPending.removeFirst()
+            // 23.10.2026: снимаем по имени ФАЙЛА, а не по тексту. Имя файла
+            // уникально, а тексты в книге повторяются («— Да.»), и прежняя сверка
+            // по тексту снимала не тот элемент зеркала — все следующие pos/part
+            // съезжали, и порядок разъезжался (см. [expectedNextKey]).
+            val at = exoPending.indexOfFirst { it.file.name == item.file.name }
+            if (at >= 0) exoPending.removeAt(at)
             dropExoPositionWatch() // фраза кончилась — сторожить её позицию больше нечего
             // 08.10.2026: какая ЕДИНИЦА речи доиграла — по ключу, а не по тексту.
             // Это же число уходит чтению: по нему оно решает, можно ли двигать
@@ -5364,22 +5920,32 @@ class SpeechPlayer(context: Context) {
                 return
             }
             awaitingPlayText = text
-            synthToFile(text)
+            awaitingPos = currentPos
+            awaitingPart = currentPart
+            synthToFile(text, currentPos, currentPart)
             armExoStartWatch(text)
             armSoundWatch()
         }
     }
 
-    /** Сыграть готовый файл. [rate] — скорость, которой он сделан: её храним
-     *  вместе с играющим файлом, чтобы пауза не выдала прежний темп за текущий
-     *  (см. [pauseKeepingPhrase]). */
-    private fun playFile(f: File, rate: Float = speed) {
-        val t = currentText ?: return
+    /** Сыграть готовый файл заявки [p].
+     *
+     *  23.10.2026, рефакторинг: играем ровно ТУ единицу речи, за которую пришёл
+     *  файл, — с её местом и куском ([Pending.key]). Раньше здесь брались
+     *  глобальные `currentText`/`currentPos`/`currentPart`, то есть «та фраза, что
+     *  чтение попросило последней». Пока фраза синтезировалась, чтение могло
+     *  уйти вперёд или назад — и в зеркало списка плеера ([exoPending]) вставал
+     *  НЕВЕРНЫЙ ключ. Дальше проверка порядка ([expectedNextKey]) считала от
+     *  чужого места, правильно стоящая заготовка уходила в `HELD`, и текст мог
+     *  прозвучать второй раз. Скорость файла тоже берём из заявки: по ней пауза
+     *  не выдаст прежний темп за нынешний (см. [pauseKeepingPhrase]). */
+    private fun playFile(p: Pending) {
+        val f = p.file ?: return
         // Звук пошёл — движок отвечает, счётчик молчащих фраз обнуляем
         // (см. [noteSilentPhrase]).
         silentInRow = 0
         silentFromPos = -1L
-        exoPlay(t, f, rate, 0L, currentPos, currentPart)
+        exoPlay(p.text, f, p.rate, 0L, p.pos, p.part)
     }
 
     /** Выбросить всё, что заготовлено впрок (msg5604). Зовётся, когда на ходу
@@ -5389,7 +5955,6 @@ class SpeechPlayer(context: Context) {
      *  осиротеет и будет удалён — он тоже прежним голосом. Текущий звук не
      *  трогаем: его перечитает читалка ([ReaderEngine] restartAfterSwitch). */
     fun dropPrepared() {
-        prefetchInFlight.clear()
         awaitingPlayText = null
         awaitingPart = -1
         prewarmOnly = false
@@ -5450,6 +6015,8 @@ class SpeechPlayer(context: Context) {
                 }
             }
             directSpeakingText = null
+            directSpeakingPos = -1L
+            directSpeakingPart = 0
             runCatching { tts?.stop() }
             runCatching { replyTts?.stop() }
             Diag.log(
@@ -5477,6 +6044,8 @@ class SpeechPlayer(context: Context) {
         runCatching { tts?.stop() }
         runCatching { replyTts?.stop() }
         directSpeakingText = null
+        directSpeakingPos = -1L
+        directSpeakingPart = 0
         directAskedId = null
         Diag.log(
             appContext, "tts",
@@ -5503,22 +6072,24 @@ class SpeechPlayer(context: Context) {
 
     /** Собственный аудиоплеер не смог сыграть файл (редкий случай) — чтобы
      *  чтение не замолчало, произносим текст напрямую движком. На время этой
-     *  фразы media-кнопки будут не наши; по её окончании чтение продолжается. */
-    private fun fallbackDirect(text: String?) {
+     *  фразы media-кнопки будут не наши; по её окончании чтение продолжается.
+     *  23.10.2026: единицу называем с местом и куском — тогда её «доиграла»
+     *  относится к своему месту в книге, а не «место неизвестно». */
+    private fun fallbackDirect(text: String?, pos: Long = -1L, part: Int = 0) {
         if (text.isNullOrBlank()) return
         val t = tts
         if (t == null || !ready) {
             // Совсем ничего не вышло — пропускаем предложение, чтение не встаёт.
-            reportDone()
+            reportDone(pos, part, lastOfPhrase(pos, part))
             return
         }
         val id = reqSeq++
-        pending[id] = Pending(Pending.Kind.DIRECT, text, null)
+        pending[id] = Pending(Pending.Kind.DIRECT, text, null, pos = pos, part = part)
         val r = runCatching { t.speak(Roles.stripped(text), TextToSpeech.QUEUE_FLUSH, null, id.toString()) }
             .getOrDefault(TextToSpeech.ERROR)
         if (r != TextToSpeech.SUCCESS) {
             pending.remove(id)
-            reportDone()
+            reportDone(pos, part, lastOfPhrase(pos, part))
         } else {
             armDirectWatch(id)
         }
@@ -5605,12 +6176,16 @@ class SpeechPlayer(context: Context) {
             var progressed = false
             for ((nextText, nextPos, nextPart) in frags) {
                 if (nextText.isBlank()) continue
-                if (nextText == currentText) continue
-                if (readyQueue.any { it.pos == nextPos && it.key == Units.key(nextPos, nextPart) }) continue
-                if (exoPending.any { it.key == Units.key(nextPos, nextPart) }) continue
-                if (prefetchInFlight.containsKey(nextText)) continue
-                prefetchInFlight[nextText] = nextPos
-                synthToFile(nextText, nextPos, nextPart)
+                // 23.10.2026: сверки только по КЛЮЧУ единицы речи (место + кусок).
+                // Сверка `nextText == currentText` выброшена: она считала «уже
+                // читается» всякую фразу с тем же текстом из другого места книги
+                // («— Да.» в диалоге), и такая фраза не заказывалась вовсе.
+                val nextKey = Units.key(nextPos, nextPart)
+                if (nextKey >= 0 && nextKey == Units.key(currentPos, currentPart)) continue
+                if (readyQueue.any { it.key == nextKey }) continue
+                if (exoPending.any { it.key == nextKey }) continue
+                if (fileInFlight(nextKey) != null) continue
+                synthToFile(nextText, nextPos, nextPart, prefetch = true)
                 issued++
                 progressed = true
             }
@@ -5623,7 +6198,7 @@ class SpeechPlayer(context: Context) {
         if (issued > 0) {
             Diag.log(
                 appContext, "sound",
-                "заказал заготовок: $issued (в работе ${prefetchInFlight.size} из $maxInFlight; " +
+                "заказал заготовок: $issued (в работе ${fileInFlightCount()} из $maxInFlight; " +
                     "впереди ${aheadCharsAhead()} знаков из ${aheadCharsTarget()}, " +
                     "фраз ${phrasesAhead()} из ${aheadPhraseCap()})"
             )
@@ -5655,7 +6230,6 @@ class SpeechPlayer(context: Context) {
         lastAskedPart = -1
         directAskedAt.clear()
         ackSilentInRow = 0
-        prefetchInFlight.clear()
         prewarmOnly = false
         synthMisses.clear()
         firstPrepFromMs = 0L // засечка «сколько готовит первую фразу» — см. [noteFirstPrep]
@@ -5663,6 +6237,9 @@ class SpeechPlayer(context: Context) {
         directWaitReply = false
         directAskedId = null
         directSpeakingText = null
+        directSpeakingPos = -1L
+        directSpeakingPart = 0
+        currentRest = emptyList()
         lastDirectQueuedId = null
         forgetReplyWait()
         clearPrefetch()
@@ -5682,17 +6259,15 @@ class SpeechPlayer(context: Context) {
         // Заявки, которые ещё в пути, тоже снимаем: иначе их файлы приедут
         // позже и попадут в очередь как заготовки для фраз, которых чтение уже
         // не ждёт (при нескольких заявках в работе это стало заметнее).
-        if (prefetchInFlight.isNotEmpty()) {
-            val drop = HashSet(prefetchInFlight.keys)
-            prefetchInFlight.clear()
-            pending.entries.removeAll { (_, p) ->
-                if (p.kind == Pending.Kind.FILE && drop.contains(p.text)) {
-                    p.cancelled = true
-                    runCatching { p.file?.delete() }
-                    true
-                } else {
-                    false
-                }
+        // 23.10.2026: «впрок» — признак самой заявки ([Pending.prefetch]);
+        // по тексту больше не сверяем, одинаковые фразы путались.
+        pending.entries.removeAll { (_, p) ->
+            if (p.kind == Pending.Kind.FILE && p.prefetch && !p.cancelled) {
+                p.cancelled = true
+                runCatching { p.file?.delete() }
+                true
+            } else {
+                false
             }
         }
     }
@@ -5742,7 +6317,9 @@ class SpeechPlayer(context: Context) {
         val t = tts
         if (t == null || !ready) return
         if (currentText != null || awaitingPlayText != null || soundPlaying()) return
-        if (prefetchInFlight.containsKey(text)) return
+        // 23.10.2026: «уже заказана» — сверка по КЛЮЧУ единицы речи.
+        val key = Units.key(pos, 0)
+        if (fileInFlightAny(pos, 0, text) != null) return
         // Роль этой фразы знаем так же, как её узнает synthToFile: реплика —
         // значит своя скорость, и «уже готово» надо сверять с ней же.
         val role = if (replyOn && !replyBroken && Roles.looksReplica(text)) {
@@ -5750,13 +6327,13 @@ class SpeechPlayer(context: Context) {
         } else {
             Pending.Role.MAIN
         }
-        if (readyQueue.any { it.text == text && it.rate == rateFor(role) }) return
-        if (keptPhrase?.let { it.text == text && it.rate == rateFor(role) } == true) return
+        // Куски этой фразы в очереди — сверяем по ключу (0), текст не опознание.
+        if (readyQueue.any { it.key == key && it.rate == rateFor(role) }) return
+        if (keptPhrase?.key == key && keptPhrase?.rate == rateFor(role)) return
         clearPrefetch()
-        prefetchInFlight[text] = pos
         prewarmOnly = true
         Diag.log(appContext, "sound", "готовлю первую фразу заранее (${text.length} знаков)")
-        synthToFile(text, pos)
+        synthToFile(text, pos, 0, prefetch = true)
     }
 
     /** Заказать остальные куски ТЕКУЩЕЙ фразы (реплики после слов автора) сразу,
@@ -5774,34 +6351,68 @@ class SpeechPlayer(context: Context) {
      *
      *  08.10.2026: куски нумеруются (см. [Units.key]) — первый здесь получает
      *  номер 1, потому что нулевой (сама фраза) уже отдан в [speak]. Без номера
-     *  хвост фразы неотличим от следующего предложения, и порядок звука ехал. */
+     *  хвост фразы неотличим от следующего предложения, и порядок звука ехал.
+     *
+     *  23.10.2026. Два правила. (1) Сверки — только по КЛЮЧУ: `rest == currentText`
+     *  выброшена, она выкидывала кусок, дословно совпадающий с головой фразы.
+     *  (2) В ПРЯМОМ пути куски текущей фразы тоже заказываются заранее — раньше
+     *  прямой путь их не заказывал, и первый кусок по завершении вызывал
+     *  `flushDirectQueue` (`tts.stop()`) посреди уже начавшейся следующей фразы:
+     *  на слух — фраза обрывается и начинается заново. Обычно здесь ничего не
+     *  заказывается: их уже отдал [speak] вместе с головой. */
     fun prefetchRest(fragments: List<String>, pos: Long) {
-        if (directMode) return
         var part = if (pos >= 0 && pos == lastAskedPos) lastAskedPart + 1 else 1
+        if (directMode) {
+            for (rest in fragments) {
+                registerParts(pos, part + 1)
+                if (rest.isBlank()) {
+                    part++
+                    continue
+                }
+                val key = Units.key(pos, part)
+                if (directQueue.any { pending[it]?.key == key }) {
+                    part++
+                    continue
+                }
+                // Порядок очереди движка — это порядок звука: дописывать можно
+                // только в КОНЕЦ. Если за хвостом очереди уже стоят единицы
+                // ДАЛЬШЕ этой, дописывать нельзя — кусок прозвучал бы не на своём
+                // месте. Такой кусок закажет чтение, когда дойдёт до него.
+                val tailKey = directQueue.lastOrNull()?.let { pending[it]?.key } ?: -1L
+                if (tailKey > key) {
+                    Diag.log(
+                        appContext, "sound",
+                        "кусок ${Units.label(pos, part)} не дописываю: очередь движка уже ушла вперёд"
+                    )
+                    return
+                }
+                if (!queueDirect(rest, pos, part)) return
+                part++
+            }
+            if (fragments.isNotEmpty()) registerParts(pos, part)
+            topUpDirectQueue()
+            return
+        }
         for (rest in fragments) {
             registerParts(pos, part + 1)
             if (rest.isBlank()) {
                 part++
                 continue
             }
-            if (rest == currentText) {
+            val key = Units.key(pos, part)
+            if (readyQueue.any { it.key == key }) {
                 part++
                 continue
             }
-            if (readyQueue.any { it.key == Units.key(pos, part) }) {
+            if (exoPending.any { it.key == key }) {
                 part++
                 continue
             }
-            if (exoPending.any { it.key == Units.key(pos, part) }) {
+            if (fileInFlight(key) != null) {
                 part++
                 continue
             }
-            if (prefetchInFlight.containsKey(rest)) {
-                part++
-                continue
-            }
-            prefetchInFlight[rest] = pos
-            synthToFile(rest, pos, part)
+            synthToFile(rest, pos, part, prefetch = true)
             part++
         }
     }
@@ -5919,7 +6530,6 @@ class SpeechPlayer(context: Context) {
      *  не трогаем: он уже звучит. Фразу в работе ([awaitingPlayText]) тоже не
      *  снимаем — её судьбу решит [synthFinished] по скорости самого файла. */
     private fun dropStaleRate() {
-        prefetchInFlight.clear()
         prewarmOnly = false
         clearPrefetch()
         // 29.09.2026 (журнал 18:02, «покрутил всё»): в новом пути заготовки уезжают
@@ -5980,6 +6590,15 @@ class SpeechPlayer(context: Context) {
          *  08.10.2026, движок-прослойка тестера: отвечал «готово» мгновенно, и
          *  чтение уходило вперёд на десятки предложений. */
         private const val ACK_SILENT_STOP = 5
+
+        /** Проверка «сломанный движок» (24.10.2026): через сколько миллисекунд
+         *  после заказа фразы рапортуем «готово», не отдавая её движку. Мгновенно
+         *  (ноль) не годится: настоящий сломанный движок всё-таки тратит на ответ
+         *  десятки миллисекунд, и защита должна видеть правдоподобный срок. */
+        private const val BROKEN_ENGINE_ACK_MS = 25L
+
+        /** Сколько строк про проверку «сломанный движок» писать в журнал за сессию. */
+        private const val BROKEN_ENGINE_LOG_MAX = 12
 
         /** Фраза короче этого (значащих знаков) в счёт подозрительных не идёт: у
          *  коротких реплик расчётное время слишком мало, чтобы что-то утверждать. */
@@ -6105,6 +6724,12 @@ class SpeechPlayer(context: Context) {
          *  топталась на своём начале. Семьсот миллисекунд — человек успевает
          *  отпустить кнопку или перестать двигать ползунок. */
         private const val DIRECT_RATE_SETTLE_MS = 700L
+
+    /** 24.10.2026: границы срока ожидания сетевого голоса. По умолчанию у @Voice
+     *  15 с — и это ровно столько, сколько мы ждём сетевой голос, прежде чем
+     *  считать, что он не ответил. Больше 60 с ждать бессмысленно: человек решит,
+     *  что чтение встало. */
+    private const val NET_TIMEOUT_MAX_MS = 60_000L
 
         /** Границы срока по длине фразы в прямом чтении: меньше шести секунд ждать
          *  нечего, а больше сорока пяти — уже ни к чему (наша фраза ≤220 знаков).

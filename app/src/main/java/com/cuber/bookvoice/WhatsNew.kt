@@ -41,6 +41,13 @@ object WhatsNew {
     private const val PREFS = "reader"
     private const val KEY_SEEN = "whats_new_seen_code"
 
+    /** 24.10.2026: подпись увиденного — «код выпуска: число пунктов». Зачем: в
+     *  пробах versionCode не меняется, и добавленные в том же выпуске пункты
+     *  иначе не показались бы никому, кроме тех, кто ставит новую версию. Теперь
+     *  окно выходит и на пробе — ровно один раз на НОВЫЙ набор пунктов, а не на
+     *  каждую сборку (иначе тестер получал бы его поверх каждого прогона). */
+    private const val KEY_SEEN_SIG = "whats_new_seen_sig"
+
     /** Новости по выпускам: versionCode → пункты (строковые ресурсы). Порядок
      *  вставки — порядок показа. Выпуск без записи здесь просто молчит. */
     private val NOTES: Map<Int, List<Int>> = linkedMapOf(
@@ -182,18 +189,23 @@ object WhatsNew {
             R.string.whats_new_234_5,
             R.string.whats_new_234_6,
         ),
-        // 0.7.0 (versionCode 253): сводный блок с 0.6.0 — разбор всех форматов,
-        // главы PDF по кеглю, оглавление, проценты скачивания, ровное чтение.
-        // Текст утверждён Сержем 16.10.2026 (work/whatsnew-253.txt).
+        // 24.10.2026: способы чтения поменялись местами — обычное чтение теперь
+        // голосом движка, как у обычных читалок. Просьба Сержа: показать РОВНО
+        // ДВА пункта про это и больше ничего («две строки, больше ничего не надо»).
+        // Прежний сводный блок 0.7.0 (восемь пунктов про разбор книг, PDF и
+        // оглавление) из окна убран по той же просьбе.
+        // Ключ 253 стоит ниже ключа 234 нарочно: те, кто обновляется с 0.6.0,
+        // увидят ровно эти две строки. Для проб versionCode не меняется, поэтому
+        // тот же набор продублирован и здесь — иначе окно тестерам не вышло бы
+        // вовсе (подпись набора считается по числу пунктов, см. [sig]).
         253 to listOf(
-            R.string.whats_new_253_1,
-            R.string.whats_new_253_2,
-            R.string.whats_new_253_3,
-            R.string.whats_new_253_4,
-            R.string.whats_new_253_5,
-            R.string.whats_new_253_6,
-            R.string.whats_new_253_7,
-            R.string.whats_new_253_8,
+            R.string.whats_new_254_1,
+            R.string.whats_new_254_2,
+        ),
+        // Тот же текст на выпуск 254: его увидят те, кто обновится уже с 0.7.0.
+        254 to listOf(
+            R.string.whats_new_254_1,
+            R.string.whats_new_254_2,
         ),
     )
 
@@ -225,9 +237,14 @@ object WhatsNew {
         if (p.contains(KEY_SEEN)) return
         if (p.all.isNotEmpty()) return // приложение уже работало — это обновление
         val code = currentCode(c)
-        p.edit().putInt(KEY_SEEN, code).apply()
+        p.edit().putInt(KEY_SEEN, code).putString(KEY_SEEN_SIG, sig(c, code)).apply()
         Diag.log(c, "whatsnew", "первый запуск после установки: запомнил версию $code")
     }
+
+    /** Подпись «этот набор пунктов уже видели»: код выпуска + число пунктов.
+     *  Так окно выходит один раз на НОВЫЙ набор, даже если versionCode не менялся
+     *  (пробы), и не выходит повторно на том же. */
+    private fun sig(c: Context, code: Int): String = "$code:${NOTES[code]?.size ?: 0}"
 
     /** Пункты всех выпусков новее [seen] и не новее [cur]. */
     private fun notesBetween(seen: Int, cur: Int): List<Int> =
@@ -243,11 +260,16 @@ object WhatsNew {
     fun showOnLaunch(act: Activity, onClosed: (Boolean) -> Unit): Boolean {
         val cur = currentCode(act)
         val seen = prefs(act).getInt(KEY_SEEN, 0)
-        if (cur == seen) return false
+        // 24.10.2026: подпись набора пунктов. Код версии у проб не меняется, и без
+        // подписи добавленные в том же выпуске пункты не показались бы никому
+        // (просьба Сержа: «чтобы тестеры прочитали и поняли, что происходит»).
+        val sig = sig(act, cur)
+        val seenSig = prefs(act).getString(KEY_SEEN_SIG, null)
+        if (cur == seen && seenSig == sig) return false
         if (cur < seen) {
             // Откат на более старую версию: молча перезаписываем, иначе после
             // возврата на новую окошко показалось бы второй раз.
-            prefs(act).edit().putInt(KEY_SEEN, cur).apply()
+            prefs(act).edit().putInt(KEY_SEEN, cur).putString(KEY_SEEN_SIG, sig).apply()
             Diag.log(act, "whatsnew", "версия старше виденной ($cur < $seen) — молча перезаписал")
             return false
         }
@@ -259,18 +281,23 @@ object WhatsNew {
             Diag.log(act, "whatsnew", "книга уже открыта — окошко не показываю и не помечаю")
             return false
         }
-        val texts = notesBetween(seen, cur).map { act.getString(it) }
+        // Обычное обновление — все выпуски после виденного. Тот же код версии, но
+        // ДРУГОЙ набор пунктов (проба с новыми строками) — показываем набор текущего
+        // выпуска целиком: человек должен прочитать, что произошло.
+        val fresh = notesBetween(seen, cur)
+        val texts = (if (fresh.isNotEmpty()) fresh else (NOTES[cur] ?: emptyList()))
+            .map { act.getString(it) }
         if (texts.isEmpty()) {
             // Выпуск без новостей — отмечаем, чтобы не проверять его каждый запуск.
-            prefs(act).edit().putInt(KEY_SEEN, cur).apply()
+            prefs(act).edit().putInt(KEY_SEEN, cur).putString(KEY_SEEN_SIG, sig).apply()
             Diag.log(act, "whatsnew", "новостей на $cur нет — просто отметил")
             return false
         }
         if (act.isFinishing || act.isDestroyed) return false
         // Помечаем ДО показа: окошко одноразовое, а показанное дважды хуже
         // пропущенного (человек не поймёт, почему оно вернулось).
-        prefs(act).edit().putInt(KEY_SEEN, cur).apply()
-        Diag.log(act, "whatsnew", "показываю «Что нового» ($seen → $cur), пунктов ${texts.size}")
+        prefs(act).edit().putInt(KEY_SEEN, cur).putString(KEY_SEEN_SIG, sig).apply()
+        Diag.log(act, "whatsnew", "показываю «Что нового» ($seen → $cur, подпись $sig), пунктов ${texts.size}")
         show(act, texts, onClosed)
         return true
     }

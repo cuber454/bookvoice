@@ -819,6 +819,15 @@ class LibraryActivity(private val act: SectionActivity) {
         // msg2713/2717: сортировка у каждой вкладки своя и гибкая — шесть режимов
         // с умным вторичным порядком внутри (см. sortBooks).
         val sorted = sortBooks(shown, sortMode)
+        // 24.10.2026: в журнал — чем на самом деле отсортирована полка. Серж:
+        // «она всё равно стоит второй, хотя я её читаю» — по этой строке видно,
+        // какая вкладка открыта, какая у неё сортировка и что легло первым.
+        // Без неё приходилось угадывать по экрану.
+        Diag.log(
+            act, "shelf",
+            "полка: вкладка $filterMode, сортировка $sortMode, книг ${sorted.size}; " +
+                "первая «${sorted.firstOrNull()?.displayTitle ?: "—"}»",
+        )
         adapter.submit(sorted)
         // Полка построена на этом экземпляре — L1b может не трогать её при
         // возврате из ридера (msg1585: свежий экран без refresh остался бы пустым).
@@ -891,9 +900,16 @@ class LibraryActivity(private val act: SectionActivity) {
      *  одно: у книги, которую НИ РАЗУ не открывали, цифры нет вовсе — на полке не
      *  нужен ряд «0%», по нему не видно, что читается, а что нет. Начатая книга
      *  с ещё не посчитанным процентом показывается как 0%, дочитанная — как 100.
-     *  Значение только для глаз: диктору процент приходит текстом карточки. */
+     *  Значение только для глаз: диктору процент приходит текстом карточки.
+     *
+     *  24.10.2026: «дочитана» — это ПРОЦЕНТ, а не только статус. Иначе книга,
+     *  которую открыли заново с начала, оставалась на полке со 100%, хотя внутри
+     *  стоит ноль (жалоба Сержа: «в библиотеке 100% прочитано, а внутри ноль»).
+     *  Отметку снимает [ReaderEngine.writePlaceToRecord], когда человек уходит от
+     *  конца книги; здесь — страховка для записей, сделанных до этой правки. */
     private fun coverPercent(rec: BookRecord): Int? = when {
-        rec.status == BookRecord.STATUS_FINISHED -> 100
+        rec.status == BookRecord.STATUS_FINISHED && rec.readPct >= FINISHED_PCT -> 100
+        rec.status == BookRecord.STATUS_FINISHED -> rec.readPct.coerceIn(0, 99)
         rec.readPct > 0 -> rec.readPct.coerceIn(0, 100)
         rec.status == BookRecord.STATUS_READING -> 0
         rec.chapter > 0 || rec.sentence > 0 -> 0
@@ -907,7 +923,13 @@ class LibraryActivity(private val act: SectionActivity) {
      *  книги, когда ридер пересчитает позицию. */
     private fun progressText(rec: BookRecord): String? {
         val pct: Int? = when {
-            rec.status == BookRecord.STATUS_FINISHED -> 100
+            // 24.10.2026: 100% — только когда книга и правда стоит в конце
+            // (процент 99-100). Книга «дочитана», но открыта заново с начала,
+            // теперь показывает своё настоящее место (жалоба Сержа: «в библиотеке
+            // 100% прочитано, а внутри книжки ноль»). Отметку «дочитана» снимает
+            // [ReaderEngine.writePlaceToRecord] при первом же сохранении места.
+            rec.status == BookRecord.STATUS_FINISHED && rec.readPct >= FINISHED_PCT -> 100
+            rec.status == BookRecord.STATUS_FINISHED -> rec.readPct.coerceIn(0, 99)
             rec.readPct > 0 -> rec.readPct.coerceIn(0, 100)
             rec.chapter > 0 || rec.sentence > 0 -> null
             else -> 0
@@ -922,7 +944,10 @@ class LibraryActivity(private val act: SectionActivity) {
             act, "shelf",
             "строка «${rec.displayTitle}» [${rec.name}, ${uriTail(rec.uri)}]: " +
                 "запись глава ${rec.chapter}, предл. ${rec.sentence}, " +
-                "процент ${rec.readPct} → " + (pct?.let { "$it%" } ?: "без строки прогресса")
+                "процент ${rec.readPct} → " + (pct?.let { "$it%" } ?: "без строки прогресса") +
+                // 24.10.2026: статус и время открытия — чтобы разбирать порядок
+                // полки по журналу, а не по экрану («почему моя книга вторая»).
+                "; статус ${rec.status}, открыта ${rec.lastOpenedAt}"
         )
         return pct?.let { getString(R.string.lib_progress_pct, it) }
     }
@@ -1599,6 +1624,15 @@ class LibraryActivity(private val act: SectionActivity) {
             val msg = plurals(R.plurals.all_files_hidden_books, external)
             toast(msg)
             binding.tvTitle.announceForAccessibility(msg)
+            // 24.10.2026, просьба Сержа («мне нужно, чтобы приложение само зашло,
+            // куда нужно, а я просто нажал „разрешить“»): не только говорим, но и
+            // открываем системный экран доступа. Пауза — чтобы объявление успело
+            // начаться: экран настроек забирает звук, и слова обрезались бы.
+            // Один раз за запуск (признак accessMissingTold выше), иначе человек,
+            // вернувшийся без доступа, попадал бы туда снова и снова.
+            binding.tvTitle.postDelayed({
+                if (!act.isFinishing && !act.isDestroyed) AllFiles.openSettings(act)
+            }, 1200)
         }
         return true
     }
@@ -2755,6 +2789,11 @@ class LibraryActivity(private val act: SectionActivity) {
         // в конец: сохранённые в prefs номера прошлых версий должны читаться
         // прежними режимами (tabSort откатывает неизвестное на «по названию»).
         internal const val SORT_SERIES = 7
+
+        /** С какого процента книгу считаем дочитанной при показе на полке
+         *  (24.10.2026). Не 100: у книги, где чтение дошло до последнего
+         *  предложения, процент считается по «линейке» ползунка и может быть 98-99. */
+        internal const val FINISHED_PCT = 99
 
         // Персональная сортировка вкладки (msg2713/2717): ключ prefs «sort_tab_<mode>».
         // Ставится долгим удержанием вкладки (см. showSortDialog); пока её нет —
