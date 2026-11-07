@@ -10,9 +10,12 @@
      целиком (иначе он прочитал бы текст дважды). ExploreByTouchHelper, впрочем,
      всё равно делает представление фокусируемым — так требует его устройство.
 
-     Набор строки — как на веб-странице (msg6340/6342, просьба Сергея): выключка
-     по обоим краям (justificationMode, API 26+) и переносы по правилам языка
-     (hyphenationFrequency). На старых системах атрибуты просто не применяются. -->
+     Набор строки — как на веб-странице (msg6340/6342, просьба Сергея): переносы
+     по правилам языка (hyphenationFrequency). ВЫКЛЮЧКА ПО ОБОИМ КРАЯМ СНЯТА
+     29.10.2026 (просьба Сержа, когда он спросил про книжный вид): в узкой колонке
+     она растягивает пробелы и делает «дырки» между словами. Так печатает
+     большинство электронных читалок — правый край остаётся рваным, а строки
+     читаются ровнее. -->
 <com.cuber.bookvoice.ParagraphView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/tvParagraph"
     android:layout_width="match_parent"
@@ -20,7 +23,6 @@
     android:focusable="false"
     android:hyphenationFrequency="normal"
     android:importantForAccessibility="yes"
-    android:justificationMode="inter_word"
     android:lineSpacingMultiplier="1.3"
     android:paddingStart="4dp"
     android:paddingTop="10dp"

@@ -494,19 +494,6 @@ object PdfParser {
 
     /** Сколько слов в начале набрано с заглавной буквы. Оставлено для справки:
      *  на телефоне регистр строк не сохраняется, и по нему судить нельзя. */
-    private fun capitalWords(k: String): Int {
-        var n = 0
-        var atWord = true
-        for (c in k) {
-            if (c == ' ') {
-                atWord = true
-                continue
-            }
-            if (atWord && c.isUpperCase()) n++
-            atWord = false
-        }
-        return n
-    }
 
     /** Строка такой длины, повторённая на многих страницах, — колонтитул; длиннее
      *  не трогаем (это уже текст книги). */

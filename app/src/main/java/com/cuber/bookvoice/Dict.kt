@@ -100,9 +100,6 @@ object Dict {
 
     fun enabled(c: Context): Boolean = prefs(c).getBoolean(KEY_ON, false)
 
-    fun setEnabled(c: Context, on: Boolean) {
-        prefs(c).edit().putBoolean(KEY_ON, on).apply()
-    }
 
     // ——— Книжные правила (28.09.2026) ———
 

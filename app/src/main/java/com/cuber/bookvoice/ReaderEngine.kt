@@ -922,16 +922,82 @@ internal object ReaderEngine {
     }
 
     /** Строка позиции для озвучки после шага кнопкой гарнитуры на паузе — та же,
-     *  что окно показывает в строке позиции (updatePosition). */
-    private fun positionPhrase(): String {
+     *  что окно показывает в строке позиции (updatePosition): без номеров
+     *  предложений (30.10.2026, просьба Сержа: «глава пятнадцатая из сорока — и
+     *  всё»). */
+    private fun positionPhrase(): String = chapterPlaceLine(withSentence = false)
+
+    /** Номер главы, каким он НАПЕЧАТАН в книге, по её названию (30.10.2026).
+     *
+     *  Жалоба Сержа: «пишет глава восьмая, а в книге, по-моему, пятая». Счёт
+     *  разбора — это число КУСКОВ ФАЙЛА: титул, выходные данные, предисловие
+     *  считаются такими же главами, и номер уезжает на три. В самой книге глава
+     *  подписана — «глава 5. с моих слов записано верно», — оттуда и берём число.
+     *  Номера нет — null, тогда всё по-прежнему: счёт разбора. */
+    private fun printedChapterNo(ch: Chapter): Int? {
+        if (ch.autoTitle) return null
+        val t = ch.title?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val m = PRINTED_CHAPTER_NO.find(t) ?: return null
+        return m.groupValues[1].toIntOrNull()?.takeIf { it in 1..9999 }
+    }
+
+    /** Номера глав по книге считаем один раз на книгу: строку места окно
+     *  переписывает на каждой фразе, а регулярка на тысяче глав — это работа на
+     *  главном потоке. */
+    private fun refreshPrintedChapterNos() {
+        val bk = book ?: return
+        if (printedNosBook === bk) return
+        val arr = IntArray(bk.chapters.size)
+        var numbered = 0
+        for ((i, ch) in bk.chapters.withIndex()) {
+            val no = printedChapterNo(ch) ?: continue
+            arr[i] = no
+            numbered++
+        }
+        printedNosArr = arr
+        printedNosTotal = numbered
+        printedNosBook = bk
+    }
+
+    private var printedNosBook: BookDocument? = null
+    private var printedNosArr: IntArray = IntArray(0)
+    private var printedNosTotal: Int = 0
+
+    /** Строка места для экрана, карточки и озвучки: «Глава 5 из 21» — по номеру
+     *  из книги, а если номеров в названиях нет, прежняя «Глава 8 из 25» по счёту
+     *  разбора. [withSentence] добавляет «· N из M» предложений главы. */
+    fun chapterPlaceLine(withSentence: Boolean = true): String {
         val bk = book ?: return ""
+        refreshPrintedChapterNos()
+        val no = printedNosArr.getOrNull(chapterIdx)?.takeIf { it > 0 }
+        val head = when {
+            no != null -> "Глава $no из $printedNosTotal"
+            // Книга нумерует главы, а у этой номера нет (предисловие, титул,
+            // выходные данные). Тогда называем её СВОИМ названием: «предисловие»
+            // понятнее, чем «глава третья».
+            printedNosTotal > 0 -> {
+                val t = bk.chapters.getOrNull(chapterIdx)
+                    ?.takeIf { !it.autoTitle }?.title?.trim().orEmpty()
+                if (t.isEmpty()) "Глава ${chapterIdx + 1} из ${bk.chapters.size}"
+                else if (t.length > PLACE_TITLE_LIMIT) t.take(PLACE_TITLE_LIMIT).trimEnd() + "…"
+                else t
+            }
+            else -> "Глава ${chapterIdx + 1} из ${bk.chapters.size}"
+        }
+        if (!withSentence) return head
         val cur = bk.chapters.getOrNull(chapterIdx)?.sentences
-        val size = bk.chapters.size
         val pos = if (cur != null && cur.isNotEmpty()) {
             " · ${sentenceIdx.coerceIn(0, cur.size - 1) + 1} из ${cur.size}"
         } else ""
-        return "Глава ${chapterIdx + 1} из $size$pos"
+        return head + pos
     }
+
+    /** Предел длины названия в строке места: длинное название и на слух долго, и
+     *  в строку не влезает. */
+    private val PLACE_TITLE_LIMIT = 60
+
+    /** «глава 5», «Глава 12», «главе 3» — число из названия главы. */
+    private val PRINTED_CHAPTER_NO = Regex("(?i)\\bглав[аыуе]?\\s*(\\d{1,4})")
 
     // ---------------- Запуск и остановка чтения ----------------
 
@@ -1083,7 +1149,9 @@ internal object ReaderEngine {
 
     private fun retryStart(attempt: Int) {
         // msg2679: смена движка на голос книги может грузиться дольше прежних
-        // 2.5с — даём ~5с попыток, потом молча сдаёмся.
+        // 2.5с — даём ~5с попыток, потом сдаёмся.
+        // 29.10.2026: Серж попросил вернуть прежнее ожидание (двадцать секунд ему
+        // не нужны): «как и было, не надо 20 секунд».
         if (attempt > 20) {
             startQueued = false
             return
@@ -1270,6 +1338,11 @@ internal object ReaderEngine {
         // msg4629: чтение снова пошло (окно, гарнитура) — «выход» из карточки
         // отменён: закрываясь на паузе, окно снова оставит карточку владельцу.
         cardDroppedByUser = false
+        // 29.10.2026, просьба Сержа: начало чтения книги обрывает образец голоса
+        // из окна настроек. Прежде образец («Прослушать»/выбор голоса без книги)
+        // договаривал поверх книги — человек входил в читалку и слышал чужую
+        // фразу вместе с чтением.
+        SampleVoice.stop()
         playing = true
         // msg4211 (#19): чтение начинается — держим процессор, чтобы телефон,
         // лежащий экраном вниз, не заснул между фразами (лог тестера: сторож
@@ -1344,8 +1417,33 @@ internal object ReaderEngine {
         // переходят к нужной странице.
         if (bk.chapters[ch].autoTitle) return text
         val title = bk.chapters[ch].title?.trim()?.takeIf { it.isNotEmpty() } ?: return text
+        // 29.10.2026: название не приклеиваем, если оно УЖЕ есть в первой фразе.
+        // Жалоба Сержа «глава вторая, глава вторая»: у книги «Троян. ГУЛАГ нашего
+        // времени» заголовок стоит и названием главы (из оглавления), и текстом
+        // (разбор режет <h1> на абзацы). Разбор такую шапку теперь снимает
+        // ([BookParser.dropHeadingParagraphs]), а это — страховка на все форматы:
+        // сверяем без регистра и знаков, в обе стороны (текст может быть лишь
+        // куском заголовка — тогда его остаток идёт следующей фразой).
+        val tLike = titleLike(title)
+        val xLike = titleLike(text)
+        if (tLike.length >= 3 && xLike.length >= 3) {
+            // Текст ЦЕЛИКОМ содержит название (заголовок остался в теле абзацем) —
+            // не приклеиваем: оно прозвучит само.
+            if (xLike.contains(tLike)) return text
+            // Название ЦЕЛИКОМ содержит текст: первая фраза — лишь ОБРЫВОК
+            // заголовка («СИЗО ФСБ.» при названии «глава 4. сизо фсб»). Раньше и
+            // здесь название не звучало, и номер главы пропадал вовсе (жалоба
+            // Сержа 30.10.2026: «названия глав есть в тексте, а он их не читает»).
+            // Теперь читаем НАЗВАНИЕ, а обрывок не повторяем.
+            if (tLike.contains(xLike)) return if (title == text.trim()) text else title
+        }
         return if (title == text.trim()) text else "$title. $text"
     }
+
+    /** Строка для сверки заголовка с текстом: без регистра, знаков и лишних
+     *  пробелов (29.10.2026). */
+    private fun titleLike(s: String): String =
+        s.lowercase(java.util.Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
 
     private fun speakCurrent(userAsked: Boolean = true) {
         // 05.10.2026: первую фразу после ручного перехода (прыжка) читаем КОРОТКИМ
@@ -2404,18 +2502,49 @@ internal object ReaderEngine {
                 stopAfterSilentEngine()
                 return@find
             }
-            host?.onAnnounce(
-                "Этот движок не отвечает. Пробую другой движок, голос ${found.voice}."
-            )
+            // Имя голоса в объявлении не называем: оно станет известно только
+            // после того, как новый движок отдаст СВОЙ список (см. ниже) — в
+            // журнале 02:21:36 обещанный голос оказался чужим, и объявление
+            // назвало то, чего не будет.
+            host?.onAnnounce("Этот движок не отвечает. Пробую другой движок.")
             player?.setEngine(found.engine) { ok ->
                 if (!ok) {
                     Diag.log(ctx, "voice", "другой движок ${found.engine} не поднялся — встаю")
                     stopAfterSilentEngine()
                     return@setEngine
                 }
-                voiceName = found.voice
-                player?.selectVoice(found.voice)
-                restartAfterSwitch(withPreview = false)
+                val np = player
+                if (np == null) {
+                    stopAfterSilentEngine()
+                    return@setEngine
+                }
+                // ГОЛОС СТАВИМ, КОГДА НОВЫЙ ДВИЖОК УЖЕ ОТДАЛ СВОЙ СПИСОК
+                // (30.10.2026, журнал Сержа 02:21:36 — движок MultiTTS отказал,
+                // переключились на Google, а голос проверялся по списку ПРЕЖНЕГО
+                // движка: «поставил microsoft_ru-RU-DariyaNeural», потом
+                // «поставил ru-ru-x-dfc-local» — два чужих имени подряд, и только
+                // третье своё). Здесь же проверяем, что обещанный [LocalVoiceFinder]
+                // голос движок правда знает; не знает — берём его собственный
+                // локальный того же языка.
+                whenVoicesReady(on = np) {
+                    val list = runCatching { np.voices }.getOrNull().orEmpty()
+                    val local = { v: android.speech.tts.Voice ->
+                        runCatching { !v.isNetworkConnectionRequired }.getOrDefault(false)
+                    }
+                    val v = list.firstOrNull { it.name == found.voice }
+                        ?: list.firstOrNull { local(it) && (lang == null || it.locale?.language == lang) }
+                        ?: list.firstOrNull { local(it) }
+                    val name = v?.name ?: found.voice
+                    if (v == null || name != found.voice) {
+                        Diag.log(
+                            ctx, "voice",
+                            "у движка ${found.engine} голоса «${found.voice}» нет — беру «$name»"
+                        )
+                    }
+                    voiceName = name
+                    np.selectVoice(name)
+                    restartAfterSwitch(withPreview = playing || previewUnit)
+                }
             }
         }
         return true
@@ -2445,9 +2574,11 @@ internal object ReaderEngine {
         voiceName = local.name
         p.selectVoice(local.name)
         host?.onAnnounce("Сетевой голос не отвечает. Читаю локальным голосом ${local.name}.")
-        // Проба тут не нужна: чтение идёт, [restartAfterSwitch] сам перечитает
-        // текущее предложение новым голосом (и выбрасывает звук прежнего).
-        restartAfterSwitch(withPreview = false)
+        // Проба тут нужна ровно тогда, когда звучала проба (см. [previewUnit]):
+        // иначе после отказа движка фразу никто не перечитает, а «чтение идёт»
+        // останется включённым — тишина с кнопкой «Пауза» (журнал Сержа 02:21:36,
+        // 30.10.2026: 4 минуты «играет да» и ни одной фразы в работе).
+        restartAfterSwitch(withPreview = playing || previewUnit)
         return true
     }
 
@@ -2552,7 +2683,7 @@ internal object ReaderEngine {
             // что полка и слайдер.
             val pct = readPercentNow()
             val base = if (size > 0) {
-                val head = "Глава ${chapterIdx + 1} из $size"
+                val head = chapterPlaceLine(withSentence = false)
                 if (pct >= 0) "$head · $pct%" else head
             } else {
                 ""

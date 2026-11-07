@@ -117,14 +117,6 @@ object ParsePrefs {
     }
 
     /** Снять с книги свою отметку: книга пойдёт по общей настройке. */
-    fun clearBookMode(c: Context, uri: String) {
-        val off = (prefs(c).getStringSet(KEY_OFF_BOOKS, emptySet()) ?: emptySet()).toMutableSet()
-        val on = (prefs(c).getStringSet(KEY_ON_BOOKS, emptySet()) ?: emptySet()).toMutableSet()
-        val wasOff = off.remove(uri)
-        val wasOn = on.remove(uri)
-        if (!wasOff && !wasOn) return
-        prefs(c).edit().putStringSet(KEY_OFF_BOOKS, off).putStringSet(KEY_ON_BOOKS, on).apply()
-    }
 
     /** Словами — то, что читалка показывает в строке состояния разбора и читает
      *  вслух по касанию. Чисел здесь нет намеренно (решение Сержа 15.10.2026):

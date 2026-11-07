@@ -546,9 +546,6 @@ class MediaSessionService : Service() {
         }
 
         /** Название книги — для уведомления и метаданных сессии. */
-        fun setBookTitle(title: String?) {
-            main.post { instance?.applyBookTitle(title) }
-        }
 
         /** Держать системное состояние в актуальности: от него зависит,
          *  что пошлёт кнопка — play или pause. */
@@ -584,13 +581,6 @@ class MediaSessionService : Service() {
     } else {
         @Suppress("DEPRECATION")
         intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
-    }
-
-    private fun applyBookTitle(title: String?) {
-        Diag.log(this, "service", "книга: ${title ?: "без названия"}")
-        bookTitle = title
-        pushMetadata()
-        notifyNow()
     }
 
     /** Метаданные сессии (название книги) — для системной медиа-карточки.

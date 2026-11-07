@@ -1,14 +1,20 @@
 package com.cuber.bookvoice
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityNodeInfo
 import android.graphics.drawable.Drawable
 import android.util.TypedValue
 import android.view.Gravity
@@ -28,6 +34,7 @@ import com.cuber.bookvoice.databinding.ActivityLibraryBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.File
 import java.util.Locale
+import kotlin.math.abs
 
 /**
  * Библиотека — стартовый экран приложения.
@@ -260,6 +267,12 @@ class LibraryActivity(private val act: SectionActivity) {
         // со статусом «новая», и если бы полка по умолчанию прятала их под «Читаю»,
         // свежие файлы пропадали бы из виду — будто скан не работает.
         buildFilterTabs()
+        // 29.10.2026, просьба Сержа: «чтобы горизонтальными свайпами листались
+        // верхние табы — все, прочитанные, избранные». Два входа: настоящий
+        // горизонтальный свайп по полке/строке вкладок и действия скринридера
+        // «прокрутить влево/вправо» (их шлёт жест двумя пальцами). Оба идут через
+        // один [switchFilter], поэтому ведут себя одинаково.
+        attachFilterSwipes()
         // buildFilterTabs мог скорректировать filterMode (активную вкладку скрыли
         // в настройках) — тогда и сортировку держим от актуального фильтра.
         sortMode = LibraryActivity.tabSort(prefs, filterMode)
@@ -676,9 +689,15 @@ class LibraryActivity(private val act: SectionActivity) {
     }
 
     /** Собрать верхние вкладки-фильтры. Каждая — как нижняя вкладка: колонка с
-     *  текстом (вес 1) и полоской-индикатором снизу; клик переключает фильтр.
+     *  текстом и полоской-индикатором снизу; клик переключает фильтр.
      *  Активный фильтр могли скрыть в Настройках — тогда откатываемся на «Все»
-     *  (или первую видимую), чтобы полка не открывалась на несуществующей вкладке. */
+     *  (или первую видимую), чтобы полка не открывалась на несуществующей вкладке.
+     *
+     *  29.10.2026 (просьба Сержа): подписи В ОДНУ СТРОКУ, ширина — по тексту, ряд
+     *  прокручивается вбок (`filterScroll`). Прежде вкладки делили ширину экрана
+     *  поровну, и при крупном шрифте «Дочитано» и «Избранное» переносились на
+     *  вторую строку — два ряда вкладок. Поэтому здесь `maxLines = 1` и вес 1f
+     *  заменён на ширину по содержимому. */
     private fun buildFilterTabs() {
         binding.filterBar.removeAllViews()
         filterLabels.clear()
@@ -697,8 +716,22 @@ class LibraryActivity(private val act: SectionActivity) {
                 gravity = Gravity.CENTER
                 isFocusable = true
                 isClickable = true
+                maxLines = 1
+                isSingleLine = true
+                setPadding(dp(14), 0, dp(14), 0)
+                minimumWidth = dp(72)
                 background = selectableItemBackground()
             }
+            // Полоска-индикатор — обычный View с шириной MATCH_PARENT. Это
+            // безопасно ТОЛЬКО пока ряд вкладок не ограничен по ширине: у
+            // простого View под AT_MOST «своей» ширины нет, и он отдаёт РОВНО
+            // предложенный размер. Так и случилось 03.11.2026: `fillViewport`
+            // в activity_library.xml предлагал ряду всю ширину экрана, первая
+            // вкладка растягивалась на весь экран, остальные уезжали за край —
+            // Серж переключал вкладку свайпом (озвучка была), а наверху ничего
+            // не менялось. Поэтому `fillViewport` из разметки убран; если он
+            // когда-нибудь вернётся — ширину индикатора придётся задавать
+            // явно, а не MATCH_PARENT.
             val ind = View(act)
             val col = LinearLayout(act).apply {
                 orientation = LinearLayout.VERTICAL
@@ -710,14 +743,7 @@ class LibraryActivity(private val act: SectionActivity) {
                 ))
             }
             label.setOnClickListener {
-                filterMode = mode
-                prefs.edit().putInt(KEY_LIB_FILTER, mode).apply()
-                activeFilterMode = mode
-                applyFilterTabs()
-                label.announceForAccessibility(
-                    TabNav.tabDesc(getString(LibraryActivity.tabLabelRes(mode)), true)
-                )
-                refresh()
+                selectFilter(mode)
             }
             // msg2713/2717: долгое удержание вкладки — сортировка ИМЕННО этой
             // вкладки (своя запомненная, не общая для всей полки).
@@ -727,12 +753,47 @@ class LibraryActivity(private val act: SectionActivity) {
                 true
             }
             binding.filterBar.addView(col, LinearLayout.LayoutParams(
-                0, dp(48), 1f
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)
             ))
+            // 29.10.2026: свайп диктора по самой вкладке («прокрутить влево/
+            // вправо») тоже листает вкладки — фокус диктора обычно стоит именно на
+            // подписи вкладки, поэтому действие обязано работать отсюда.
+            label.accessibilityDelegate = filterSwipeDelegate
             filterLabels.add(label)
             filterInds.add(ind)
         }
+        binding.filterBar.accessibilityDelegate = filterSwipeDelegate
         applyFilterTabs()
+        // Активная вкладка может оказаться за правым краем (вкладок много или
+        // шрифт крупный) — подводим её в видимую часть строки, но БЕЗ переноса
+        // фокуса диктора: он остаётся там, где был.
+        binding.filterBar.post { scrollSelectedTabIntoView() }
+    }
+
+    /** Прокрутить ряд вкладок так, чтобы активная была на виду.
+     *
+     *  03.11.2026: координаты берём у КОЛОНКИ вкладки (`label.parent`), а не у
+     *  самой подписи. Подпись лежит внутри колонки, её `left` всегда 0, и прежняя
+     *  арифметика сравнивала ширину подписи с `scrollX` ряда — при прокрученном
+     *  ряду это откручивало его в начало. Поэтому раньше «выбранная» вкладка
+     *  могла так и остаться за краем, хотя озвучка переключения звучала. */
+    private fun scrollSelectedTabIntoView() {
+        val idx = currentTabModes.indexOf(filterMode)
+        if (idx < 0 || idx >= filterLabels.size) return
+        val label = filterLabels[idx]
+        val target = label.parent as? View ?: label
+        val scroll = binding.filterScroll
+        if (scroll.width <= 0 || target.width <= 0) return
+        val left = target.left
+        val right = target.right
+        val view = scroll.scrollX
+        val span = scroll.width
+        val want = when {
+            left < view -> left - dp(8)
+            right > view + span -> right - span + dp(8)
+            else -> return
+        }
+        scroll.smoothScrollTo(want.coerceAtLeast(0), 0)
     }
 
     /** Подсветить активную вкладку-фильтр: текст акцентным цветом, полоска снизу,
@@ -748,6 +809,175 @@ class LibraryActivity(private val act: SectionActivity) {
         }
     }
 
+    /** Выбрать вкладку-фильтр: запомнить, подсветить, озвучить и пересобрать полку.
+     *  Один вход и для касания, и для свайпа, и для жеста диктора (29.10.2026). */
+    private fun selectFilter(mode: Int) {
+        filterMode = mode
+        prefs.edit().putInt(KEY_LIB_FILTER, mode).apply()
+        activeFilterMode = mode
+        applyFilterTabs()
+        filterLabels.getOrNull(currentTabModes.indexOf(mode))?.announceForAccessibility(
+            TabNav.tabDesc(getString(LibraryActivity.tabLabelRes(mode)), true)
+        )
+        refresh()
+        binding.filterBar.post { scrollSelectedTabIntoView() }
+    }
+
+    /** Переключить вкладку на соседнюю: [step] = +1 вправо, -1 влево.
+     *
+     *  29.10.2026, просьба Сержа. Возвращает true, если переключили: на краю ряда
+     *  свайп ничего не делает (и не мешает прокрутке полки). */
+    private fun switchFilter(step: Int, how: String): Boolean {
+        if (currentTabModes.size < 2) return false
+        val idx = currentTabModes.indexOf(filterMode)
+        if (idx < 0) return false
+        val next = idx + step
+        if (next !in currentTabModes.indices) return false
+        Diag.log(
+            act, "shelf",
+            "вкладки: переключаю $how на «" +
+                getString(LibraryActivity.tabLabelRes(currentTabModes[next])) + "»"
+        )
+        selectFilter(currentTabModes[next])
+        return true
+    }
+
+    /** Горизонтальный свайп по полке листает вкладки.
+     *
+     *  29.10.2026, уточнение Сержа: «свайпаю двумя пальцами вправо и влево — так же,
+     *  как листаю главы в книге, и так по всей библиотеке». В книге это делает
+     *  `MainActivity.installSwipe` на списке строк: скринридер одиночные свайпы
+     *  забирает себе, а двухпальцевые отдаёт приложению. Поэтому здесь ТОТ ЖЕ
+     *  способ, а не действия доступности (они, как выяснилось, до нас не доходили):
+     *  слушатель касания на списке книг, на строке вкладок и на заголовке.
+     *
+     *  Считаем жест по скорости и смещению, как в читалке: `dx` больше 60 точек,
+     *  по горизонтали дальше, чем по вертикали, скорость больше 300 точек в
+     *  секунду. Вертикальные двухпальцевые свайпы (прокрутка полки) не трогаем. */
+    private fun attachFilterSwipes() {
+        val vt = VelocityTracker.obtain()
+        var downX = 0f
+        var downY = 0f
+        var multi = false
+        var where = "полка"
+        val listener = View.OnTouchListener { _, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.x
+                    downY = e.y
+                    multi = false
+                    vt.clear()
+                    vt.addMovement(e)
+                }
+                MotionEvent.ACTION_MOVE,
+                MotionEvent.ACTION_POINTER_DOWN,
+                MotionEvent.ACTION_POINTER_UP -> {
+                    if (e.pointerCount >= 2) multi = true
+                    vt.addMovement(e)
+                }
+                MotionEvent.ACTION_UP -> {
+                    vt.addMovement(e)
+                    vt.computeCurrentVelocity(1000)
+                    val vx = vt.xVelocity
+                    val vy = vt.yVelocity
+                    val dx = e.x - downX
+                    val dy = e.y - downY
+                    vt.clear()
+                    val horiz = abs(dx) > dp(SWIPE_MIN_DP / 2) && abs(dx) > abs(dy) && abs(vx) > 300
+                    // 29.10.2026: жест можно выключить галочкой в настройках
+                    // библиотеки — тогда вкладки свайпом не листаются вовсе.
+                    val allowed = swipeEnabled() && (multi || !screenReaderOn())
+                    if (horiz && allowed) {
+                        Diag.log(
+                            act, "shelf",
+                            "свайп ${if (vx < 0) "влево" else "вправо"} по полке ($where): " +
+                                "dx=${dx.toInt()} dy=${dy.toInt()} vx=${vx.toInt()} " +
+                                "пальцев ${e.pointerCount}${if (multi) " (двумя)" else ""}"
+                        )
+                        switchFilter(if (vx < 0) 1 else -1, "свайпом по полке")
+                        return@OnTouchListener true
+                    }
+                    if (abs(dx) > dp(SWIPE_MIN_DP / 2)) {
+                        // Почему жест не признан свайпом — в журнал: без этого не
+                        // отличить «жест не дошёл» от «дошёл, но не свайп».
+                        Diag.log(
+                            act, "shelf",
+                            "жест по полке не свайп ($where): dx=${dx.toInt()} " +
+                                "dy=${dy.toInt()} vx=${vx.toInt()} пальцев ${e.pointerCount}, " +
+                                "диктор ${if (screenReaderOn()) "включён" else "выключен"}"
+                        )
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> vt.clear()
+                else -> Unit
+            }
+            false
+        }
+        binding.bookList.setOnTouchListener(listener)
+        binding.filterScroll.setOnTouchListener(listener)
+        binding.tvTitle.setOnTouchListener(listener)
+        // 29.10.2026, жалоба Сержа: «в пустых „Прочитанных“ свайп не работает ни
+        // туда, ни сюда». Список книг на пустой вкладке больше не прячется (см.
+        // activity_library.xml), а касание ловим ещё и на самом сообщении и на
+        // корне окна — на случай, если палец лёг мимо списка.
+        binding.root.setOnTouchListener(listener)
+        binding.tvEmpty.setOnTouchListener(listener)
+        // Жест диктора (действия прокрутки) — вторым путём: на строке вкладок и на
+        // сообщении пустой вкладки. Он приходит не касанием, свайп-слушатель его не
+        // увидит, а на пустой вкладке диктору больше нечего листать.
+        bindScrollActions(binding.filterBar)
+        bindScrollActions(binding.tvEmpty)
+    }
+
+    /** Включён ли свайп по вкладкам (галочка в настройках библиотеки). */
+    private fun swipeEnabled(): Boolean =
+        prefs.getBoolean(KEY_LIB_SWIPE, LIB_SWIPE_DEFAULT)
+
+    /** Включён ли экранный диктор: одиночные свайпы тогда его, нашими считаем
+     *  только двухпальцевые (то же правило, что в читалке). */
+    private fun screenReaderOn(): Boolean {
+        val am = act.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            ?: return false
+        val talkback = "com.google.android.marvin.talkback"
+        return am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_SPOKEN)
+            .any { it.resolveInfo?.serviceInfo?.packageName == talkback }
+    }
+
+    /** Навесить на вид обработку действий «прокрутить вперёд/назад». */
+    private fun bindScrollActions(v: View) {
+        v.accessibilityDelegate = filterSwipeDelegate
+    }
+
+    /** Жест диктора «прокрутить влево/вправо» на вкладках: он приходит не
+     *  касанием, а действием доступности, поэтому свайп-слушатель его не увидит.
+     *  Объявляем строку вкладок «листаемой» и сами обрабатываем эти действия.
+     *  Обычные действия (фокус, нажатие) отдаём дальше — `super`. */
+    private val filterSwipeDelegate: View.AccessibilityDelegate by lazy {
+        object : View.AccessibilityDelegate() {
+            override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
+                super.onInitializeAccessibilityNodeInfo(host, info)
+                val idx = currentTabModes.indexOf(filterMode)
+                if (idx > 0) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+                if (idx in 0 until currentTabModes.size - 1) {
+                    info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                }
+            }
+
+            override fun performAccessibilityAction(host: View, action: Int, args: Bundle?): Boolean {
+                // Диктор шлёт «прокрутить вперёд/назад» — это и есть жест двумя
+                // пальцами. Отдельных «влево/влево» в старом API нет, а эти два
+                // действия TalksBack и посылает.
+                if (swipeEnabled()) when (action) {
+                    AccessibilityNodeInfo.ACTION_SCROLL_FORWARD ->
+                        if (switchFilter(1, "жестом диктора")) return true
+                    AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD ->
+                        if (switchFilter(-1, "жестом диктора")) return true
+                }
+                return super.performAccessibilityAction(host, action, args)
+            }
+        }
+    }
+
     /** msg1807/1811: на время холодного авто-открытия полка - лишь промежуточный
      *  кадр перед книгой; озвучиться должен только заголовок окна «Библиотека».
      *  Скринридер цеплялся и за вкладки-фильтры («…, вкладка, выбрана», msg1807),
@@ -760,6 +990,9 @@ class LibraryActivity(private val act: SectionActivity) {
         val mode = if (hidden) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         else View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
         binding.filterBar.importantForAccessibility = mode
+        // Прокручиваемый ряд вкладок без этого сам стал бы целью диктора на
+        // холодном открытии («горизонтальная прокрутка») — прячем вместе с ним.
+        binding.filterScroll.importantForAccessibility = mode
         binding.btnLast.importantForAccessibility = mode
         binding.btnCatalogs.importantForAccessibility = mode
         binding.btnMore.importantForAccessibility = mode
@@ -836,7 +1069,12 @@ class LibraryActivity(private val act: SectionActivity) {
         shownRecords = sorted
         val empty = sorted.isEmpty()
         binding.tvEmpty.visibility = if (empty) View.VISIBLE else View.GONE
-        binding.bookList.visibility = if (empty) View.GONE else View.VISIBLE
+        // 29.10.2026: список книг НЕ прячем даже на пустой вкладке. Скрытый
+        // список оставлял середину экрана простым текстом, и жест скринридера
+        // забирал себе — свайп по пустым «Прочитанным» не работал. Теперь список
+        // всегда на месте (он и держит нижний ряд кнопок внизу), а сообщение
+        // «Книг в этой категории пока нет» рисуется поверх него.
+        binding.bookList.visibility = View.VISIBLE
         // Библиотека пуста и фильтр пуст — это разные сообщения: в первом случае
         // зовём добавить книгу, во втором подсказываем сменить вкладку-фильтр.
         if (empty) {
@@ -962,15 +1200,14 @@ class LibraryActivity(private val act: SectionActivity) {
 
     private fun dp(v: Int): Int = (act.resources.displayMetrics.density * v).toInt()
 
-    /** Сколько колонок в сетке. При крупном шрифте — одна: это слой для
+    /** Сколько колонок в сетке. При крупном системном шрифте — одна: это слой для
      *  слабовидящих, а в двух колонках крупная подпись не помещается. Им важнее
      *  читаемое название под большой обложкой, чем плотность полки (решение
-     *  Сергея 23.09.2026). Множитель спрашиваем у TextScale: «обычный» — это
-     *  ровно 1, то есть поведение не меняется. Смена размера шрифта пересоздаёт
-     *  окно (TextScale.wrap в attachBaseContext), поэтому колонки пересчитаются
-     *  сами. */
+     *  Сергея 23.09.2026). Множитель спрашиваем у СИСТЕМНОЙ настройки: своя ручка
+     *  «размер текста» 30.10.2026 ушла, а размер шрифта книги ([BookFont]) полку не
+     *  меняет. */
     private fun gridColumns(): Int =
-        if (TextScale.factor(TextScale.value(act)) > 1f) 1 else GRID_COLUMNS
+        if (act.resources.configuration.fontScale > 1.15f) 1 else GRID_COLUMNS
 
     /** Размер обложки карточки-сетки, под который BookCovers декодирует
      *  картинку и рисует заглушку. Ширина — колонка сетки минус отступы
@@ -1723,11 +1960,38 @@ class LibraryActivity(private val act: SectionActivity) {
      *  В итоге отдаём и число пропущенных по метке «не возвращать при скане»:
      *  без него «добавлено 0» неотличимо от «в папке пусто» (12.10.2026). */
     private fun scanFolderWithMeta(deadTwins: MutableList<BookRecord>): ScanReport {
+        // 29.10.2026: починка «пустых» строк полки — до всякого скана, потому что
+        // такая запись может быть и единственной, а папка при этом недоступна.
+        fixRecordNames()
         val treeStr = treeUri() ?: return ScanReport(0, 0)
         val tree = Uri.parse(treeStr)
         val treeDocId = DocumentsContract.getTreeDocumentId(tree)
         val found = ArrayList<Pair<String, String>>() // (documentId, name)
         collectDocuments(tree, treeDocId, found, 0)
+        // 29.10.2026: сколько файлов скан вообще увидел. По этому числу сразу видно,
+        // «скан не нашёл» или «нашёл и не добавил»: без него жалоба «книги в папке
+        // есть, а на полке нет» разбирается только догадками.
+        Diag.log(act, "shelf", "скан: в папке книжных файлов ${found.size}")
+        // 29.10.2026, найдено по журналу: разрешение на папку книг у приложения
+        // БЫЛО ОТОЗВАНО системой («Permission Denial: opening provider
+        // ExternalStorageProvider … requires that you obtain access using
+        // ACTION_OPEN_DOCUMENT»). Скан видит НОЛЬ файлов, а полка живёт старыми
+        // записями — отсюда «в папке книг больше, чем на полке».
+        // Если доступ ко всем файлам у приложения есть, читаем папку напрямую с
+        // диска: это не требует разрешения на папку и чинит полку без того, чтобы
+        // Серж заново выбирал папку в системном окне.
+        if (found.isEmpty()) {
+            val tp0 = treeResolver()
+            if (tp0 != null && AllFiles.granted(act)) {
+                Diag.log(
+                    act, "shelf",
+                    "скан: папку через систему не читаю (нет разрешения) — читаю её " +
+                        "напрямую с диска: ${tp0.dir.path}"
+                )
+                return scanByFiles(tp0)
+            }
+            Diag.log(act, "shelf", "скан: папку прочитать не удалось, и доступа ко всем файлам нет")
+        }
         // Папку книг в виде пути и её document id ищем один раз на весь скан:
         // по ним узнаём, за какой мёртвой записью тот же файл (см. ниже).
         val tp = treeResolver()
@@ -2017,13 +2281,137 @@ class LibraryActivity(private val act: SectionActivity) {
         return BookParser.peekMeta(name, bytes)
     }
 
+    /** Скан папки книг НАПРЯМУЮ С ДИСКА (29.10.2026).
+     *
+     *  Зачем: разрешение на папку (SAF) система может отозвать, и тогда обычный
+     *  скан видит ноль файлов — на полке остаются только старые записи. Если у
+     *  приложения есть «Доступ ко всем файлам», папку можно прочитать файлами
+     *  напрямую, без всяких разрешений: так книги возвращаются на полку, и Сержу
+     *  не нужно заново выбирать папку в системном окне.
+     *
+     *  Записи делаем с адресом `file://` — по нему книга открывается так же, как
+     *  скопированная в память приложения. Существующие записи не трогаем, скрытые
+     *  меткой «не возвращать при скане» — пропускаем. */
+    private fun scanByFiles(tp: BookDelete.TreePaths): ScanReport {
+        val root = tp.dir
+        if (!root.isDirectory) {
+            Diag.log(act, "shelf", "скан по диску: папки книг нет: ${root.path}")
+            return ScanReport(0, 0)
+        }
+        val files = ArrayList<File>()
+        runCatching {
+            root.walkTopDown().maxDepth(MAX_SCAN_DEPTH + 1).forEach { f ->
+                if (f.isFile && supportedFileName(f.name)) files.add(f)
+            }
+        }.onFailure { e ->
+            Diag.log(act, "shelf", "скан по диску: папка не читается: ${e.message}")
+        }
+        Diag.log(act, "shelf", "скан по диску: книжных файлов ${files.size}")
+        val hiddenPaths = prefs.getStringSet(BookDelete.KEY_HIDDEN_PATHS, null) ?: emptySet()
+        var added = 0
+        var skippedHidden = 0
+        for (f in files) {
+            val path = runCatching { f.canonicalPath }.getOrNull() ?: f.path
+            if (path in hiddenPaths) {
+                skippedHidden++
+                continue
+            }
+            val u = Uri.fromFile(f).toString()
+            if (BookStore.byUri(act, u) != null) continue
+            val meta = if (needsBookMeta(f.name)) readMeta(Uri.fromFile(f), f.name) else null
+            BookStore.upsert(act, BookRecord(
+                uri = u,
+                name = f.name,
+                title = meta?.title,
+                author = meta?.author,
+                annotation = if (meta != null && canHaveFileAnnotation(f.name)) {
+                    meta.annotation ?: ""
+                } else {
+                    null
+                },
+                series = if (meta != null && BookParser.canCarrySeries(f.name)) {
+                    meta.series ?: ""
+                } else {
+                    null
+                },
+                seriesNo = if (meta != null && BookParser.canCarrySeries(f.name)) meta.seriesNo else null,
+                addedAt = System.currentTimeMillis(),
+            ))
+            added++
+        }
+        Diag.log(act, "shelf", "скан по диску: добавил $added, пропустил по метке $skippedHidden")
+        return ScanReport(added, skippedHidden)
+    }
+
+    /** Починить записи, у которых имя файла потеряно (29.10.2026).
+     *
+     *  Жалоба Сержа: «одна книга идёт пустая в списке». Причина: у книги «Мёртвый
+     *  ход» в записи осталась заглушка «book» — так бывает, когда при добавлении
+     *  система не отдала имя файла (`queryDisplayName` вернул null, код подставил
+     *  «book»). Расширения у такого имени нет, а значит и настоящее имя потеряно:
+     *  строка полки выходит без названия, без картинки и без вида файла.
+     *  Берём имя из адреса самого файла — оно там всегда есть. */
+    private fun fixRecordNames(): Int {
+        var fixed = 0
+        var healed = 0
+        for (r in BookStore.all(act)) {
+            var rec = r
+            var changed = false
+            if (!rec.name.contains('.')) {
+                val tail = runCatching {
+                    Uri.decode(Uri.parse(rec.uri).lastPathSegment ?: "")
+                }.getOrNull().orEmpty()
+                if (tail.contains('.') && tail != rec.name) {
+                    rec = rec.copy(name = tail)
+                    changed = true
+                    Diag.log(act, "shelf", "имя книги починено по адресу: «${r.name}» → «$tail»")
+                }
+            }
+            // 29.10.2026, вторая жалоба Сержа: «видел ещё одну такую книгу, зашёл в
+            // неё — запись обновилась». Значит у записи не было названия, пока книгу
+            // не открыли. Дозаполняем сами, не дожидаясь открытия: имя-заглушка
+            // («book», «download…») или название не годится для полки — читаем
+            // метаданные из файла. Не больше [TITLE_HEAL_MAX] за один скан: скан не
+            // должен превращаться в чтение половины библиотеки.
+            val badName = rec.name.substringBeforeLast('.').length < 3 ||
+                rec.name.startsWith("download")
+            val noTitle = rec.customTitle.isNullOrBlank() &&
+                (rec.title == null || !BookRecord.usableTitle(rec.title))
+            if (noTitle && healed < TITLE_HEAL_MAX) {
+                val uri = runCatching { Uri.parse(rec.uri) }.getOrNull()
+                val meta = if (uri != null) readMeta(uri, rec.name) else null
+                val t = meta?.title?.takeIf { BookRecord.usableTitle(it) }
+                if (t != null) {
+                    rec = rec.copy(title = t, author = meta?.author ?: rec.author)
+                    changed = true
+                    healed++
+                    Diag.log(act, "shelf", "название дописано из файла: «$t» (${rec.name})")
+                } else if (badName) {
+                    healed++
+                }
+            }
+            if (changed) {
+                BookStore.upsert(act, rec)
+                fixed++
+            }
+        }
+        if (fixed > 0) Diag.log(act, "shelf", "имён и названий починено при скане: $fixed")
+        return fixed
+    }
+
     private fun collectDocuments(
         tree: Uri,
         docId: String,
         out: MutableList<Pair<String, String>>,
         depth: Int,
     ) {
-        if (depth > MAX_SCAN_DEPTH) return
+        if (depth > MAX_SCAN_DEPTH) {
+            // 29.10.2026: в журнал — по жалобе «в папке книг лежит больше, чем на
+            // полке». Раньше выход по глубине был беззвучным, и пропажа вложенной
+            // папки выглядела как «скан не работает».
+            Diag.log(act, "shelf", "скан: папка глубже $MAX_SCAN_DEPTH уровней не читается: $docId")
+            return
+        }
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
         val projection = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -2044,6 +2432,14 @@ class LibraryActivity(private val act: SectionActivity) {
                     }
                 }
             }
+        }.onFailure { e ->
+            // 29.10.2026: молчаливый пропуск папки — это и есть «книги не попали на
+            // полку»: раньше ошибку проглатывал runCatching, и причину приходилось
+            // искать вопросами. Теперь она в журнале словами.
+            Diag.log(
+                act, "shelf",
+                "скан: папку не удалось прочитать (уровень $depth, $docId): ${e.message}"
+            )
         }
     }
 
@@ -2764,6 +3160,15 @@ class LibraryActivity(private val act: SectionActivity) {
     }
 
     companion object {
+        /** Свайп по полке: с какой длины он считается свайпом, а не прокруткой
+         *  (29.10.2026). 72 точки — примерно треть ладони; при меньшем человек
+         *  чаще промахивается и листает вкладки случайно. */
+        private const val SWIPE_MIN_DP = 72
+
+        /** Сколько записей за один скан дозаполняем названием из файла         *  (29.10.2026): чтение метаданных — не бесплатное, а скан идёт на каждом
+         *  открытии полки. Остальные дозаполнятся в следующие заходы. */
+        private const val TITLE_HEAL_MAX = 12
+
         /** msg4873: файл в папке книг младше этого возраста не считаем сиротой —
          *  копия могла быть создана только что, а запись о книге ещё в пути. */
         private const val ORPHAN_AGE_MS = 60L * 60L * 1000L
@@ -2894,6 +3299,14 @@ class LibraryActivity(private val act: SectionActivity) {
         internal const val KEY_LIB_COVERS = "lib_covers"
         internal const val LIB_COVERS_DEFAULT = true
 
+        /** Листание вкладок полки свайпом влево-вправо (29.10.2026, просьба
+         *  Сержа: «добавь жест отключать или включать»). По умолчанию ВЫКЛЮЧЕНО
+         *  (решение Сержа: «пускай будет лучше выключено по умолчанию») — жест
+         *  слишком легко срабатывает случайно, а вкладки и так доступны касанием.
+         *  Читается в момент жеста, поэтому галочка применяется сразу. */
+        internal const val KEY_LIB_SWIPE = "lib_swipe"
+        internal const val LIB_SWIPE_DEFAULT = false
+
         private const val GRID_COLUMNS = 2
 
         // Ставит MainActivity перед «назад в библиотеку»: полка не должна
@@ -2909,10 +3322,21 @@ class LibraryActivity(private val act: SectionActivity) {
         @Volatile
         internal var pendingBookFocusUri: String? = null
 
-        // Какой фильтр-вкладка сейчас открыт в живой Библиотеке (#97). Экран
-        // «Вкладки библиотеки» в Настройках не даёт скрыть активную вкладку;
-        // без Библиотеки на экране (значение не обновлялось) — «Все».
+        // Какой фильтр-вкладка сейчас открыт в живой Библиотеке (#97). С
+        // 29.10.2026 скрыть можно и открытую вкладку — тогда полка встаёт на «Все»
+        // ([forgetActiveFilter]); это просьба Сержа «почему нельзя скрыть
+        // прочитанное».
         @Volatile
         internal var activeFilterMode: Int = FILTER_ALL
+
+        /** Забыть выбранную вкладку-фильтр и встать на «Все» (29.10.2026).
+         *
+         *  Нужно, когда владелец ПРЯЧЕТ ту вкладку, которая открыта в библиотеке:
+         *  прежде это запрещалось, и «Прочитанное» нельзя было убрать. Теперь
+         *  прячем, а полка открывается на «Все» — не ищет спрятанную вкладку. */
+        internal fun forgetActiveFilter(prefs: SharedPreferences) {
+            prefs.edit().putInt(KEY_LIB_FILTER, FILTER_ALL).apply()
+            activeFilterMode = FILTER_ALL
+        }
     }
 }

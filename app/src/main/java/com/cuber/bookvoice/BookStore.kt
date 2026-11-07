@@ -402,7 +402,14 @@ object BookStore {
             val t = r.customTitle?.takeIf { it.isNotBlank() }
                 ?: r.title?.takeIf { BookRecord.usableTitle(it) }
                 ?: return@forEach
-            byTitle.getOrPut(normTitle(t)) { ArrayList() }.add(r)
+            // 29.10.2026, найдено сверкой папки книг с полкой: склейка по ОДНОМУ
+            // названию съедала ВТОРЫЕ ЧАСТИ учебников. У «Литературное чтение.
+            // 2 класс. Часть 2» название в метаданных то же, что у части 1, и запись
+            // второй части просто удалялась: файл лежит в папке, а книги на полке
+            // нет. Поэтому склеиваем только НАСТОЯЩИЕ копии — те, у которых
+            // совпадает и название, и имя файла без добавки « (1)», « (2)».
+            byTitle.getOrPut(normTitle(t) + "\u0000" + copyBase(r.name)) { ArrayList() }
+                .add(r)
         }
         val removed = ArrayList<String>()
         for (g in byTitle.values) {
@@ -421,6 +428,14 @@ object BookStore {
     /** Ключ сравнения названий: регистр и лишние пробелы не в счёт. */
     private fun normTitle(s: String): String =
         s.trim().lowercase(java.util.Locale.ROOT).replace(Regex("\\s+"), " ")
+
+    /** Имя файла без добавки-копии « (1)», « (2)» перед расширением. По нему
+     *  отличаем настоящую копию от ДРУГОЙ книги с тем же названием (вторые части
+     *  учебников называются одинаково, а файлы у них разные). */
+    private fun copyBase(name: String): String {
+        val n = name.trim().lowercase(java.util.Locale.ROOT)
+        return n.replace(Regex("\\s*\\(\\d+\\)(?=\\.[^.]+$)"), "")
+    }
 
     /** Какая из двух записей-дублей одной книги ценнее для сохранения.
      *  Сначала прогресс чтения (статус, проценты, позиция — см. [dupRank]);

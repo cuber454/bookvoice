@@ -68,19 +68,21 @@ object ReadingMode {
         }
         sb.append(if (a.live) ReaderEngine.player?.pairLabel else pairFromPrefs(c)).append('.')
         if (a.direct) {
-            sb.append(" Хотите файлами — включите строку «Читать файлами (обходной ")
-            sb.append("способ)» в подразделе «Альтернативное чтение».")
+            sb.append(" Хотите файлами — в панели «Голос», строка «Как читать», ")
+            sb.append("выберите «файлами».")
+        } else {
+            sb.append(" Хотите голосом движка — там же, строкой «Как читать».")
         }
         if (a.forced) {
-            sb.append(" Сменить способ можно там же — строкой «Движки»; ")
-            sb.append("он применится, когда начнёшь читать заново.")
+            sb.append(" Способ помнится для этой пары «движок + голос» ")
+            sb.append("и применяется сразу.")
         }
         return sb.toString()
     }
 
     /** Ответ и то, откуда он: `live` — от живого плеера (значит, верен для той
      *  пары, что выбрана сейчас), иначе — по настройкам и пометкам; `forced` —
-     *  способ задан принудительно (см. [ExpertPrefs.forceMode]). */
+     *  способ выбран человеком (см. [ReadWay]). */
     private class Answer(
         val direct: Boolean,
         val why: String,
@@ -89,21 +91,20 @@ object ReadingMode {
     )
 
     private fun answer(c: Context): Answer {
-        // Профиль способа чтения у КАЖДОГО движка свой (см. [ExpertPrefs.forceMode])
-        // и сильнее всего остального: он отменяет и пометки, и опыт, и ответ про
-        // них читать нельзя — человек специально выбрал способ.
-        when (val forced = ExpertPrefs.forceMode(c, modeEngineFor(c))) {
-            ExpertPrefs.MODE_FILE -> return Answer(
+        // 29.10.2026: способ чтения выбирает человек — на пару «движок + голос»
+        // ([ReadWay]). Автоматики больше нет, поэтому и отвечаем ровно то, что
+        // выбрано: файлами или голосом движка.
+        val way = ReadWay.of(c, modeEngineFor(c), prefVoice(c))
+        when (way) {
+            ReadWay.FILE -> return Answer(
                 false,
-                "так выбрано для этого движка в опытных настройках: " +
-                    "«${ExpertPrefs.forceModeLabel(forced)}» — пометки движка не смотрю",
+                "так выбрано вручную: файлами — пометки движка не смотрю",
                 true,
                 forced = true,
             )
-            ExpertPrefs.MODE_DIRECT -> return Answer(
+            ReadWay.DIRECT -> return Answer(
                 true,
-                "так выбрано для этого движка в опытных настройках: " +
-                    "«${ExpertPrefs.forceModeLabel(forced)}»",
+                "так выбрано вручную: голосом движка",
                 true,
                 forced = true,
             )
@@ -140,6 +141,11 @@ object ReadingMode {
         p?.getString(MainActivity.KEY_ENGINE, null)?.let { return it }
         return ExpertPrefs.defaultEngine(c)
     }
+
+    /** Голос выбранной пары — вторая половина ключа [ReadWay]. */
+    private fun prefVoice(c: Context): String? = runCatching {
+        c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(MainActivity.KEY_VOICE, null)
+    }.getOrNull()
 
     /** Читаем ли файлами по настройкам, и почему, словами. Пометки читаем прямо из
      *  настроек, а не у плеера: так ответ верен и до начала чтения. */

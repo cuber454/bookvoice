@@ -52,40 +52,75 @@
          Это вкладки, как нижние (#55/#60): активная — акцентным цветом и полоской
          снизу, роль и озвучку выставляет код. Вкладки строятся в коде
          (LibraryActivity.buildFilterTabs) в контейнер filterBar — стиль и
-         contentDescription переиспользуют TabNav.styleTab / tabDesc. -->
-    <LinearLayout
-        android:id="@+id/filterBar"
+         contentDescription переиспользуют TabNav.styleTab / tabDesc.
+         29.10.2026, просьба Сержа: вкладки ВСЕГДА В ОДНУ СТРОКУ и прокручиваются
+         вбок. При крупном системном шрифте подписи переносились на вторую строку,
+         и два ряда вкладок съедали пол-экрана полки. Ради этого контейнер завёрнут
+         в HorizontalScrollView: подписи больше не переносятся (maxLines=1 в коде),
+         а лишние уезжают за правый край и достаются свайпом по строке.
+
+         03.11.2026: `fillViewport` ЗДЕСЬ НЕЛЬЗЯ (было `true` — и это ломало
+         вкладки). Он растягивает ряд до ширины экрана, и подпись получает
+         ограничение AT_MOST на всю ширину; полоска-индикатор под вкладкой —
+         обычный View, а такой View под AT_MOST отдаёт РОВНО предложенный размер.
+         В результате ПЕРВАЯ вкладка становилась шириной во весь экран, а все
+         остальные уезжали за правый край: Серж видел одну вкладку «Избранное»,
+         переключался свайпом на «Все» (озвучка была), а наверху ничего не
+         менялось — выбранная вкладка стояла за экраном. Не включать обратно. -->
+    <HorizontalScrollView
+        android:id="@+id/filterScroll"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:paddingTop="4dp" />
+        android:paddingTop="4dp"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/filterBar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="?attr/bvTrack" />
 
-    <TextView
-        android:id="@+id/tvEmpty"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:padding="28dp"
-        android:text="@string/books_empty"
-        android:textColor="?attr/bvDim"
-        android:textSize="18sp"
-        android:visibility="gone" />
+    <!-- 29.10.2026, жалоба Сержа «кнопки съехали вверх»: на пустой вкладке список
+         книг прятался (`GONE`), и нижний ряд с «Открыть книгу» и «Сетевые»
+         подскакивал под сообщение.
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/bookList"
+         Второе, найденное в тот же день: на ПУСТОЙ вкладке не работал свайп
+         влево-вправо. Причина — список был скрыт, середина экрана оказывалась
+         обычным текстом, и жест скринридер забирал себе. Поэтому теперь список
+         книг НЕ прячется никогда: он всегда лежит под сообщением (вес 1 держит
+         нижний ряд внизу и ловит касания), а сообщение рисуется поверх него. -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingBottom="8dp"
-        android:scrollbars="vertical" />
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/bookList"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="8dp"
+            android:scrollbars="vertical" />
+
+        <TextView
+            android:id="@+id/tvEmpty"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:padding="28dp"
+            android:text="@string/books_empty"
+            android:textColor="?attr/bvDim"
+            android:textSize="18sp"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <!-- Нижний ряд быстрых действий (msg2351/2355): слева — вход в последнюю
          книгу, правее — «Каталоги». msg1974: Сергей водит пальцем внизу

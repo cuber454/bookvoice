@@ -39,6 +39,11 @@ import java.io.File
 private enum class Group(@param:StringRes val titleRes: Int, @param:StringRes val hintRes: Int) {
     VOICE(R.string.settings_group_voice, R.string.settings_group_voice_hint),
     READING(R.string.settings_group_reading, R.string.settings_group_reading_hint),
+    /** 30.10.2026: отдельный раздел про вид — «то самое место», где человек сразу
+     *  поймёт, что тут про шрифт, контраст, подсветку и цвет кнопок. Прежде это
+     *  лежало в «Экране книги» вместе с галочками «что показывать», то есть две
+     *  разные вещи в одном разделе. */
+    APPEARANCE(R.string.settings_group_appearance, R.string.settings_group_appearance_hint),
     READER(R.string.settings_group_reader, R.string.settings_group_reader_hint),
     START(R.string.settings_group_start, R.string.settings_group_start_hint),
     LIBRARY(R.string.settings_group_library, R.string.settings_group_library_hint),
@@ -129,10 +134,8 @@ class SettingsActivity(private val act: SectionActivity) {
     // чтение» и «что прокрутка делает с местом и голосом» в тот же вечер стали
     // тремя галочками и одной галочкой: окна у них больше нет.
     private var jumpPlayRow: Button? = null
-    // msg5604: строка-значение «Пауза между фразами» — сколько тишины движка
-    // оставлять на стыке предложений. 24.10.2026 переехала в подраздел
-    // «Альтернативное чтение» (она про файловый путь).
-    private var pauseKeepRow: Button? = null
+    // 29.10.2026: строки «Пауза между фразами» здесь больше нет — она переехала
+    // в набор «Голос» (только для способа «файлами», см. VoicePicker.pauseRow).
     // 06.10.2026: строки-значения раздела «Экспериментальные настройки». Держим
     // ссылки, чтобы после выбора в диалоге переписать ТОЛЬКО текст строки: при
     // пересборке раздела фокус диктора улетал (жалоба Сержа: «нажал, значение
@@ -153,33 +156,19 @@ class SettingsActivity(private val act: SectionActivity) {
     // «Читать файлами» остаётся в подразделе «Альтернативное чтение», и её вторая
     // строка — снова обычная подсказка, а не ответ [ReadingMode].
 
-    // 24.10.2026: способы чтения поменялись местами — обычным стало чтение
-    // ГОЛОСОМ ДВИЖКА, а файловый путь ушёл в подраздел «Альтернативное чтение»
-    // (Серж: «Ещё добавь настройки альтернативное чтение, и там уже все настройки
-    // по нашему файловому чтению»). Здесь строка-дверь в подраздел, сама галочка
-    // «Читать файлами» и строки, что переехали сюда из «Чтения» и опытных настроек.
-    private var altSubRow: Button? = null
-    private var altFileBox: SwitchCompat? = null
-    // 24.10.2026, вечер: текст этой галочки больше не переписываем ответом
-    // [ReadingMode] — вторая строка у неё снова обычная подсказка (см. [refreshRows]).
-    // 24.10.2026: строка-ответ «каким способом читаю» живёт в опытных настройках
-    // ([buildExperimentalGroup]), здесь только поле — текст пишет [refreshRows].
+    // 29.10.2026: подраздела «Альтернативное чтение» больше нет (см. [refreshRows]).
+    // Строка-ответ «каким способом читаю» осталась — она живёт в опытных настройках
+    // ([buildExperimentalGroup]), а текст ей пишет [refreshRows].
     private var altModeRow: Button? = null
-    private var altPauseRow: Button? = null
-    private var altSubOpen = false
 
     // 24.10.2026: вместо двух галочек про прокрутку («Прокручивать экран за
     // чтением» и «Читать с того места, куда прокрутил») — одна строка о том, ГДЕ
     // держать читаемое предложение (Серж: «очень много настроек получается»).
-    private var scrollWhereRow: Button? = null
-    // 06.10.2026: профиль способа чтения у КАЖДОГО движка свой (решение Сержа:
-    // «давай что-то одно» — обшей ручки на всех нет). Здесь строки движков:
-    // пара «имя движка → строка» плюс подпись для резюме.
-    private val forceRows = ArrayList<Triple<String?, String, Button>>()
-    // 06.10.2026: папка «Движки» внутри опытных настроек — открыта ли сейчас, и
-    // строка-дверь в неё (для возврата фокуса после «назад»).
-    private var enginesSubOpen = false
-    private var enginesGroupRow: Button? = null
+    // 30.10.2026: и этой строки нет — тестер попросил убрать («чтобы меньше было
+    // путаницы»): читаемое при переходах встаёт наверх, а по ходу чтения страница
+    // переворачивается сама.
+    // 29.10.2026: строк движков и папки «Движки» больше нет — способ чтения
+    // выбирается руками на пару «движок + голос» в наборе «Голос» ([ReadWay]).
     // 30.09.2026: строка «Громкость тихого потока» — уровень того самого
     // неслышного звука, который держит звуковой тракт открытым (раздел «Чтение»).
     private var silentLevelRow: Button? = null
@@ -222,12 +211,20 @@ class SettingsActivity(private val act: SectionActivity) {
     // msg4895: строка «Разобранный текст» — занято из потолка (BookCache).
     private var cacheRow: Button? = null
     // msg5730: строка «Размер текста» — общая ручка размера для всего приложения.
-    private var textScaleRow: Button? = null
+    // 30.10.2026: строки нет. Вместо неё — ПОЛЗУНОК «Размер шрифта книги»
+    // ([addFontSlider]): одно число ([BookFont]) на текст книги, то же самое, что
+    // меняет щипок на странице. Строки окон продолжают слушаться системного
+    // размера шрифта Android.
     // 30.09.2026: списка галочек «что видно на экране книги» (readerUiBoxes) и
     // набора «что оставить на простом экране» (SIMPLE_KEEP) больше нет — вместе
     // со строками «простой экран» они стали не нужны: набор собирается галочками
     // в подразделе «Что показывать в книге».
 
+    // 30.10.2026: строки раздела «Внешний вид» — какого цвета подсветка читаемой
+    // фразы ([SelColor]) и какого цвета нижний ряд кнопок на экране книги
+    // ([BtnColor]). Обе — выбор из готовых вариантов, обе применяются сразу.
+    private var selColorRow: Button? = null
+    private var btnColorRow: Button? = null
     // Открытый раздел (null = экран списка групп).
     private var group: Group? = null
 
@@ -391,34 +388,10 @@ class SettingsActivity(private val act: SectionActivity) {
             backupSubOpen -> "в подразделе «Резервные копии» (Библиотека)"
             syncSubOpen -> "в подразделе «Синхронизация» (Библиотека)"
             showSubOpen -> "в подразделе «Что показывать в книге» (Экран книги)"
-            enginesSubOpen -> "в подразделе «Движки» (Экспериментальные)"
-            altSubOpen -> "в подразделе «Альтернативное чтение» (Чтение)"
             group == null -> "В КОРНЕ (список разделов)"
             else -> "в разделе ${group!!.name}"
         })
-        if (enginesSubOpen) {
-            // 06.10.2026: из папки «Движки» — назад в список «Экспериментальных»,
-            // фокусом на строку, из которой вошли (как в других подразделах).
-            enginesSubOpen = false
-            forgetSubRows()
-            screenTitle(getString(Group.EXPERIMENTAL.titleRes))
-            content().removeAllViews()
-            buildExperimentalGroup()
-            refreshRows()
-            scrollTop()
-            enginesGroupRow?.let { TabNav.refocusAfterRebuild(binding.content, it) }
-        } else if (altSubOpen) {
-            // 24.10.2026: из «Альтернативного чтения» — назад в «Чтение», фокусом на
-            // строку-дверь (как в остальных подразделах).
-            altSubOpen = false
-            forgetSubRows()
-            screenTitle(getString(Group.READING.titleRes))
-            content().removeAllViews()
-            buildReadingGroup()
-            refreshRows()
-            scrollTop()
-            altSubRow?.let { TabNav.refocusAfterRebuild(binding.content, it) }
-        } else if (controlsSubOpen) {
+        if (controlsSubOpen) {
             controlsSubOpen = false
             // msg2527: вернуться из подраздела в список «Управления». Перестроить
             // раздел и поставить фокус на строку «Кнопки и жесты»
@@ -531,6 +504,15 @@ class SettingsActivity(private val act: SectionActivity) {
         addMenuRow(getString(R.string.sleep_title), bgHint()) {
             startActivity(Intent(act, SleepWindowActivity::class.java))
         }
+        // 29.10.2026 (просьба Сержа: «не устраивает долгая дорога» до замены).
+        // Словарь произношения — СТРОКОЙ КОРНЯ, в один шаг: прежде дорога была
+        // Настройки → «Голос» → пролистать раздел → «Словарь произношения», а от
+        // неверно прочитанного слова человек хочет избавиться сразу. Строка в
+        // «Голосе» осталась на месте (там её ищут, когда правят звук), это не
+        // вторая настройка, а вторая дверь — как у панели «Голос» из книги.
+        addMenuRow(getString(R.string.dict_title), dictRootHint()) {
+            act.startActivity(Intent(act, DictActivity::class.java))
+        }
         // msg3921: группа обсуждения — отдельной строкой корня, в один шаг от
         // входа в настройки. Раньше вход был кнопкой внутри «О программы»
         // (msg3903); вынесен сюда по просьбе Сергея — до группы надо было
@@ -577,14 +559,11 @@ class SettingsActivity(private val act: SectionActivity) {
         // Касание читает вслух весь разбор, вторая строка — короткий ответ
         // ([ReadingMode.short]); текст пишет [refreshRows].
         altModeRow = addValueButton { speakReadingMode() }
-        // 06.10.2026: профиль способа чтения — СВОЙ У КАЖДОГО ДВИЖКА (Серж:
-        // «давай что-то одно»), и живёт он в отдельной папке — «Движки», чтобы
-        // строки движков не разбрасывались по разделу (просьба Сержа 06.10.2026:
-        // «хорошо бы движки были в отдельной папке, чтобы не было разброса»).
-        enginesGroupRow = addMenuRow(
-            "Движки",
-            "каким способом читает каждый движок: файлом или его голосом",
-        ) { openEnginesSub() }
+        // 29.10.2026: папки «Движки» больше нет. Просьба Сержа: «убрать
+        // автоматический режим, оставить только по умолчанию и файлами» — способ
+        // чтения теперь выбирается РУКАМИ на пару «движок + голос» в наборе
+        // «Голос» ([ReadWay]), а профиль на каждый движок стал вторым ответом на
+        // тот же вопрос. Здесь остался только ответ вслух «каким способом читаю».
         // Две строки-значения выбираются ДИАЛОГОМ, как во всех остальных
         // настройках (Серж 06.10.2026: «лучше всего, чтобы значение выбиралось
         // как-то диалогом, окошком поверх — короче, как у нас во всех настройках»).
@@ -645,49 +624,11 @@ class SettingsActivity(private val act: SectionActivity) {
                 }
             )
         }
-        // 24.10.2026, ПРОВЕРКА «СЛОМАННЫЙ ДВИЖОК». Жалоба Сержа: «синтезатор был
-        // нерабочий, нажал читать — книжка начала быстро прокручиваться». Случай
-        // редкий и не по заказу, поэтому повторяем его сами: с галочкой наш плеер
-        // фразу движку не отдаёт, а мгновенно рапортует «готово» без звука (см.
-        // SpeechPlayer.queueDirect). Дальше видно, ловит ли это защита
-        // (ackLooksSilent) и что она говорит вслух. Сам движок не трогаем.
-        addCheck(
-            R.string.experiment_broken_engine, ExpertPrefs.KEY_BROKEN_ENGINE, false,
-            R.string.experiment_broken_engine_hint,
-        ) { on ->
-            Diag.log(
-                act, "ui",
-                "экспериментальные: «сломанный движок» ${if (on) "включён" else "выключен"}",
-            )
-            binding.tvTitle.announceForAccessibility(
-                if (on) {
-                    "Сломанный движок включён: программа фразы синтезатору не отдаёт, а " +
-                        "мгновенно отчитывается, что сказала. Нажми читать и слушай, что будет"
-                } else {
-                    "Сломанный движок выключен: читаю как обычно"
-                }
-            )
-        }
-        // Вторая поломка для проверки: движок ОТКАЗЫВАЕТСЯ принять заявку. Это был
-        // настоящий случай 24.10 (движок MS отказывал, книжка убегала до конца).
-        // Дороги в коде разные, поэтому галочек две (см. SpeechPlayer.queueDirect).
-        addCheck(
-            R.string.experiment_broken_refuse, ExpertPrefs.KEY_BROKEN_REFUSE, false,
-            R.string.experiment_broken_refuse_hint,
-        ) { on ->
-            Diag.log(
-                act, "ui",
-                "экспериментальные: «движок отказывается» ${if (on) "включён" else "выключен"}",
-            )
-            binding.tvTitle.announceForAccessibility(
-                if (on) {
-                    "Проверка «движок отказывается» включена: программа ответит отказом на " +
-                        "каждую фразу. Нажми читать — чтение должно встать и сказать об этом"
-                } else {
-                    "Проверка «движок отказывается» выключена"
-                }
-            )
-        }
+        // 29.10.2026: проверки «сломанный движок» и «движок отказывается» убраны —
+        // просьба Сержа («синтезатор сломанный вот это вот убрать тоже можно»).
+        // Это были прививки 24.10.2026: они заставляли наш плеер молчать или
+        // отвечать отказом за движок, чтобы проверить защиту. Защита осталась,
+        // прививок больше нет.
         // 09.10.2026, просьба Сержа: разбор PDF стал умнее (разрядка склеивается
         // по зазорам, страница читается по колонкам, колонтитулы убираются), и на
         // каждую правку — своя галочка. Снял галочку — книга разберётся заново и
@@ -825,119 +766,6 @@ class SettingsActivity(private val act: SectionActivity) {
             .show()
     }
 
-    /** Папка «Движки» в опытных настройках: каким способом читает КАЖДЫЙ движок
-     *  ([ExpertPrefs.forceMode] — у каждого свой профиль). «Назад» отсюда ведёт в
-     *  список «Экспериментальных» (см. [onBackKey]), фокус — на строку-дверь. */
-    /** 24.10.2026: подраздел «Альтернативное чтение» — ВСЁ про файловый путь в
-     *  одном месте (Серж: «Ещё добавь настройки альтернативное чтение и там что был
-     *  подраздел такой и там уже все настройки по нашему файловому чтению»).
-     *  Обычное чтение — голосом движка (как у @Voice), файлы стали обходным путём,
-     *  поэтому и строки про них собраны здесь, а не в «Чтении».
-     *  «Назад» отсюда ведёт в «Чтение» (см. [onBackKey]), фокус — на строку-дверь. */
-    private fun openAltSub() {
-        altSubOpen = true
-        screenTitle(getString(R.string.alt_sub_title))
-        content().removeAllViews()
-        // Сама галочка способа: ключ новый ([MainActivity.KEY_READ_FILES]), прежнюю
-        // «Альтернативный способ чтения» переносит [PrefsMigration] на старте.
-        altFileBox = addCheck(
-            R.string.alt_voice_title, MainActivity.KEY_READ_FILES, false,
-            hintRes = R.string.alt_voice_hint,
-        ) { on ->
-            // Способ живого плеера меняем на месте, не дожидаясь перезапуска чтения.
-            ReaderEngine.player?.altDirect = !on
-            // Кнопки гарнитуры: в голосовом чтении звук играет движок, и тихий поток
-            // возвращает нас в список играющих (см. AGENTS, «Кнопки на наушниках»).
-            KeepAwake.syncSilence()
-            Diag.log(
-                act, "reading",
-                if (on) "способ чтения: файлами (обходной, включил человек)"
-                else "способ чтения: голосом движка (обычный)"
-            )
-            refreshRows()
-        }
-        altPauseRow = addValueButton { pickPauseKeep() }
-        refreshRows()
-        scrollTop()
-    }
-
-    private fun openEnginesSub() {
-        enginesSubOpen = true
-        screenTitle("Движки")
-        content().removeAllViews()
-        forceRows.clear()
-        // Движок по умолчанию помечаем: он же и читает, когда свой не выбран.
-        val defaultEngine = ExpertPrefs.defaultEngine(act)
-        val engines = Dict.installedEngines(act)
-        for (e in engines.entries.sortedBy { it.value.lowercase() }) {
-            val pkg = e.key
-            val label = if (pkg == defaultEngine) "${e.value} (по умолчанию)" else e.value
-            val row = addValueButton { pickForceMode(pkg, label) }
-            forceRows.add(Triple(pkg, label, row))
-        }
-        if (engines.isEmpty()) {
-            // Движков не видно — сказать об этом, а не оставлять папку пустой.
-            addMenuRow("Движки синтеза не найдены", "похоже, на телефоне их нет") { }
-        }
-        refreshRows()
-        scrollTop()
-    }
-
-    /** Каким способом читать — принудительно, против автоматики. Ручка у КАЖДОГО
-     *  движка своя ([ExpertPrefs.forceMode]): прослойке ставим «только движком»,
-     *  локальному — «только файлом», и дальше просто меняем движок. */
-    private fun pickForceMode(engine: String?, engineLabel: String) {
-        val cur = ExpertPrefs.forceMode(act, engine)
-        // У движка без сетевых голосов положение «сетевые — движком, локальные —
-        // файлом» пустое — не показываем его вовсе (просьба Сержа 06.10.2026).
-        // Пока движок ни разу не читал, мы про него ничего не знаем и показываем
-        // все положения: лишняя строка лучше пропавшей нужной.
-        val knownLocal = ExpertPrefs.engineHasNetwork(act, engine) == false
-        val values = if (knownLocal) {
-            intArrayOf(ExpertPrefs.MODE_AUTO, ExpertPrefs.MODE_FILE, ExpertPrefs.MODE_DIRECT)
-        } else {
-            intArrayOf(
-                ExpertPrefs.MODE_AUTO, ExpertPrefs.MODE_FILE,
-                ExpertPrefs.MODE_DIRECT, ExpertPrefs.MODE_NET_DIRECT,
-            )
-        }
-        val labels = if (knownLocal) {
-            arrayOf(
-                "Сам, по опыту (сетевых голосов нет)",
-                "Только файлом (обычный способ, без проб и пометок)",
-                "Только движком (альтернативный способ, файл не заказываю)",
-            )
-        } else {
-            arrayOf(
-                "Сам, по опыту (файлом, а если движок не даёт — его голосом)",
-                "Только файлом (обычный способ, без проб и пометок)",
-                "Только движком (альтернативный способ, файл не заказываю)",
-                "Сетевые — движком, локальные — файлом",
-            )
-        }
-        MaterialAlertDialogBuilder(act)
-            .setTitle("Каким способом читать: $engineLabel")
-            .setSingleChoiceItems(labels, values.indexOf(cur)) { d, which ->
-                val next = values[which]
-                ExpertPrefs.setForceMode(act, engine, next)
-                Diag.log(
-                    act, "ui",
-                    "экспериментальные: способ чтения для $engineLabel — " +
-                        ExpertPrefs.forceModeLabel(next)
-                )
-                d.dismiss()
-                // Строку переписываем на месте, раздел не пересобираем: фокус
-                // диктора остаётся на этой же строке.
-                refreshRows()
-                binding.tvTitle.announceForAccessibility(
-                    "$engineLabel: ${ExpertPrefs.forceModeLabel(next)}. " +
-                        "Применится, когда начнёшь читать заново"
-                )
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-    }
-
     /** Каким способом читаю и почему — сказать вслух (просьба Сержа 06.10.2026).
      *  По одной галочке «Альтернативный способ чтения» этого не видно: прямой
      *  режим включается и сам, когда движок не отдаёт файлы ([ReadingMode]). */
@@ -991,9 +819,6 @@ class SettingsActivity(private val act: SectionActivity) {
         backupSubOpen = false
         syncSubOpen = false
         showSubOpen = false
-        // 06.10.2026: свежий вход в раздел показывает его список, а не папку
-        // «Движки» (она живёт внутри опытных настроек).
-        enginesSubOpen = false
         forgetSubRows()
         group = g
         // Имя панели — имя раздела: диктор объявляет его, когда панель меняется
@@ -1004,6 +829,7 @@ class SettingsActivity(private val act: SectionActivity) {
         when (g) {
             Group.VOICE -> buildVoiceGroup()
             Group.READING -> buildReadingGroup()
+            Group.APPEARANCE -> buildAppearanceGroup()
             Group.READER -> buildReaderGroup()
             Group.START -> buildStartGroup()
             Group.LIBRARY -> buildLibraryGroup()
@@ -1044,6 +870,8 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         // Громкость чтения (0..100%) — общий KEY_VOLUME (тот же, что был в окне «Голос и речь»).
         addVolumeSlider()
+        // 29.10.2026: переключатели «как читать» — после ползунков (просьба Сержа).
+        content().addView(picker.wayBlock())
         // «По ролям» с галочкой рядом — там же, где у панели читалки: внизу
         // набора, перед строкой словаря (просьба Сержа 29.09.2026).
         content().addView(picker.replyBlock())
@@ -1099,14 +927,13 @@ class SettingsActivity(private val act: SectionActivity) {
 
         override fun voiceApplied(v: Voice, lang: String?) {
             val e = prefs.edit().putString(MainActivity.KEY_VOICE, v.name)
-            // msg5622: язык голоса пишем, только если он не запасной — иначе
-            // движок, не знающий выбранного руками языка, стёр бы этот выбор
-            // выбором голоса из чужого языка. Запасной язык вернётся сам, когда
-            // попадётся движок, который его знает.
-            val want = prefs.getString(MainActivity.KEY_VOICE_LANG, null)
-            if (want == null || lang == want) {
-                e.putString(MainActivity.KEY_VOICE_LANG, VoicePick.codeOf(v))
-            }
+            // 29.10.2026 (жалоба Сержа по скриншоту: «выбрал белорусский голос, а
+            // в строке „Язык“ остался русский»). Раньше язык не переписывался,
+            // если не совпадал с прежним выбором, и в настройках оставалась пара
+            // «ru + белорусский голос» — язык строки и язык записи расходились с
+            // тем, что человек слышит. Выбранный ГОЛОС конкретнее языка-фильтра,
+            // поэтому его язык пишем всегда; [lang] из набора — тот же код.
+            e.putString(MainActivity.KEY_VOICE_LANG, lang ?: VoicePick.codeOf(v))
             e.apply()
             if (MainActivity.active?.player?.isReady == true) {
                 MainActivity.active?.player?.selectVoice(v.name)
@@ -1133,6 +960,33 @@ class SettingsActivity(private val act: SectionActivity) {
         }
 
         override fun redraw() = refreshRows()
+
+        // ——— Ручной способ чтения (29.10.2026) ———
+
+        /** В Настройках книги нет: пара берётся из самих настроек — движок и
+         *  голос, выбранные для чтения. */
+        override fun readWay(): Int = ReadWay.of(
+            act,
+            prefs.getString(MainActivity.KEY_ENGINE, null),
+            prefs.getString(MainActivity.KEY_VOICE, null),
+        )
+
+        override fun readWayChanged(way: Int) {
+            val engine = prefs.getString(MainActivity.KEY_ENGINE, null)
+            val voice = prefs.getString(MainActivity.KEY_VOICE, null)
+            ReadWay.set(act, engine, voice, way)
+            // Живой плеер книги (если она открыта в фоне) тоже переключаем —
+            // настройка одна на всё приложение. Читать отсюда не начинаем:
+            // правило «Настройки книгу не читают» (см. voiceApplied).
+            MainActivity.active?.player?.applyForceMode()
+            toast("Способ чтения: ${ReadWay.label(way)}")
+            refreshRows()
+        }
+
+        override fun pauseKeepChanged(ms: Int) {
+            MainActivity.active?.player?.pauseKeepMs = ms
+            Diag.log(act, "tts", "пауза между предложениями: $ms мс (из настроек)")
+        }
         override fun toast(msg: String) = this@SettingsActivity.toast(msg)
     }
 
@@ -1217,19 +1071,14 @@ class SettingsActivity(private val act: SectionActivity) {
         // старта.
         // 24.10.2026: «Пауза между фразами» переехала в подраздел «Альтернативное
         // чтение»: она про обрезку тишины в файловом пути, а обычное чтение теперь
-        // голосом движка, где режем не мы (см. [openAltSub]).
+        // голосом движка, где режем не мы.
         // msg5254: галочки «Короткие паузы между предложениями» здесь больше нет
         // (Сергей: «давай уберём эту настройку») — склейка коротких фраз и
         // обрезка тишины по краям работают всегда, как раньше по умолчанию.
-        // 24.10.2026: галочки «Альтернативный способ чтения» здесь больше нет.
-        // Обычное чтение теперь ГОЛОСОМ ДВИЖКА (как у @Voice), а файловый путь —
-        // обходной: его настройки собраны в подразделе «Альтернативное чтение»,
-        // чтобы «Чтение» не пухло (Серж: «очень много настроек получается»,
-        // «чтобы все настройки по нашему файловому чтению были там»).
-        altSubRow = addMenuRow(
-            getString(R.string.alt_sub_title),
-            getString(R.string.alt_sub_explain),
-        ) { openAltSub() }
+        // 29.10.2026: подраздела «Альтернативное чтение» больше НЕТ, и дверь в него
+        // убрана. Способ чтения и пауза между предложениями теперь выбираются
+        // руками на пару «движок + голос» в наборе «Голос» ([ReadWay]) — там же,
+        // где выбирают голос, и без второй двери на тот же вопрос.
         // msg5067: тихий звуковой поток переехал сюда из окна «Не засыпать»
         // (Сергей искал его как звуковую настройку и не нашёл: окно про батарею).
         // Он тоже про звук на стыках: держит звуковой тракт открытым, чтобы он
@@ -1290,13 +1139,12 @@ class SettingsActivity(private val act: SectionActivity) {
 
         // 24.10.2026: две галочки про прокрутку («Прокручивать экран за чтением» и
         // «Читать с того места, куда прокрутил») убраны — Серж: «очень много
-        // настроек получается». Вместо них ОДНА строка о том, где держать читаемое
-        // предложение (как настройка «Center the current sentence on the screen»
-        // у @Voice). Следствия, принятые Сержем: прокрутка всегда идёт за чтением,
-        // и место чтения всегда переходит туда, куда прокрутил человек.
+        // настроек получается». Вместо них была ОДНА строка о том, где держать
+        // читаемое предложение; 30.10.2026 убрали и её (тестер: «чтобы меньше было
+        // путаницы») — теперь при переходах фраза встаёт наверх, а по ходу чтения
+        // страница переворачивается сама (см. MainActivity.showCurrent).
         // Сама прокрутка (KEY_SCROLL, KEY_SCROLL_PLACE, KEY_SCROLL_FOLLOW) осталась
         // в коде включённой и больше настройкой не рулится (см. MainActivity).
-        scrollWhereRow = addValueButton { pickScrollWhere() }
     }
 
     // ---------------- «Чтение»: строки-выборы (30.09.2026) ----------------
@@ -1420,6 +1268,10 @@ class SettingsActivity(private val act: SectionActivity) {
             textSize = 17f
             setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp(2))
+            // 29.10.2026, просьба Сержа: ползунок — ОДНА остановка диктора.
+            // Подпись видна глазам, но в обход скринридера не попадает; её текст
+            // назван в contentDescription ползунка, значение — в stateDescription.
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         content().addView(label)
 
@@ -1467,6 +1319,8 @@ class SettingsActivity(private val act: SectionActivity) {
             textSize = 17f
             setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp(2))
+            // Ползунок — одна остановка диктора (см. addRateSlider).
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         content().addView(label)
 
@@ -1497,21 +1351,73 @@ class SettingsActivity(private val act: SectionActivity) {
         content().addView(seek, lp().apply { bottomMargin = dp(6) })
     }
 
+    /** Раздел «Внешний вид» (30.10.2026) — всё про то, КАК выглядит книга: размер
+     *  текста, контрастность, подсветка читаемой фразы и цвет нижних кнопок.
+     *
+     *  Строки идут от самого нужного слабовидящему: сначала размер, потом
+     *  контраст, потом подсветка и кнопки. Ничего про то, ЧТО показывать в книге —
+     *  это осталось в «Экране книги» (решение Сержа: «чтобы люди понимали сразу,
+     *  где это»). */
+    private fun buildAppearanceGroup() {
+        // Ползунок «Размер шрифта книги»: 12…50 sp шагом 2, 20 — прежний обычный.
+        addFontSlider()
+
+        // 30.10.2026 (решение Сержа): галочки «Высокая контрастность» БОЛЬШЕ НЕТ.
+        // «На тёмной теме она ничего не меняет, инвертирует сам телефон — убрать,
+        // нахрен не нужно». Инверсию и контраст даёт сам Android (тёмная тема,
+        // инверсия цветов), а наша галочка только путала. Тема
+        // `Theme.BookVoice.Contrast` осталась в ресурсах и в `Palette`, но окна её
+        // больше не выбирают: `Palette.KEY` никто не включает. НЕ возвращать без
+        // просьбы Сержа.
+
+        // 30.10.2026: цвет подсветки читаемой фразы. На чёрной теме подсветка из
+        // темы почти не видна — «серенькая», и «обратные цвета» решают это лучше
+        // всего (не надо различать оттенки).
+        selColorRow = addValueButton { pickSelColor() }
+
+        // 30.10.2026: цвет кнопок окна книги. Ночью светлые кнопки бьют по
+        // глазам — синие или почти чёрные много тише.
+        btnColorRow = addValueButton { pickBtnColor() }
+    }
+
+    /** Выбор цвета подсветки читаемой фразы (30.10.2026). Пункты называются тем,
+     *  что человек увидит («белый фон, чёрные буквы»), а не терминами палитры.
+     *  После выбора открытая книга перекрашивается сразу ([MainActivity.repaintHighlight]),
+     *  иначе выбор выглядел бы непринятым до возвращения в книгу. */
+    private fun pickSelColor() {
+        val cur = SelColor.value(act)
+        val labels = SelColor.VALUES.map { getString(SelColor.labelRes(it)) }.toTypedArray()
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.sel_color_title)
+            .setSingleChoiceItems(labels, SelColor.VALUES.indexOf(cur)) { d, which ->
+                SelColor.set(act, SelColor.VALUES[which])
+                d.dismiss()
+                Diag.log(act, "ui", "подсветка читаемой фразы: ${SelColor.VALUES[which]}")
+                MainActivity.active?.repaintHighlight()
+                refreshRows()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Выбор цвета нижнего ряда кнопок (30.10.2026, «ночью кнопки бьют по глазам»). */
+    private fun pickBtnColor() {
+        val cur = BtnColor.value(act)
+        val labels = BtnColor.VALUES.map { getString(BtnColor.labelRes(it)) }.toTypedArray()
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.btn_color_title)
+            .setSingleChoiceItems(labels, BtnColor.VALUES.indexOf(cur)) { d, which ->
+                BtnColor.set(act, BtnColor.VALUES[which])
+                d.dismiss()
+                Diag.log(act, "ui", "цвет нижних кнопок: ${BtnColor.VALUES[which]}")
+                MainActivity.active?.applyButtonColors()
+                refreshRows()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
     private fun buildReaderGroup() {
-        // msg5730: размер текста — первой строкой раздела. Он про то, КАК экран
-        // выглядит, а не про то, что на нём есть; и он один на всё приложение,
-        // не только на читалку. Ставим его выше галочек, чтобы до самой нужной
-        // слабовидящему настройки было меньше ходов.
-        addTextScaleRow()
-
-        // msg5730: высокая контрастность — тоже про то, КАК экран выглядит. Тема
-        // выбирается при создании окна, поэтому галочка сразу пересоздаёт окно
-        // (как и размер текста), а раздел возвращается по имени.
-        addCheck(R.string.contrast_title, Palette.KEY, false) {
-            Diag.log(act, "ui", "высокая контрастность: $it — окно пересоздаётся")
-            act.recreate()
-        }
-
         // 30.09.2026: подсказки здесь больше нет — галочки живут в подразделе
         // «Что показывать в книге», и там же сказано, что значит галочка. Здесь
         // строка говорит состояние числом, и этого довольно.
@@ -1546,33 +1452,56 @@ class SettingsActivity(private val act: SectionActivity) {
     // `reader_simple_*` и `reader_all_*` удалены вместе с кодом, как и константа
     // SIMPLE_KEEP со списком «что оставить».
 
-    /** Строка «Размер текста» (msg5730): общий размер для всего приложения, а не
-     *  только для книги. Меняется сразу и целиком: размер окно берёт при своём
-     *  создании ([TextScale.wrap] в attachBaseContext), поэтому после выбора окно
-     *  пересоздаётся, а открытый раздел возвращается по имени ([restoreGroup]) —
-     *  человек остаётся там же, где выбирал.
+    /** Ползунок «Размер шрифта книги» (30.10.2026, просьба тестера).
      *
-     *  Выбор из трёх готовых строк, а не ползунок: крайние значения надо слышать
-     *  словами, а середина между «крупным» и «очень крупным» ничего не решает. */
-    private fun addTextScaleRow() {
-        textScaleRow = addValueButton {
-            val cur = TextScale.value(act)
-            val labels = TextScale.VALUES.map { getString(TextScale.labelRes(it)) }.toTypedArray()
-            MaterialAlertDialogBuilder(act)
-                .setTitle(R.string.text_scale_title)
-                .setSingleChoiceItems(labels, TextScale.VALUES.indexOf(cur)) { d, which ->
-                    val v = TextScale.VALUES[which]
-                    d.dismiss()
-                    // Тот же размер — окно не трогаем: пересоздание стоит перехода
-                    // фокуса, а ничего не меняет.
-                    if (v == cur) return@setSingleChoiceItems
-                    TextScale.set(act, v)
-                    Diag.log(act, "ui", "размер текста: $v — окно пересоздаётся")
-                    act.recreate()
-                }
-                .setNegativeButton(R.string.toc_close, null)
-                .show()
+     *  Пришёл на место строки «Размер текста» с тремя положениями: просили мельче
+     *  обычного (на экран влезало два абзаца), поэтому ручка стала ЧИСЛОМ — от 12
+     *  до 50 sp шагом 2, где 20 — прежний обычный. Хранит и отдаёт его [BookFont],
+     *  потому что то же число меняет щипок на странице книги: ручки две, значение
+     *  одно.
+     *
+     *  Меняет сразу и без пересоздания окна — при желании видно на открытой книге
+     *  ([MainActivity.applyBookFontSize]). Значение озвучивает сам ползунок
+     *  (`stateDescription`), как ползунки скорости и громкости. */
+    private fun addFontSlider() {
+        val label = TextView(act).apply {
+            text = getString(R.string.book_font_value, BookFont.sp(act))
+            textSize = 17f
+            setTextColor(Palette.INK)
+            setPadding(0, 0, 0, dp(2))
+            // Ползунок — одна остановка диктора (см. addRateSlider).
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
+        content().addView(label)
+
+        val cd = getString(R.string.book_font_title)
+        val seek = RateSeekBar(act).apply {
+            max = BookFont.LAST_TICK
+            progress = BookFont.tick(act)
+            contentDescription = cd
+            // Один шаг на свайп — это и есть шаг шкалы (2 sp).
+            a11yStep = 1
+        }
+        fun announce(tick: Int) {
+            val txt = BookFont.spOf(tick).toString()
+            if (Build.VERSION.SDK_INT >= 30) seek.stateDescription = txt
+            else seek.contentDescription = "$cd, $txt"
+        }
+        announce(BookFont.tick(act))
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                val sp = BookFont.spOf(progress)
+                BookFont.set(act, sp)
+                announce(progress)
+                label.text = getString(R.string.book_font_value, sp)
+                // Открытая книга — сразу нового размера: иначе настройка выглядела
+                // бы сломанной, пока человек в неё не вернётся.
+                MainActivity.active?.applyBookFontSize()
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        content().addView(seek, lp().apply { bottomMargin = dp(6) })
     }
 
     /** Название режима разбора словами ([ParsePrefs.mode]): «Как в файле» или
@@ -1981,6 +1910,14 @@ class SettingsActivity(private val act: SectionActivity) {
             LibraryActivity.KEY_LIB_COVERS,
             LibraryActivity.LIB_COVERS_DEFAULT,
         )
+        // 29.10.2026, просьба Сержа: листание вкладок полки свайпом влево-вправо
+        // можно выключить. Галочка читается в момент жеста, поэтому применяется
+        // сразу — полка живёт под настройками.
+        addCheck(
+            R.string.lib_swipe_title,
+            LibraryActivity.KEY_LIB_SWIPE,
+            LibraryActivity.LIB_SWIPE_DEFAULT,
+        )
         // 30.09.2026: подсказки у этой галочки больше нет — из названия всё
         // понятно (Серж: «некоторые пункты вообще очевидные»).
         // Вкладки Библиотеки (#97, переехали из «Интерфейса» msg5317): порядок и
@@ -2187,10 +2124,6 @@ class SettingsActivity(private val act: SectionActivity) {
         syncLastRow = null
         booksRow = null
         booksBox = null
-        // 06.10.2026: строки движков живут в папке «Движки» — вне неё ссылки на
-        // них мертвы, а [refreshRows] ходит по этому списку.
-        forceRows.clear()
-        enginesGroupRow = null
         // 0.4.86 (msg7026): галочки «что показывать» живут в подразделе — вне его
         // ссылки на них мертвы. Списка галочек для «простого экрана» больше нет:
         // сами строки «простой экран» убраны 30.09.2026.
@@ -2292,6 +2225,18 @@ class SettingsActivity(private val act: SectionActivity) {
         if (SleepGuard.ignoringBattery(act)) R.string.settings_bg_hint_on
         else R.string.settings_bg_hint_off
     )
+
+    /** Подсказка к строке «Словарь произношения» в корне (29.10.2026): сколько
+     *  правил и работает ли словарь сейчас. Включённость читаем из тех же prefs,
+     *  что и сам словарь (`Dict.KEY_ON`, по умолчанию ВЫКЛЮЧЕН) — выключенный
+     *  словарь молча ничего не заменяет, и человек ищет причину не там. */
+    private fun dictRootHint(): String {
+        val n = Dict.load(act).size
+        val on = act.getSharedPreferences("reader", android.content.Context.MODE_PRIVATE)
+            .getBoolean(Dict.KEY_ON, false)
+        return if (on) getString(R.string.settings_dict_hint, n)
+        else getString(R.string.settings_dict_hint_off, n)
+    }
 
     /** Подсказка-пояснение в начале раздела. Обычный текст без роли кнопки:
      *  TalkBack читает его целиком, когда фокус встаёт на первый элемент. */
@@ -2497,24 +2442,20 @@ class SettingsActivity(private val act: SectionActivity) {
         // [ReadingMode] стоял второй строкой у галочки: Серж попросил убрать его из
         // настроек — «эту настройку надо занести в скрытые».
         val modeNow = ReadingMode.short(act)
-        // Строки движков: у каждого свой профиль способа чтения.
-        for ((pkg, label, row) in forceRows) {
-            row.text = valueLine(
-                label,
-                ExpertPrefs.forceModeLabel(ExpertPrefs.forceMode(act, pkg)),
-            )
-        }
-        // 24.10.2026: строки подраздела «Альтернативное чтение». Галочку файлов не
-        // трогаем — её текст (название и подсказка) ставится один раз в [addCheck].
-        // Ответ про способ живёт отдельной строкой в опытных настройках: галочка
-        // отвечает за выбор человека, а способ может не совпасть с ней (пометки
-        // движка, профиль).
+        // 29.10.2026: строк движков здесь больше нет — папка «Движки» убрана,
+        // способ чтения выбирают руками в наборе «Голос» ([ReadWay]).
         altModeRow?.text = valueLine("Каким способом читаю", modeNow)
-        altPauseRow?.text = valueLine(getString(R.string.pause_keep_title), pauseKeepLabel())
-        // 24.10.2026: одна строка вместо двух галочек про прокрутку.
-        scrollWhereRow?.text = valueLine(
-            getString(R.string.scroll_title),
-            scrollWhereLabel(),
+        // 30.10.2026: строк «где держать читаемое предложение» и «размер текста»
+        // больше нет — первой нет вовсе, а вторую заменил ползунок ([addFontSlider]),
+        // который держит своё значение сам.
+        // Строки раздела «Внешний вид»: подпись — выбранный вариант словами.
+        selColorRow?.text = valueLine(
+            getString(R.string.sel_color_title),
+            getString(SelColor.labelRes(SelColor.value(act))),
+        )
+        btnColorRow?.text = valueLine(
+            getString(R.string.btn_color_title),
+            getString(BtnColor.labelRes(BtnColor.value(act))),
         )
         // Экспериментальные настройки (06.10.2026): две строки-значения. Текст
         // переписываем на месте — тогда после выбора в диалоге фокус диктора
@@ -2544,10 +2485,7 @@ class SettingsActivity(private val act: SectionActivity) {
         // msg5730: резюме строки размера текста — выбранное значение. Строки
         // может и не быть в этом разделе (тогда ссылка с прошлой сборки мертва,
         // это безвредно).
-        textScaleRow?.text = valueLine(
-            getString(R.string.text_scale_title),
-            getString(TextScale.labelRes(TextScale.value(act)))
-        )
+        // 30.10.2026: строки нет — размер показывает ползунок в «Чтении».
 
         val startLast = prefs.getString(MainActivity.KEY_START, MainActivity.START_LAST) == MainActivity.START_LAST
         startRow?.text = valueLine(
@@ -2623,8 +2561,7 @@ class SettingsActivity(private val act: SectionActivity) {
         // 30.09.2026: строка-выбор раздела «Чтение». Галочки «останавливать
         // чтение» и «долистал сам» состояние держат сами — им резюме не нужно.
         jumpPlayRow?.text = valueLine(getString(R.string.jump_play_title), jumpPlayLabel())
-        // msg5604: «Пауза между предложениями: <значение>».
-        pauseKeepRow?.text = valueLine(getString(R.string.pause_keep_title), pauseKeepLabel())
+        // 29.10.2026: строка «Пауза между предложениями» живёт в наборе «Голос».
         // 30.09.2026: «Уровень этого звука: <значение>».
         silentLevelRow?.text = valueLine(getString(R.string.silent_level_title), silentLevelLabel())
         readerBarsRow?.text = valueLine(getString(R.string.reader_bars_title), readerBarsLabel())
@@ -2810,45 +2747,8 @@ class SettingsActivity(private val act: SectionActivity) {
         else -> R.string.start_rewind_5
     })
 
-    /** Значения «Паузы между фразами» (msg5604): мс тишины, которые оставляем
-     *  на стыке. 130 — как было до этой строки (50 мс в голове + 83 мс в
-     *  хвосте), 0 — срезать всё, что движок дописал по краям фразы. */
-    private val pauseKeepValues = intArrayOf(0, 130, 300, 600)
-
-    /** 24.10.2026: ГДЕ держать читаемое предложение — «сверху» (как было) или
-     *  «по центру» (настройка «Center the current sentence on the screen» у @Voice).
-     *  Заменила две прежние галочки про прокрутку: Серж — «очень много настроек
-     *  получается». Значение читает `MainActivity.alignSentence`. */
-    private fun pickScrollWhere() {
-        val center = prefs.getBoolean(MainActivity.KEY_SCROLL_WHERE_CENTER, false)
-        val labels = arrayOf(
-            getString(R.string.scroll_where_top),
-            getString(R.string.scroll_where_center),
-        )
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.scroll_title)
-            .setSingleChoiceItems(labels, if (center) 1 else 0) { d, which ->
-                prefs.edit()
-                    .putBoolean(MainActivity.KEY_SCROLL_WHERE_CENTER, which == 1)
-                    .apply()
-                // Показать сразу на открытой книге: иначе человек выбрал «по центру»,
-                // а лента стоит по-старому до следующего перехода.
-                MainActivity.active?.realignCurrent()
-                d.dismiss()
-                refreshRows()
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-    }
-
-    /** Название выбранного положения — для строки-резюме. */
-    private fun scrollWhereLabel(): String = getString(
-        if (prefs.getBoolean(MainActivity.KEY_SCROLL_WHERE_CENTER, false)) {
-            R.string.scroll_where_center
-        } else {
-            R.string.scroll_where_top
-        }
-    )
+    // 30.10.2026: выбор «где держать читаемое предложение» (сверху / по центру) и
+    // его функция-резюме удалены вместе со строкой — см. [buildReadingGroup].
 
     /** 24.10.2026: число повторов запроса к сетевому голосу (1…10), как
      *  «Retry count, if error downloading» у @Voice. 1 — одна попытка, как было. */
@@ -2870,44 +2770,14 @@ class SettingsActivity(private val act: SectionActivity) {
             .show()
     }
 
+    // 29.10.2026: выбор «Пауза между предложениями» переехал в набор «Голос»
+    // (VoicePicker.pickPauseKeep) — там же, где выбирают способ чтения «файлами».
+    // Здесь его нет: одна настройка живёт в одном месте.
+
     private fun netRetriesLabel(): String {
         val n = prefs.getInt(MainActivity.KEY_NET_RETRIES, 1).coerceIn(1, 10)
         return if (n == 1) "1 — без повторов" else "$n"
     }
-
-    private fun pickPauseKeep() {
-        val cur = prefs.getInt(MainActivity.KEY_PAUSE_KEEP, MainActivity.PAUSE_KEEP_DEFAULT)
-            .let { v -> pauseKeepValues.indexOf(v).takeIf { it >= 0 } ?: 1 }
-        val labels = arrayOf(
-            getString(R.string.pause_keep_0),
-            getString(R.string.pause_keep_130),
-            getString(R.string.pause_keep_300),
-            getString(R.string.pause_keep_600),
-        )
-        MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.pause_keep_title)
-            .setSingleChoiceItems(labels, cur) { d, which ->
-                val keep = pauseKeepValues[which]
-                prefs.edit().putInt(MainActivity.KEY_PAUSE_KEEP, keep).apply()
-                // Живой плеер открытой книги (как галочка «Бесшовная»): значение
-                // работает для фраз, которые ещё не синтезированы.
-                MainActivity.active?.player?.pauseKeepMs = keep
-                d.dismiss()
-                rebuildCurrentGroup()
-            }
-            .setNegativeButton(R.string.toc_close, null)
-            .show()
-    }
-
-    /** Название выбранной паузы — для строки-резюме. */
-    private fun pauseKeepLabel(): String = getString(
-        when (prefs.getInt(MainActivity.KEY_PAUSE_KEEP, MainActivity.PAUSE_KEEP_DEFAULT)) {
-            0 -> R.string.pause_keep_0
-            300 -> R.string.pause_keep_300
-            600 -> R.string.pause_keep_600
-            else -> R.string.pause_keep_130
-        }
-    )
 
     // ---------------- Тихий поток: громкость (30.09.2026) ----------------
 
@@ -3041,9 +2911,9 @@ class SettingsActivity(private val act: SectionActivity) {
                 acts.add(1)
             }
             val visibleNonAll = order.count { it !in hiddenSet && it != LibraryActivity.FILTER_ALL }
-            val canHide = mode != LibraryActivity.FILTER_ALL &&
-                mode != LibraryActivity.activeFilterMode &&
-                visibleNonAll > 1
+            // 29.10.2026: открытую вкладку тоже можно спрятать — библиотека после
+            // этого встанет на «Все» (см. [LibraryActivity.forgetActiveFilter]).
+            val canHide = mode != LibraryActivity.FILTER_ALL && visibleNonAll > 1
             if (canHide) {
                 items.add(getString(R.string.lib_tabs_hide))
                 acts.add(2)
@@ -3080,8 +2950,10 @@ class SettingsActivity(private val act: SectionActivity) {
                 return
             }
             if (mode == LibraryActivity.activeFilterMode) {
-                toast(getString(R.string.lib_tabs_cannot_active))
-                return
+                // 29.10.2026, вопрос Сержа «почему нельзя скрыть прочитанное»:
+                // запрет был из-за того, что вкладка ОТКРЫТА в библиотеке. Теперь
+                // прятать можно: полка встанет на «Все».
+                LibraryActivity.forgetActiveFilter(prefs)
             }
             val visibleNonAll = order.filter { it !in hidden && it != LibraryActivity.FILTER_ALL }
             if (visibleNonAll.size <= 1) {

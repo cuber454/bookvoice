@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.tts.Voice
 import android.view.Gravity
 import android.view.View
@@ -13,6 +14,15 @@ import androidx.appcompat.widget.SwitchCompat
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+
+/** Сколько времени снимок списка голосов считаем свежим (30.10.2026). Меньше
+ *  этого срока второй раз к движку не ходим: заход в панель голоса сразу за
+ *  касанием строки не должен стоить двух вопросов к движку. */
+private const val VOICES_FRESH_MS = 5000L
+
+/** Дольше этого движок список голосов думать не должен — тогда говорим вслух,
+ *  что список читается (см. [VoicePicker.askVoices]). */
+private const val VOICES_SLOW_MS = 700L
 
 /** Набор «Голос чтения» — ОДИН код на читалку и Настройки (msg5610/msg5614/
  *  msg5618). Сергей упёрся в то, что в читалке строки движка/языка/голоса
@@ -43,11 +53,20 @@ class VoicePicker(
      *  вешал окно, и Android предлагал «закрыть или подождать». */
     private var askingVoices = false
 
+    /** Когда список голосов спрашивали у движка в последний раз (30.10.2026).
+     *
+     *  Зачем: [SpeechPlayer.voices] — СНИМОК, сделанный при запуске движка. Голоса
+     *  человек может добавлять САМОМУ движку (у TeraTTS голос кладётся вав-файлом
+     *  и появляется в движке сам), и наш снимок от этого не менялся: в списке
+     *  оставались прежние голоса, пока движок не перевыберут (перевыбор поднимает
+     *  движок заново — только тогда снимок и перечитывался). Теперь список
+     *  перечитывается при КАЖДОМ заходе в голоса, а частые перерисовки строк — нет
+     *  (см. [askVoices], [VOICES_FRESH_MS]). */
+    private var voicesAskedAtMs = 0L
+
     /** Ключи настроек: у реплик свои голос, движок и язык. */
     private val keyEngine: String
         get() = if (target == Target.REPLY) MainActivity.KEY_REPLY_ENGINE else MainActivity.KEY_ENGINE
-    private val keyVoice: String
-        get() = if (target == Target.REPLY) MainActivity.KEY_REPLY_VOICE else MainActivity.KEY_VOICE
     private val keyLang: String
         get() = if (target == Target.REPLY) MainActivity.KEY_REPLY_LANG else MainActivity.KEY_VOICE_LANG
     /** Что хост даёт набору и что получает от него. */
@@ -93,12 +112,34 @@ class VoicePicker(
          *  выключено»). Хост отдаёт режим живому плееру и перечитывает текущее
          *  предложение, чтобы разница была слышна сразу. */
         fun replyToggled(on: Boolean)
+
+        /** Ручной способ чтения для пары «движок + голос» ([ReadWay]) — 29.10.2026.
+         *  Хост знает, какая пара выбрана СЕЙЧАС (у книги может быть свой голос). */
+        fun readWay(): Int
+
+        /** Человек выбрал способ вручную: запомнить НАВСЕГДА для этой пары и
+         *  применить. В читалке — применить сразу, в Настройках — к живому плееру. */
+        fun readWayChanged(way: Int)
+
+        /** «Пауза между предложениями» изменена (только в файловом способе). */
+        fun pauseKeepChanged(ms: Int)
     }
 
     val playRow: Button = actionRow()
     val engineRow: Button = valueRow()
     val langRow: Button = valueRow()
     val voiceRow: Button = valueRow()
+
+    /** «Как читать» (29.10.2026, просьба Сержа: «убрать автоматизацию, чтобы я сам
+     *  для движка настроил и запомнил навсегда»). Строка стоит СРАЗУ ПОД голосом:
+     *  способ выбирается на пару «движок + голос», и человек должен видеть, к
+     *  какой паре он относится. Только в читалке и в Настройках (не у реплик). */
+    val readWayRow: Button = valueRow()
+
+    /** «Пауза между предложениями» — видна ТОЛЬКО при способе «Файлами»: при
+     *  чтении голосом движка паузы ставит сам движок, и ручка там ничего не
+     *  значит (решение Сержа 29.10.2026). */
+    val pauseRow: Button = valueRow()
 
     /** Реплики другим голосом (26.09.2026): одна строка-ПЕРЕХОД в своё окно
      *  «Чтение по ролям». Так решено Сержем 26.09.2026: настройка живёт в одном
@@ -129,6 +170,12 @@ class VoicePicker(
      *  текущего голоса. */
     private var pickLang: String? = null
 
+    /** Язык выбран РУКАМИ в списке языков (29.10.2026): значит, строку «Язык»
+     *  больше не подтягиваем за голосом, пока человек не выберет другой голос.
+     *  Без этого признака ручной выбор языка-фильтра сбрасывался бы при каждой
+     *  перерисовке. */
+    private var langPickedByUser = false
+
     /** Собрать набор в контейнер: кнопка чтения/образца, строка «По ролям» и
      *  три строки-значения. У репликовой цели строки свои, «По ролям» не нужна. */
     fun build(parent: LinearLayout) {
@@ -148,19 +195,40 @@ class VoicePicker(
         parent.addView(engineRow)
         parent.addView(langRow)
         parent.addView(voiceRow)
+        // 29.10.2026: способ чтения и пауза НЕ здесь — они идут ниже ползунков
+        // ([wayBlock]): просьба Сержа «сначала голоса, настройка голосов,
+        // ползунки, а потом уже переключатели, как читать».
         resetLang()
         refresh()
     }
 
-    /** Две кнопки в одну строку, каждая на половину ширины. */
-    fun pairRow(a: View, b: View): LinearLayout = LinearLayout(ctx).apply {
-        orientation = LinearLayout.HORIZONTAL
+    /** Переключатели «Как читать» и «Пауза между предложениями» — блоком ПОД
+     *  ползунками (29.10.2026, просьба Сержа: «сначала голоса, потом ползунки, а
+     *  потом уже переключатели, как читать»).
+     *
+     *  Ставит его хозяин набора, а не [build]: порядок у читалки и у Настроек один
+     *  и тот же — движок, язык, голос, скорость, тон, громкость, и только после
+     *  них способ чтения. У реплик этих строк нет: путь чтения один на книгу. */
+    fun wayBlock(): View = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT,
         )
-        addView(a, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(
+            readWayRow,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        addView(
+            pauseRow,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
     }
 
     /** Строка прямой речи и её галочка для НИЗА набора (29.09.2026, просьба
@@ -209,8 +277,12 @@ class VoicePicker(
      *  строки в своём порядке (между ними встаёт переключатель режима). */
     fun attach() {
         engineRow.setOnClickListener { pickEngine() }
-        langRow.setOnClickListener { pickLangList() }
-        voiceRow.setOnClickListener { pickVoice() }
+        // 30.10.2026: перед списком языков и голосов перечитываем голоса у
+        // движка — голоса добавляются самому синтезатору (см. [askVoices]).
+        langRow.setOnClickListener { refreshThen { pickLangList() } }
+        voiceRow.setOnClickListener { refreshThen { pickVoice() } }
+        readWayRow.setOnClickListener { pickReadWay() }
+        pauseRow.setOnClickListener { pickPauseKeep() }
         replyRow.setOnClickListener { host.openReplyWindow() }
         if (target == Target.MAIN) {
             replyCheck.setOnCheckedChangeListener { _, checked ->
@@ -264,6 +336,61 @@ class VoicePicker(
         cb.setOnCheckedChangeListener { _, checked -> host.rememberChanged(checked) }
     }
 
+    /** Спросить у движка СВЕЖИЙ список голосов и только потом звать [then].
+     *
+     *  30.10.2026, просьба Сержа: «добавил в TeraTTS третий голос, а в читалке
+     *  по-прежнему два — надо перевыбирать движок». Причина: [SpeechPlayer.voices]
+     *  — снимок, сделанный при запуске движка; перечитывали мы его, только когда
+     *  снимок был ПУСТ. Голос, добавленный самому движку (TeraTTS собирает голоса
+     *  из вав-файлов), движок отдаёт сразу — а мы у него не спрашивали. Поэтому и
+     *  помогало перевыбрать движок: там движок поднимается заново, и снимок
+     *  делается новый. Теперь список перечитывается при каждом заходе в голоса.
+     *
+     *  Вопрос уходит в сторону ([SpeechPlayer.refreshVoices]) — главный поток не
+     *  стоит (24.10 на этом вешалось окно). Если список ждут у экрана (человек
+     *  коснулся строки «Голос» или «Язык», [announce]), а движок думает долго
+     *  ([VOICES_SLOW_MS]), говорим вслух «читаю список голосов…»: незрячему
+     *  молчание после касания кажется несработавшим касанием. Фоновая перечитка
+     *  строк ([refresh]) молчит: там ждать ничего не надо. */
+    private fun askVoices(p: SpeechPlayer, announce: Boolean = false, then: () -> Unit) {
+        voicesAskedAtMs = SystemClock.elapsedRealtime()
+        askingVoices = true
+        val before = p.voices.size
+        val slow = Runnable {
+            if (askingVoices) host.toast(ctx.getString(R.string.voice_list_loading))
+        }
+        if (announce) main.postDelayed(slow, VOICES_SLOW_MS)
+        p.refreshVoices {
+            main.removeCallbacks(slow)
+            askingVoices = false
+            val after = p.voices.size
+            if (after != before) {
+                // Строка для разборов: голоса движка правда изменились (человек
+                // добавил или убрал голос в самом синтезаторе).
+                Diag.log(ctx, "tts", "список голосов движка обновлён: было $before, стало $after")
+            }
+            then()
+        }
+    }
+
+    /** Перед списком голосов и языков перечитать список у движка (см. [askVoices]).
+     *  Свежий снимок второй раз не спрашиваем: панель уже спросила его при
+     *  открытии, а лишний вопрос к движку — это ожидание перед списком.
+     *
+     *  Если вопрос уже в пути (панель только что открыли), ждём его ответ, а не
+     *  открываем список по старому снимку: иначе жалоба «в списке прежние голоса»
+     *  возвращалась бы через ту же щель. Ожидание ограничено ([VOICES_SLOW_MS] ×
+     *  несколько), после — показываем как есть. */
+    private fun refreshThen(attempt: Int = 0, then: () -> Unit) {
+        val p = host.playerOrNull()
+        if (p != null && p.isReady && askingVoices && attempt < 8) {
+            main.postDelayed({ refreshThen(attempt + 1, then) }, 150)
+            return
+        }
+        val fresh = SystemClock.elapsedRealtime() - voicesAskedAtMs <= VOICES_FRESH_MS
+        if (p != null && p.isReady && !fresh) askVoices(p, announce = true, then = then) else then()
+    }
+
     /** Перерисовать подписи строк и кнопки чтения из текущего состояния. */
     fun refresh() {
         // Строка словаря стоит внизу, и её состояние живёт в своём окне: без
@@ -276,12 +403,14 @@ class VoicePicker(
         // 5-7 секунд, а телефон предлагал «закрыть или подождать» (журнал
         // зависаний 24.10: главный поток стоял в TextToSpeech.getVoices). Пока
         // список не приехал, строки говорят «читаю список голосов…».
-        if (p != null && p.isReady && voices.isEmpty() && !askingVoices) {
-            askingVoices = true
-            p.refreshVoices {
-                askingVoices = false
-                refresh()
-            }
+        //
+        // 30.10.2026: спрашиваем не только когда снимок ПУСТ, но и когда он
+        // устарел, — иначе добавленный в движке голос не появлялся вовсе
+        // (см. [voicesAskedAtMs]).
+        if (p != null && p.isReady && !askingVoices &&
+            (voices.isEmpty() || SystemClock.elapsedRealtime() - voicesAskedAtMs > VOICES_FRESH_MS)
+        ) {
+            askVoices(p) { refresh() }
         }
         // Движок: у реплик он свой и берётся из настроек реплик — живого плеера
         // у чужого движка может и не быть.
@@ -300,7 +429,21 @@ class VoicePicker(
         // если движок его знает (msg5622) — строка «Язык» не должна показывать
         // язык, голосов которого у движка нет.
         if (voices.isNotEmpty()) {
-            pickLang = VoicePick.pickLangFor(voices, pickLang, host.currentVoice())
+            // 29.10.2026: строка «Язык» должна показывать язык ВЫБРАННОГО ГОЛОСА.
+            // Жалоба по скриншоту (второй заход): «язык русский, а голос
+            // белорусский». Причина — расхождение в том, ЧЕЙ голос считаем
+            // выбранным: строка «Голос» показывает голос из памяти движка
+            // ([voiceText]), а язык брался только у живого выбора плеера, которого
+            // в момент открытия панели ещё нет. Поэтому обе строки спрашивают
+            // ОДИН источник — [shownVoice].
+            val voiceLang = shownVoice(voices, pkg)?.let { VoicePick.codeOf(it) }
+            pickLang = if (!langPickedByUser && voiceLang != null) {
+                voiceLang
+            } else {
+                VoicePick.pickLangFor(
+                    voices, pickLang, shownVoice(voices, pkg)?.name ?: host.currentVoice()
+                )
+            }
         }
         val langText = if (voices.isEmpty()) {
             if (askingVoices) {
@@ -320,6 +463,24 @@ class VoicePicker(
         engineRow.text = ctx.getString(R.string.voice_row_value, ctx.getString(R.string.voice_engine_row), engineName)
         langRow.text = ctx.getString(R.string.voice_row_value, ctx.getString(R.string.voice_lang_row), langText)
         voiceRow.text = ctx.getString(R.string.voice_row_value, ctx.getString(R.string.voice_voice_row), voiceText)
+        if (target == Target.MAIN) {
+            // 29.10.2026: ручной способ чтения этой пары. Строка всегда на виду —
+            // иначе из файлового способа некуда вернуться.
+            val way = host.readWay()
+            readWayRow.text = ctx.getString(
+                R.string.voice_row_value, ctx.getString(R.string.read_way_row), ReadWay.label(way)
+            )
+            // Пауза между предложениями имеет смысл только в файловом способе:
+            // при чтении голосом движка паузы ставит сам движок.
+            pauseRow.visibility = if (way == ReadWay.FILE) View.VISIBLE else View.GONE
+            if (way == ReadWay.FILE) {
+                pauseRow.text = ctx.getString(
+                    R.string.voice_row_value,
+                    ctx.getString(R.string.pause_keep_title),
+                    pauseKeepLabel(),
+                )
+            }
+        }
         if (target == Target.MAIN) {
             // На экране подпись короткая — строка делится с «Читать»; всё
             // состояние уходит в описание для диктора, и он читает его целиком.
@@ -357,6 +518,20 @@ class VoicePicker(
      *  движок». Имени чужого голоса в строке нет: движок его не знает, и подпись
      *  врала бы — Сергей видел ровно это (msg5722: движок VIKTORIUS, а в строке
      *  голос прошлого движка, microsoft_ru-RU-DariyaNeural). */
+    /** Голос, который реально будет читать, — ТОТ ЖЕ, что показан в строке «Голос».
+     *
+     *  29.10.2026 (второй заход по жалобе «язык русский, а голос белорусский»).
+     *  Живой выбор плеера ([Host.currentVoice]) появляется не сразу: панель могут
+     *  открыть раньше, чем плеер применил записанный голос. Тогда строка «Голос»
+     *  берёт голос из памяти движка ([voiceText]), а строка «Язык» брала пустоту и
+     *  показывала прежний язык из настроек. Обе строки обязаны смотреть сюда. */
+    private fun shownVoice(voices: List<Voice>, pkg: String?): Voice? {
+        host.currentVoice()?.let { name -> voices.firstOrNull { it.name == name }?.let { return it } }
+        if (target == Target.REPLY) return null
+        val remembered = MainActivity.voiceForEngine(prefs, pkg) ?: return null
+        return voices.firstOrNull { it.name == remembered }
+    }
+
     private fun voiceText(voices: List<Voice>, pkg: String?, chosen: String?): String {
         // Реплики: голос показываем из СВОИХ настроек. За движком его не
         // запоминаем — у реплик одна запись, и она видна как есть.
@@ -417,8 +592,14 @@ class VoicePicker(
      *  пустому списку голосов нельзя: в Настройках без книги движка нет вовсе,
      *  и записанный язык подменялся бы запасным на ровном месте. */
     fun resetLang() {
+        // Панель открыли заново — список голосов спрашиваем у движка заново:
+        // человек мог добавить голос самому синтезатору (см. [voicesAskedAtMs]).
+        voicesAskedAtMs = 0L
         val p = host.playerOrNull()
         val want = prefs.getString(keyLang, null)
+        // Свежий набор: ручного выбора языка в этом окне ещё не было — строка
+        // «Язык» снова следует за выбранным голосом.
+        langPickedByUser = false
         pickLang = if (p == null || p.voices.isEmpty()) {
             want
         } else {
@@ -487,7 +668,18 @@ class VoicePicker(
                             // и перечитка ушла бы прежним голосом. Без книги
                             // restartAfterSwitch молчит. Реплик это не касается:
                             // смена движка РЕПЛИК книгу не перечитывает.
-                            if (target == Target.MAIN) ReaderEngine.restartAfterSwitch()
+                            //
+                            // 29.10.2026, то же правило, что у выбора голоса
+                            // (просьба Сержа: «читается одно предложение и
+                            // останавливается»): смена движка ставит чтение на
+                            // паузу, а перечитка становится ПРОБОЙ одной фразы —
+                            // иначе после смены книжка уезжала дальше сама.
+                            if (target == Target.MAIN) {
+                                if (ReaderEngine.playing) {
+                                    ReaderEngine.pausePlayback(keepFocus = true)
+                                }
+                                ReaderEngine.restartAfterSwitch()
+                            }
                             afterEngineChange(p, temp)
                         }
                     }
@@ -586,8 +778,28 @@ class VoicePicker(
                 .setTitle(R.string.voice_pick_lang)
                 .setSingleChoiceItems(labels, idx) { d, which ->
                     d.dismiss()
-                    pickLang = langs[which].code
-                    host.langApplied(langs[which].code)
+                    val code = langs[which].code
+                    pickLang = code
+                    // Язык выбран РУКАМИ: пока человек не сменит голос, строка
+                    // «Язык» держит именно этот язык (см. refresh).
+                    langPickedByUser = true
+                    host.langApplied(code)
+                    // 29.10.2026, жалоба Сержа: «выбрал русский язык, а голос
+                    // остался белорусский». Язык был ТОЛЬКО фильтром списка: голос
+                    // не менялся, звук оставался прежним, и строка «Голос» врала о
+                    // том, что слышно. Теперь язык — это и есть переключение:
+                    // ставим голос ВЫБРАННОГО языка (тот, что запомнен за
+                    // движком, если он этого языка, иначе первый).
+                    val pool = langs[which].voices
+                    val remembered = MainActivity.voiceForEngine(prefs, p.enginePackage)
+                    val pick = pool.firstOrNull { it.name == remembered } ?: pool.firstOrNull()
+                    if (pick != null) {
+                        p.selectVoice(pick.name)
+                        if (target == Target.MAIN) {
+                            MainActivity.rememberVoiceForEngine(prefs, p.enginePackage, pick.name)
+                        }
+                        host.voiceApplied(pick, code)
+                    }
                     refresh()
                     host.redraw()
                 }
@@ -626,6 +838,17 @@ class VoicePicker(
                     // открывать строку «Голос» и листать до того же места.
                     // Закрывает список сам читатель, кнопкой «Закрыть».
                     val v = list[which]
+                    // 29.10.2026, жалоба Сержа по скриншоту: «выбираю белорусский
+                    // голос, а в строке „Язык“ остаётся русский». Причина: язык
+                    // строки — это фильтр списка, и он не менялся при выборе
+                    // голоса, да ещё и уходил в настройки как язык выбранного
+                    // голоса. Теперь язык СЛЕДУЕТ за голосом: выбрал белорусский
+                    // голос — открытым языком и записанным языком становится
+                    // белорусский.
+                    val voiceLang = VoicePick.codeOf(v)
+                    pickLang = voiceLang
+                    // Голос важнее ручного выбора языка: язык теперь следует за ним.
+                    langPickedByUser = false
                     p.selectVoice(v.name)
                     // msg5726: голос помним за движком, которому он выбран, —
                     // вернёшься на этот движок, и голос вернётся сам. Репликам
@@ -633,7 +856,7 @@ class VoicePicker(
                     if (target == Target.MAIN) {
                         MainActivity.rememberVoiceForEngine(prefs, p.enginePackage, v.name)
                     }
-                    host.voiceApplied(v, pickLang)
+                    host.voiceApplied(v, voiceLang)
                     refresh()
                     host.redraw()
                     // Книги нет (Настройки) — сразу слушаем голос образцом фразы,
@@ -651,12 +874,82 @@ class VoicePicker(
                 .setNegativeButton(R.string.toc_close, null)
                 .create()
             dlg.show()
-            if (temp) dlg.setOnDismissListener { p.shutdown() }
+            // 29.10.2026, просьба Сержа: закрыли список голосов — образец
+            // обрывается. Прежде он договаривал и звучал уже в книге, куда человек
+            // уходил из этого окна.
+            dlg.setOnDismissListener {
+                stopSample()
+                if (temp) p.shutdown()
+            }
         }
     }
 
-    // ---------------- Строки ----------------
+    // ---------------- Способ чтения и пауза (29.10.2026) ----------------
 
+    /** Выбор способа чтения для пары «движок + голос» ([ReadWay]).
+     *
+     *  Два положения и ни одного лишнего: «голосом движка» (по умолчанию — так
+     *  читает и @Voice) и «файлами». Положение «решает читалка» убрано 29.10.2026
+     *  по просьбе Сержа: «может, вообще убрать автоматический режим — оставить
+     *  только по умолчанию и файлами». Оно и было тем самым «то работает, то
+     *  нет»; теперь способ железный, а ошибиться может только человек — и он же
+     *  это исправит одним касанием.
+     *
+     *  Выбор уходит в хост сразу: в читалке он применяется к живой книге (текущая
+     *  фраза перечитывается новым способом), в Настройках — к живому плееру, если
+     *  книга открыта. Длинного пояснения в окне нет: в одном окне со списком оно
+     *  уже отнимало место у списка (17.10.2026). */
+    private fun pickReadWay() {
+        val values = intArrayOf(ReadWay.DIRECT, ReadWay.FILE)
+        val labels = values.map { ReadWay.label(it) }.toTypedArray()
+        val cur = values.indexOf(host.readWay()).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.read_way_row)
+            .setSingleChoiceItems(labels, cur) { d, which ->
+                val way = values[which]
+                host.readWayChanged(way)
+                d.dismiss()
+                refresh()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    /** Сколько тишины движка оставлять на стыке фраз (мс). Значение общее с
+     *  Настройками — [MainActivity.KEY_PAUSE_KEEP]. */
+    private fun pauseKeep(): Int =
+        prefs.getInt(MainActivity.KEY_PAUSE_KEEP, MainActivity.PAUSE_KEEP_DEFAULT)
+
+    private fun pauseKeepLabel(): String = when (pauseKeep()) {
+        0 -> ctx.getString(R.string.pause_keep_0)
+        300 -> ctx.getString(R.string.pause_keep_300)
+        600 -> ctx.getString(R.string.pause_keep_600)
+        else -> ctx.getString(R.string.pause_keep_130)
+    }
+
+    /** «Пауза между предложениями» — только для файлового способа: при чтении
+     *  голосом движка паузы ставит сам движок. */
+    private fun pickPauseKeep() {
+        val values = intArrayOf(0, 130, 300, 600)
+        val labels = arrayOf(
+            R.string.pause_keep_0, R.string.pause_keep_130,
+            R.string.pause_keep_300, R.string.pause_keep_600,
+        ).map { ctx.getString(it) }.toTypedArray()
+        val cur = values.indexOf(pauseKeep()).let { if (it < 0) 1 else it }
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle(R.string.pause_keep_title)
+            .setSingleChoiceItems(labels, cur) { d, which ->
+                val ms = values[which]
+                prefs.edit().putInt(MainActivity.KEY_PAUSE_KEEP, ms).apply()
+                host.pauseKeepChanged(ms)
+                d.dismiss()
+                refresh()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
+    }
+
+    // ---------------- Строки ----------------
     /** Строка-значение: объявлена обычным текстом (TalkBack не говорит «кнопка»),
      *  как все выбиралки Настроек — сортировка, папка, таймер. */
     private fun valueRow(): Button = Button(ctx).apply {
@@ -755,17 +1048,16 @@ class VoicePicker(
 
     // ---------------- Образец фразы (книги нет) ----------------
 
-    /** Плеер образца. Держим свой, а не просим у хоста: в Настройках хост
-     *  поднимает временный и гасит его при закрытии списка — образец же должен
-     *  звучать по нажатию и не поднимать движок заново на каждый раз. */
-    private var samplePlayer: SpeechPlayer? = null
+    /** Плеер образца живёт в [SampleVoice] (29.10.2026): его гасит и закрытие
+     *  списка голосов, и начало чтения книги из другого окна. Здесь — только
+     *  «пусть звучит». */
     private val main = Handler(Looper.getMainLooper())
 
     private fun playSample() {
         // Два голоса разом звучать не должны: читалка точно молчит (книги нет),
         // но движок мог остаться в чужом окне.
         ReaderEngine.pausePlayback()
-        val p = samplePlayer ?: SpeechPlayer(ctx.applicationContext).also { samplePlayer = it }
+        val p = SampleVoice.take(ctx)
         if (p.isReady) {
             speakSample(p)
             return
@@ -797,8 +1089,12 @@ class VoicePicker(
 
     /** Погасить плеер образца (уход из Настроек). */
     fun shutdownSample() {
-        samplePlayer?.shutdown()
-        samplePlayer = null
+        SampleVoice.shutdown()
+    }
+
+    /** Оборвать образец, не гася движок: список голосов закрыли. */
+    private fun stopSample() {
+        SampleVoice.stop()
     }
 
     /** Подпись приложения-движка по пакету: движок ради подписи поднимать не надо. */

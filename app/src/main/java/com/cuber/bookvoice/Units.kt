@@ -42,4 +42,10 @@ internal object Units {
     fun labelOfKey(key: Long): String =
         if (key < 0) "неизвестно"
         else label(key / PARTS_MAX, (key % PARTS_MAX).toInt())
+
+    /** Позиция фразы по ключу единицы (30.10.2026): понадобилась правилу порядка
+     *  в очереди плеера — «ожидаемый кусок принадлежит той фразе, что звучит
+     *  сейчас». Разбор повтора в журнале 01:40 — `docs/HISTORY.md`. */
+    fun posOf(key: Long): Long =
+        if (key < 0) -1L else key / PARTS_MAX
 }

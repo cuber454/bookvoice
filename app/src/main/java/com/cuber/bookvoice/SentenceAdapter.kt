@@ -3,8 +3,10 @@ package com.cuber.bookvoice
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
 import android.text.style.LeadingMarginSpan
 import android.text.util.Linkify
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -71,6 +73,24 @@ class SentenceAdapter(
     )
 
     private val rows = ArrayList<Row>()
+
+    /** Размер текста абзацев в sp (30.10.2026, [BookFont]). Абзац применяет его
+     *  при каждой привязке, поэтому смена размера — это [setFontSp] плюс
+     *  перерисовка ленты: уже разложенные на экране абзацы тоже обязаны
+     *  переехать, иначе половина экрана осталась бы прежнего размера. */
+    var fontSp = BookFont.DEFAULT
+        private set
+
+    fun setFontSp(sp: Int) {
+        if (sp == fontSp) return
+        fontSp = sp
+        notifyDataSetChanged()
+    }
+
+    /** Перекрасить подсветку (30.10.2026): цвет читаемой фразы выбирают в
+     *  настройках, а звать надо у открытой книги — иначе новый цвет появился бы
+     *  только после перезахода в книгу. */
+    fun refreshHighlight() = notifyDataSetChanged()
 
     /** С какой строки ленты начинается глава; размер — число глав. */
     private var rowStart = IntArray(0)
@@ -245,15 +265,53 @@ class SentenceAdapter(
         notifyDataSetChanged()
     }
 
-    /** Отметить читаемое предложение. */
-    fun setCurrent(chapter: Int, sentence: Int) {
-        if (chapter == curChapter && sentence == curSentence) return
+    /** Отметить читаемое предложение.
+     *
+     *  Возвращает false, если строки для этого места в ленте нет (лента разошлась
+     *  с книгой) — читалка пишет об этом в журнал.
+     *
+     *  29.10.2026 (жалоба Сержа «читает дальше, а подсветка не переключается»).
+     *  Прежде при том же самом месте функция выходила сразу, ничего не перерисовав.
+     *  Один раз этого хватало, но строку мог перерисовать кто-то ещё (пересборка
+     *  ленты, смена выделения, возврат из другого окна), и подсветка оставалась
+     *  на прежнем месте, пока чтение шло вперёд. Теперь строку перерисовываем
+     *  ВСЕГДА — лишняя перерисовка одного абзаца дешевле, чем человек, читающий
+     *  без подсветки. */
+    fun setCurrent(chapter: Int, sentence: Int): Boolean {
         val old = currentRow()
+        val same = chapter == curChapter && sentence == curSentence
         curChapter = chapter
         curSentence = sentence
         val new = currentRow()
-        if (old >= 0 && old != new) notifyItemChanged(old)
-        if (new >= 0) notifyItemChanged(new)
+        if (!same && old >= 0 && old != new) repaint(old)
+        if (new >= 0) repaint(new)
+        return new >= 0
+    }
+
+    /** Перерисовать строку — но НЕ во время раскладки: звать `notifyItemChanged`
+     *  в этот момент значит упасть с «Cannot call this method while RecyclerView is
+     *  computing a layout». Прежде этим не страдали, потому что при том же месте
+     *  функция выходила молча; теперь подсветку обновляем всегда, и окно для
+     *  падения стало шире. Просим перерисовать сразу после раскладки. */
+    private fun repaint(position: Int) {
+        val rv = attachedRecycler
+        if (rv != null && rv.isComputingLayout) {
+            rv.post { notifyItemChanged(position) }
+        } else {
+            notifyItemChanged(position)
+        }
+    }
+
+    private var attachedRecycler: RecyclerView? = null
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        super.onAttachedToRecyclerView(recyclerView)
+        attachedRecycler = recyclerView
+    }
+
+    override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
+        super.onDetachedFromRecyclerView(recyclerView)
+        if (attachedRecycler === recyclerView) attachedRecycler = null
     }
 
     fun clearCurrent() = setCurrent(-1, -1)
@@ -302,6 +360,7 @@ class SentenceAdapter(
             }
             is ParagraphVH -> {
                 val v = holder.tv
+                v.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSp.toFloat())
                 v.text = highlight(row, v)
                 v.bindSentences(row.starts, row.ends)
                 v.onSentenceClick = { i -> onSentenceClick(row.chapter, row.first + i) }
@@ -321,14 +380,31 @@ class SentenceAdapter(
      *  именно предложение внутри абзаца. */
     private fun highlight(row: Row, view: View): CharSequence {
         val text = SpannableString(row.text)
+        // 30.10.2026: цвет подсветки читаемой фразы выбирается в настройках
+        // («Внешний вид»): у «обратных цветов» перекрашиваются и буквы, потому что
+        // на светлом фоне буквы цвета страницы были бы не видны. Спрашиваем раз на
+        // абзац, а не на предложение: значение одно на всё приложение.
+        val ctx = view.context
+        val curBg = SelColor.bg(ctx)
+        val curFg = SelColor.fg(ctx)
         for (i in row.starts.indices) {
             val from = row.starts[i]
             val to = row.ends[i]
             if (to <= from) continue
             val chapter = row.chapter
             val sentence = row.first + i
+            if (chapter == curChapter && sentence == curSentence) {
+                text.setSpan(
+                    BackgroundColorSpan(curBg), from, to, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                if (curFg != 0) {
+                    text.setSpan(
+                        ForegroundColorSpan(curFg), from, to, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+                continue
+            }
             val color = when {
-                chapter == curChapter && sentence == curSentence -> Palette.SEL_CURRENT
                 chapter == anchorChapter && sentence == anchorSentence -> Palette.SEL_ANCHOR
                 inSelection(chapter, sentence) -> Palette.SEL_RANGE
                 else -> 0

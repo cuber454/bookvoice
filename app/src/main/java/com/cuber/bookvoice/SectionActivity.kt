@@ -1,6 +1,5 @@
 package com.cuber.bookvoice
 
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -92,12 +91,9 @@ abstract class SectionActivity : AppCompatActivity() {
         requestPerm.launch(permission)
     }
 
-    /** Размер текста (msg5730) — окна-секции получают его здесь, до создания
-     *  разметки: дальше и надутые из XML экраны, и строки, построенные кодом,
-     *  читают размер из уже поднятой конфигурации. */
-    override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(TextScale.wrap(newBase))
-    }
+    // 30.10.2026: attachBaseContext с TextScale убран — размер текста больше не
+    // поднимает всё окно. Книга берёт своё число из [BookFont], а окна слушаются
+    // системного размера шрифта Android.
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // msg5730: тема окна (обычная или контрастная) выбирается до создания

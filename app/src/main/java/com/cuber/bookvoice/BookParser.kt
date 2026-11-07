@@ -299,6 +299,11 @@ object BookParser {
      *  пределом ограничивает чтение дозаполнение серии на полке (msg6042). */
     internal const val META_PREFIX = 256 * 1024
 
+    /** Сколько первых абзацев главы считаем возможным заголовком и сверяем с
+     *  названием (29.10.2026). Заголовок в книге — одна-три строки, больше не
+     *  бывает; дальше сверять незачем. */
+    private const val HEADING_PARAS_MAX = 4
+
     internal inline fun <T> tryParse(block: () -> T?): T? = try {
         block()
     } catch (_: Exception) {
@@ -541,9 +546,14 @@ object BookParser {
             val paragraphs = xhtmlParagraphs(stripNoise(text))
             if (paragraphs.isEmpty()) continue
             val title = titles[doc] ?: firstHeading(text)
+            // 29.10.2026, жалоба Сержа «глава вторая, глава вторая» (книга «Троян.
+            // ГУЛАГ нашего времени»): заголовок страницы попадал и в НАЗВАНИЕ главы
+            // (из оглавления), и в ТЕКСТ главы — читалка приклеивала название к
+            // первой фразе, и голос говорил его второй раз.
+            val body = dropHeadingParagraphs(paragraphs, title)
             chapters.add(Chapter(
                 title?.takeIf { it.isNotBlank() },
-                TextSplit.fromParagraphs(paragraphs),
+                TextSplit.fromParagraphs(body),
             ))
         }
         if (chapters.isEmpty()) return null
@@ -565,6 +575,33 @@ object BookParser {
             unescape(stripTags(m.groupValues[1])).trim().takeIf { it.isNotEmpty() }
         }
     }
+
+    /** Снять с начала главы абзацы, которые на самом деле ЗАГОЛОВОК (29.10.2026).
+     *
+     *  Заголовок страницы (`<h1>глава 2.<br>незабываемый отпуск</h1>`) разбор
+     *  режет на абзацы и кладёт в ТЕКСТ главы, а название той же главы приходит из
+     *  оглавления. Читалка приклеивает название к первой фразе — заголовок звучит
+     *  дважды. Пока первый абзац целиком «влезает» в название — считаем его
+     *  заголовком и из текста убираем (в оглавлении и строкой на экране он
+     *  остаётся). Сверяем без регистра, знаков и лишних пробелов. */
+    private fun dropHeadingParagraphs(paragraphs: List<String>, title: String?): List<String> {
+        val t = normHeading(title ?: return paragraphs)
+        if (t.isEmpty()) return paragraphs
+        var from = 0
+        while (from < paragraphs.size && from < HEADING_PARAS_MAX) {
+            val p = normHeading(paragraphs[from])
+            if (p.length < 3) break
+            if (!t.contains(p)) break
+            from++
+        }
+        if (from == 0) return paragraphs
+        // Если вся глава оказалась одним заголовком — не выбрасываем текст целиком.
+        return if (from < paragraphs.size) paragraphs.drop(from) else paragraphs
+    }
+
+    /** Строка для сверки заголовка с текстом: без регистра и знаков. */
+    private fun normHeading(s: String): String =
+        s.lowercase(java.util.Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
 
     /** Прочитать только текстовые файлы EPUB (xhtml/opf/ncx) в память.
      *  Обрыв усечённого файла (msg6161) — не повод падать: отдаём то, что
@@ -1389,8 +1426,6 @@ object BookParser {
         return null
     }
 
-    internal fun wordsOf(text: String): Int =
-        if (text.isBlank()) 0 else text.trim().split(Regex("\\s+")).size
 
     private fun wordsIn(ch: Chapter): Int =
         ch.sentences.sumOf { it.text.split(Regex("\\s+")).size }

@@ -46,18 +46,10 @@ class TestHooks : BroadcastReceiver() {
             }
 
             ACTION_BROKEN -> {
-                val on = intent.getBooleanExtra(EXTRA_ON, true)
-                // Вид поломки: `--es kind refuse` — движок отказывается принять
-                // заявку, иначе — мгновенное «готово» без звука (см. [queueDirect]).
-                val refuse = intent.getStringExtra("kind") == "refuse"
-                val key = if (refuse) ExpertPrefs.KEY_BROKEN_REFUSE else ExpertPrefs.KEY_BROKEN_ENGINE
-                val p = app.getSharedPreferences("reader", Context.MODE_PRIVATE)
-                p.edit().putBoolean(key, on).apply()
-                Diag.log(
-                    app, "test",
-                    "проверка ${if (refuse) "«движок отказывается»" else "«сломанный движок»"}: " +
-                        if (on) "включена" else "выключена",
-                )
+                // 29.10.2026: сама проверка удалена вместе со строками в опытных
+                // настройках. Команду оставляем как вежливый ответ, а не молчание:
+                // Серж (и я) можем позвать её из старых привычек.
+                Diag.log(app, "test", "проверка «сломанный движок» удалена: так больше нельзя")
             }
 
             ACTION_READ -> {
@@ -123,9 +115,31 @@ class TestHooks : BroadcastReceiver() {
                         "карточка ${if (MediaSessionService.isUp()) "поднята" else "не поднята"}; " +
                         "движок ${p?.enginePackage ?: "системный"}; " +
                         "играет ${if (ReaderEngine.playing) "да" else "нет"}; " +
-                        "сломанный движок ${if (ExpertPrefs.brokenEngine(app)) "включён" else "выключен"}; " +
                         "зеркало ${if (Diag.mirrorToLogcat) "включено" else "выключено"}",
                 )
+            }
+
+            ACTION_LIB -> {
+                // ВЫГРУЗИТЬ СПИСОК БИБЛИОТЕКИ В LOGCAT (29.10.2026, просьба Сержа:
+                // «проверь, все ли книги из папки в библиотеке»). library.json лежит
+                // в приватной папке приложения, а `run-as` на его прошивке запрещён
+                // (SELinux), поэтому наружу записи отдаём журналом: имя + адрес.
+                // Сравнивать с папкой книг — по адресу, а не по названию.
+                Diag.mirrorToLogcat = true
+                val lib = runCatching { BookStore.all(app) }.getOrDefault(emptyList())
+                Log.i(Diag.LOGCAT_TAG, "test: книг в библиотеке ${lib.size}")
+                Thread {
+                    for ((idx, rec) in lib.withIndex()) {
+                        // 29.10.2026: к имени добавили название и статус — по ним
+                        // видно «пустую строку полки» (запись без названия) и то, в
+                        // какой вкладке книга оказалась.
+                        Log.i(
+                            Diag.LOGCAT_TAG,
+                            "lib: ${rec.name} | ${rec.uri} | ${rec.displayTitle} | ст.${rec.status}"
+                        )
+                        if (idx % 40 == 39) runCatching { Thread.sleep(300) }
+                    }
+                }.start()
             }
 
             // ПРОВЕРКА ЭКРАНА «ДОСТУП КО ВСЕМ ФАЙЛАМ» (24.10.2026). Нужна потому,
@@ -157,5 +171,6 @@ class TestHooks : BroadcastReceiver() {
         const val ACTION_LOG = "com.cuber.bookvoice.TEST.log"
         const val ACTION_GOTO = "com.cuber.bookvoice.TEST.goto"
         const val ACTION_ALLFILES = "com.cuber.bookvoice.TEST.allfiles"
+        const val ACTION_LIB = "com.cuber.bookvoice.TEST.lib"
     }
 }

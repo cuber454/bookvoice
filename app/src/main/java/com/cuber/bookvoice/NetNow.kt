@@ -27,13 +27,6 @@ object NetNow {
     }.getOrDefault(true)
 
     /** Понимает ли система, что сейчас мобильная сеть (тогда Wi-Fi нет). */
-    fun onMobile(c: Context): Boolean = runCatching {
-        val cm = c.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return@runCatching false
-        val net = cm.activeNetwork ?: return@runCatching false
-        val caps = cm.getNetworkCapabilities(net) ?: return@runCatching false
-        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-    }.getOrDefault(false)
 
     private object Caps {
         fun isWifi(caps: NetworkCapabilities): Boolean =

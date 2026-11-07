@@ -75,7 +75,10 @@
             android:layout_marginStart="4dp"
             android:contentDescription="@string/reader_more_cd"
             android:gravity="center"
-            android:minWidth="48dp"
+            android:minWidth="0dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            app:cornerRadius="24dp"
             app:icon="@drawable/ic_more"
             app:iconSize="24dp" />
     </LinearLayout>
@@ -99,7 +102,10 @@
             android:layout_marginStart="4dp"
             android:contentDescription="@string/toc_btn"
             android:gravity="center"
-            android:minWidth="48dp"
+            android:minWidth="0dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            app:cornerRadius="24dp"
             app:icon="@drawable/ic_toc"
             app:iconSize="24dp" />
 
@@ -111,7 +117,10 @@
             android:layout_marginStart="4dp"
             android:contentDescription="@string/search_button_cd"
             android:gravity="center"
-            android:minWidth="48dp"
+            android:minWidth="0dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            app:cornerRadius="24dp"
             app:icon="@drawable/ic_search"
             app:iconSize="24dp" />
 
@@ -123,7 +132,10 @@
             android:layout_marginStart="4dp"
             android:contentDescription="@string/bookmark_btn"
             android:gravity="center"
-            android:minWidth="48dp"
+            android:minWidth="0dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            app:cornerRadius="24dp"
             app:icon="@drawable/ic_bookmark"
             app:iconSize="24dp" />
     </LinearLayout>
@@ -305,7 +317,9 @@
         </ScrollView>
     </LinearLayout>
 
-        <androidx.recyclerview.widget.RecyclerView
+        <!-- 30.10.2026: своя лента вместо обычного RecyclerView — листается
+             страницами (см. PageList). -->
+        <com.cuber.bookvoice.PageList
             android:id="@+id/sentenceList"
             android:layout_width="match_parent"
             android:layout_height="0dp"

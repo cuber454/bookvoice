@@ -620,8 +620,6 @@ class CatalogActivity(private val act: SectionActivity) {
     private fun isTopFeed(url: String): Boolean =
         (nav.lastOrNull() as? Nv.Feed)?.url == url
 
-    private fun hasMore(s: FeedSession?): Boolean =
-        s != null && s.loadedOnce && s.nextUrl != null && s.failMsg == null && !s.loadingMore
 
     private fun removePending() {
         pendingRow?.let { content().removeView(it) }

@@ -45,9 +45,6 @@ object Palette {
     fun contrastOn(ctx: Context): Boolean =
         prefs(ctx).getBoolean(KEY, false)
 
-    fun setContrast(ctx: Context, on: Boolean) {
-        prefs(ctx).edit().putBoolean(KEY, on).apply()
-    }
 
     /**
      * Подготовить окно: выбрать тему и прочитать из неё палитру. Зовётся ПЕРВЫМ

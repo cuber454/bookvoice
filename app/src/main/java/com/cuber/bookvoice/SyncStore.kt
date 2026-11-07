@@ -216,9 +216,6 @@ object SyncStore {
 
     fun enabled(c: Context): Boolean = prefs(c).getBoolean(KEY_ON, false)
 
-    fun setEnabled(c: Context, on: Boolean) {
-        prefs(c).edit().putBoolean(KEY_ON, on).apply()
-    }
 
     fun dirUri(c: Context): Uri? =
         prefs(c).getString(KEY_DIR, null)?.let { Uri.parse(it) }

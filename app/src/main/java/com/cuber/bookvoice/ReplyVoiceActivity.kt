@@ -626,6 +626,15 @@ class ReplyVoiceActivity : RowsActivity() {
          *  Настроек; в этом окне режим переключает строка «Реплики». Метод
          *  интерфейса всё равно нужен, и он делает то же самое. */
         override fun replyToggled(on: Boolean) = applyReplyToPlayer()
+
+        /** Способ чтения к репликам не относится: у реплик только голос, а путь
+         *  чтения один на книгу ([ReadWay]). Строк этих в наборе реплик нет
+         *  (см. VoicePicker.build), поэтому методы ничего не делают. */
+        override fun readWay(): Int = ReadWay.DEFAULT
+
+        override fun readWayChanged(way: Int) = Unit
+
+        override fun pauseKeepChanged(ms: Int) = Unit
     }
 
     // ---------------- Режим ----------------
@@ -673,6 +682,9 @@ class ReplyVoiceActivity : RowsActivity() {
             textSize = 17f
             setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp(2))
+            // 29.10.2026, просьба Сержа: ползунок — ОДНА остановка диктора.
+            // Подпись остаётся для глаз, текст подписи назван в ползунке.
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         into.addView(label)
 
@@ -715,6 +727,8 @@ class ReplyVoiceActivity : RowsActivity() {
             textSize = 17f
             setTextColor(Palette.INK)
             setPadding(0, 0, 0, dp(2))
+            // Ползунок — одна остановка диктора (см. addRateSlider).
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         into.addView(label)
 

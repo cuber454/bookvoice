@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.os.Bundle
 import android.os.SystemClock
 import android.text.Spanned
+import android.text.TextUtils
 import android.text.style.URLSpan
 import android.util.AttributeSet
 import android.view.KeyEvent
@@ -187,7 +188,10 @@ class ParagraphView @JvmOverloads constructor(
                 // требует координат экрана, а у нас их тут нет. Оставляем как есть
                 // и сторожим: если Google уберёт этот вызов, сломается навигация
                 // диктора по предложениям внутри абзаца — это заметят сразу.
-                node.setBoundsInParent(Rect(0, 0, 1, 1))
+                // 30.10.2026: не пиксель — иначе «рамка курсора» оказывается
+                // квадратиком в один пиксель (см. [boundsOfSentence]).
+                node.setBoundsInParent(guessBounds())
+                node.setBoundsInScreen(boundsOfSentenceOnScreen(i))
                 return
             }
             node.text = text.subSequence(starts[i], ends[i])
@@ -242,6 +246,12 @@ class ParagraphView @JvmOverloads constructor(
             // Устаревший вызов — по той же причине, что и выше: другой подходящей
             // привязки границ у виртуального узла нет.
             node.setBoundsInParent(boundsOfSentence(i))
+            // 30.10.2026: и координаты на ЭКРАНЕ — по ним диктор рисует рамку
+            // (см. [boundsOfSentenceOnScreen]).
+            node.setBoundsInScreen(boundsOfSentenceOnScreen(i))
+            // Абзац только что привязан и ещё не измерен — границы сейчас
+            // прикидка; после замера попросим диктора переспросить.
+            if (layout == null) refreshBoundsSoon()
         }
 
         /** Абзац целиком диктору не читаем: его читают предложения. Узел хоста
@@ -640,24 +650,92 @@ class ParagraphView @JvmOverloads constructor(
 
     /** Рамка предложения в координатах представления (для диктора). Считаем по
      *  разметке текста: предложение может занимать несколько строк, а строка —
-     *  кончаться на середине соседнего предложения. */
+     *  кончаться на середине соседнего предложения.
+     *
+     *  30.10.2026, жалоба Сержа: «рамка курсора не захватывает читаемое
+     *  предложение — то маленький квадратик, то вообще где-то посередине».
+     *  Прежний запасной ответ был `Rect(0, 0, 1, 1)` — квадрат в ОДИН пиксель, он
+     *  и есть «маленький квадратик»: диктор спрашивает границы сразу после
+     *  привязки абзаца, когда разметки ([layout]) ещё нет (её создаёт замер),
+     *  получает пиксель и держит его, пока не тронет узел снова. Теперь вместо
+     *  пикселя отдаём прикидку во всю ширину абзаца и в одну строку, а когда
+     *  разметка появится, просим диктора переспросить границы
+     *  ([refreshBoundsSoon]). */
     private fun boundsOfSentence(i: Int): Rect {
-        val l = layout ?: return Rect(0, 0, 1, 1)
+        val l = layout
+        if (l == null || i !in starts.indices) return guessBounds()
+        // Разметка может остаться от ПРЕЖНЕГО текста: строку ленты перепривязали
+        // (подсветка переехала), а замер ещё не прошёл. Тогда смещения
+        // предложений — чужие, и рамка встанет не туда. Сверяем содержимое.
+        if (!TextUtils.equals(l.text, text)) {
+            refreshBoundsSoon()
+            return guessBounds()
+        }
+        // 30.10.2026, ТРЕТЬЯ жалоба Сержа («рамка схлопывается в вертикальную
+        // черту»). Причина не в дикторе, а в арифметике: у предложения на
+        // НЕСКОЛЬКИХ строках левый край брали с первой строки, а правый — с
+        // последней. Если последняя строка короче, правый край оказывался ЛЕВЕЕ
+        // левого, и рамка вырождалась в черту 1 px высотой в абзац. У однострочных
+        // предложений такой беды нет — потому и «короткие нормально, а в абзаце
+        // схлопывается».
+        // Теперь у многострочного предложения рамка = ВЕСЬ блок: от левого края
+        // первой строки до правого края последней.
         val len = l.text.length
         val s = starts[i].coerceIn(0, len)
         val e = ends[i].coerceIn(s, len)
         val firstLine = l.getLineForOffset(s)
         val lastLine = if (e > s) l.getLineForOffset(e - 1) else firstLine
-        val left = l.getPrimaryHorizontal(s).toInt()
-        val right = if (e < len && l.getLineForOffset(e) == lastLine) {
-            l.getPrimaryHorizontal(e).toInt()
+        val left: Int
+        val right: Int
+        if (firstLine == lastLine) {
+            left = l.getPrimaryHorizontal(s).toInt()
+            right = if (e >= s) l.getPrimaryHorizontal(e).toInt() else left + 1
         } else {
-            l.getLineRight(lastLine).toInt()
+            left = l.getLineLeft(firstLine).toInt()
+            right = maxOf(l.getLineRight(firstLine).toInt(), l.getLineRight(lastLine).toInt())
         }
         val top = l.getLineTop(firstLine)
         val bottom = l.getLineBottom(lastLine)
         val r = Rect(left, top, maxOf(right, left + 1), maxOf(bottom, top + 1))
         r.offset(totalPaddingLeft, totalPaddingTop)
         return r
+    }
+
+    /** Прикидка рамки, пока разметки нет: одна строка во всю ширину абзаца. */
+    private fun guessBounds(): Rect {
+        val w = (width - totalPaddingLeft - totalPaddingRight).coerceAtLeast(1)
+        val h = (paint.textSize * 1.4f).toInt().coerceAtLeast(1)
+        return Rect(totalPaddingLeft, totalPaddingTop, totalPaddingLeft + w, totalPaddingTop + h)
+    }
+
+    /** Рамка предложения в координатах ЭКРАНА (30.10.2026). Диктор рисует рамку
+     *  по ним: внутриабзацные координаты после прокрутки ленты устаревают, а
+     *  экранные он переспрашивает вместе с положением строки. */
+    private fun boundsOfSentenceOnScreen(i: Int): Rect {
+        val r = boundsOfSentence(i)
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        r.offset(loc[0], loc[1])
+        return r
+    }
+
+    /** Диктор спрашивал границы, когда разметки ещё не было: после замера просим
+     *  переспросить узлы (один раз на привязку). Без этого он нарисует рамку по
+     *  прикидке и будет держать её. */
+    private var boundsRefreshPending = false
+
+    private fun refreshBoundsSoon() {
+        if (boundsRefreshPending) return
+        boundsRefreshPending = true
+        // Два раза: сразу (разметка уже новая) и через 60 мс — на случай, что
+        // замер и раскладка пройдут позже первого сообщения. Диктор переспросит
+        // узлы и перерисует рамку.
+        post {
+            helper.invalidateRoot()
+            postDelayed({
+                boundsRefreshPending = false
+                helper.invalidateRoot()
+            }, 60L)
+        }
     }
 }
