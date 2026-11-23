@@ -2,6 +2,7 @@ package com.cuber.bookvoice
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.DocumentsContract
 import java.io.File
 
@@ -33,18 +34,44 @@ object DownloadStore {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("reader", Context.MODE_PRIVATE)
 
-    fun write(ctx: Context, title: String, fmt: OpdsFormat, bytes: ByteArray): Placed {
-        val tree = prefs(ctx).getString(OpdsPrefs.KEY_DL_DIR, null)
+    fun write(ctx: Context, title: String, fmt: OpdsFormat, bytes: ByteArray): Placed =
+        write(ctx, title, fmt, bytes, null)
+
+    /** [sub] — подпапка внутри папки скачивания («Автор», «Автор — Серия»).
+     *  Нужна пакетному скачиванию всей серии или автора (20.11.2026, просьба
+     *  Сержа): сотни файлов плоским списком в папке разбирать невозможно, а
+     *  полочный скан подпапки видит (ходит на пять уровней). null — пишем
+     *  прямо в папку, как раньше; старые вызовы не меняются. Не удалось
+     *  создать подпапку — пишем в корень: книга важнее порядка на диске. */
+    fun write(
+        ctx: Context,
+        title: String,
+        fmt: OpdsFormat,
+        bytes: ByteArray,
+        sub: String?,
+    ): Placed {
+        // 20.11.2026 (Серж: «пускай всё в одну папку качается, в нашу для
+        // книг»): отдельная папка скачивания упразднена — цель та же, что у
+        // полки, tree-uri папки книг. Старый ключ подметается один раз.
+        val p = prefs(ctx)
+        if (p.contains(OpdsPrefs.KEY_DL_DIR)) {
+            Diag.log(ctx, "opds", "старая папка скачивания (${p.getString(OpdsPrefs.KEY_DL_DIR, "")}) убрана: качаем в папку книг")
+            p.edit().remove(OpdsPrefs.KEY_DL_DIR).apply()
+        }
+        val tree = p.getString(LibraryActivity.KEY_TREE, null)
         val base = safeName(title)
+        val clean = sub?.split("/")
+            ?.joinToString("/") { safeName(it).takeIf { s -> s != "book" } ?: "book" }
+            ?.takeIf { it.isNotBlank() && it != "book" }
         // 0.4.69: каталог отдаёт часть книг АРХИВОМ под книжным расширением
         // (flibusta: fb2+zip, txt+zip, html+zip, rtf+zip — проверено на живом
         // OPDS: тип application/zip, имя у сервера «Название.fb2.zip»). Пишем
         // то, что внутри: файл должен быть тем, чем называется.
         val (data, ext) = honestFile(ctx, fmt, bytes)
-        if (tree == null) return writeInternalTo(ctx, base, ext, data)
+        if (tree == null) return writeInternalTo(ctx, clean, base, ext, data)
 
         return try {
-            writeToTree(ctx, Uri.parse(tree), base, ext, data)
+            writeToTree(ctx, Uri.parse(tree), clean, base, ext, data)
         } catch (e: Exception) {
             // 0.3.47 (msg1165/1167): выбранная SAF-папка не умеет createDocument
             // (сторонние проводники вроде MixPlorer). Раньше каждая загрузка сюда
@@ -53,8 +80,9 @@ object DownloadStore {
             val real = runCatching {
                 if (!AllFiles.granted(ctx)) return@runCatching null
                 val dir = AllFiles.resolveDir(Uri.parse(tree)) ?: return@runCatching null
-                if (!dir.isDirectory) dir.mkdirs()
-                val f = uniqueFile(dir, base, ext)
+                val under = if (clean != null) File(dir, clean) else dir
+                if (!under.isDirectory) under.mkdirs()
+                val f = uniqueFile(under, base, ext)
                 f.writeBytes(data)
                 f
             }.getOrNull()
@@ -62,18 +90,27 @@ object DownloadStore {
                 Diag.log(ctx, "opds", "записал реальным путём: ${real.absolutePath}")
                 Placed(Uri.fromFile(real).toString(), real.name, fallback = false)
             } else {
-                // Реальный путь не вышел — внутренняя память (как 0.3.47).
-                // Сбрасываем нерабочую папку и предупреждаем пользователя.
-                Diag.log(ctx, "opds", "папка не пишет файлы, качаю во внутреннюю: ${e.message}")
-                prefs(ctx).edit().remove(OpdsPrefs.KEY_DL_DIR).apply()
-                writeInternalTo(ctx, base, ext, data).copy(fallback = true)
+                // Реальный путь не вышел — ЭТА книга ляжет во внутреннюю память
+                // (как 0.4.47 предупреждало). НИКАКОГО сброса папки: с
+                // 20.11.2026 это папка КНИГ, её право живёт своей жизнью
+                // (перевыбор — только через строку «Папка книг»).
+                Diag.log(ctx, "opds", "папка не пишет файлы, книга легла во внутреннюю: ${e.message}")
+                writeInternalTo(ctx, clean, base, ext, data).copy(fallback = true)
             }
         }
     }
 
     /** Внутренняя папка приложения (всегда работает). */
-    private fun writeInternalTo(ctx: Context, base: String, ext: String, bytes: ByteArray): Placed {
-        val dir = File(ctx.filesDir, "books").apply { mkdirs() }
+    private fun writeInternalTo(
+        ctx: Context,
+        sub: String?,
+        base: String,
+        ext: String,
+        bytes: ByteArray,
+    ): Placed {
+        val root = File(ctx.filesDir, "books")
+        val dir = if (sub != null) File(root, sub) else root
+        dir.mkdirs()
         val file = uniqueFile(dir, base, ext)
         file.writeBytes(bytes)
         return Placed(Uri.fromFile(file).toString(), file.name, fallback = false)
@@ -82,17 +119,78 @@ object DownloadStore {
     private fun writeToTree(
         ctx: Context,
         tree: Uri,
+        sub: String?,
         base: String,
         ext: String,
         bytes: ByteArray,
     ): Placed {
+        var parent: Uri = tree
+        if (sub != null) {
+            for (seg in sub.split("/").filter { it.isNotBlank() }) {
+                // Не вышло создать уровень — пишем в то, что есть выше: книга
+                // важнее порядка на диске.
+                parent = ensureChildDir(ctx, tree, parent, seg) ?: break
+            }
+        }
         val doc = DocumentsContract.createDocument(
-            ctx.contentResolver, tree, mimeForExt(ext), base + ext,
+            ctx.contentResolver, parent, mimeForExt(ext), base + ext,
         ) ?: throw OpdsException("не удалось создать файл в выбранной папке")
         val out = ctx.contentResolver.openOutputStream(doc)
             ?: throw OpdsException("не удалось записать файл в выбранную папку")
         out.use { it.write(bytes) }
         return Placed(doc.toString(), queryDisplayName(ctx, doc) ?: base + ext, fallback = false)
+    }
+
+    /** Подпапка ([name]) внутри [parent] (parent — uri документа-папки дерева;
+     *  сам tree-uri понимают некоторые провайдеры как корень) — существующая по
+     *  имени или свежесозданная. null — не вышло. */
+    private fun ensureChildDir(ctx: Context, tree: Uri, parent: Uri, name: String): Uri? {
+        val docId = dirDocId(ctx, tree, parent)
+        val probe = if (docId != null) DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId) else return null
+        val found = runCatching {
+            ctx.contentResolver.query(
+                probe,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                ),
+                null, null, null,
+            )?.use { c ->
+                val iId = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val iMime = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val iName = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                while (c.moveToNext()) {
+                    if (c.getString(iMime) != DocumentsContract.Document.MIME_TYPE_DIR) continue
+                    val got = if (iName >= 0) c.getString(iName) else null
+                    if (got.equals(name, ignoreCase = true)) {
+                        return@use DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(iId))
+                    }
+                }
+                null
+            }
+        }.getOrNull()
+        if (found != null) return found
+        return runCatching {
+            DocumentsContract.createDocument(
+                ctx.contentResolver, parent, DocumentsContract.Document.MIME_TYPE_DIR, name,
+            )
+        }.getOrNull()
+    }
+
+    /** Document id папки внутри дерева: для tree-uri — её корень, для document-uri
+     *  — последний сегмент пути ([DocumentsContract.findDocumentPath], API 26+).
+     *  На старых Android вложенный уровень не найти — тогда пишем туда, где
+     *  достали: книга важнее порядка на диске. */
+    private fun dirDocId(ctx: Context, tree: Uri, parent: Uri): String? {
+        runCatching { DocumentsContract.getTreeDocumentId(parent) }.getOrNull()?.let { return it }
+        if (Build.VERSION.SDK_INT >= 26) {
+            // Path.getPath() рамework-версии — это Deque<String> document id'ов,
+            // последний = сам документ.
+            return runCatching {
+                DocumentsContract.findDocumentPath(ctx.contentResolver, parent)?.path?.lastOrNull()
+            }.getOrNull()
+        }
+        return null
     }
 
     private fun queryDisplayName(ctx: Context, uri: Uri): String? = runCatching {

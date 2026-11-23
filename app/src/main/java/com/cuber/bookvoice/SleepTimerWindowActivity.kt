@@ -96,6 +96,40 @@ class SleepTimerWindowActivity : RowsActivity() {
         contentRoot.removeAllViews()
         addHint(getString(R.string.sleep_timer_intro))
 
+        // 12.11.2026, просьба Сержа: галочка «Ставить таймер каждый раз». Включил
+        // один раз и выбрал время — читалка ставит таймер сама при каждом начале
+        // чтения и больше об этом не надо думать. По умолчанию выключена: у кого
+        // не просили, у того всё как раньше.
+        addCheck(
+            getString(R.string.sleep_always_title),
+            getString(R.string.sleep_always_hint),
+            SleepTimerPrefs.KEY_ALWAYS,
+            false,
+            tag = TAG_ALWAYS,
+        ) { on ->
+            Diag.log(
+                this, "sleep",
+                "окно таймера: «ставить каждый раз» ${if (on) "включено" else "выключено"}",
+            )
+            if (on && ReaderEngine.sleepMode == ReaderEngine.SLEEP_OFF) {
+                // Время ещё не выбирали — ставим пятнадцать минут и говорим об
+                // этом: иначе галочка включена, а таймера нет вовсе.
+                val m = SleepTimerPrefs.lastMinutes(this).takeIf { it > 0 } ?: AUTO_FIRST_MINUTES
+                ReaderEngine.setSleepTimerMinutes(m)
+                Toast.makeText(
+                    this,
+                    getString(R.string.sleep_always_on, getString(R.string.sleep_min, m)),
+                    Toast.LENGTH_LONG,
+                ).show()
+            } else if (!on) {
+                Toast.makeText(this, getString(R.string.sleep_always_off), Toast.LENGTH_LONG).show()
+            }
+            // Подписи у времени пересобираем («15 минут — всегда»), а фокус
+            // оставляем на галочке, иначе диктор уедет в начало окна.
+            buildContent()
+            focusTag(TAG_ALWAYS)
+        }
+
         if (ReaderEngine.sleepTimerActive) {
             addRow(
                 getString(R.string.sleep_off),
@@ -104,12 +138,20 @@ class SleepTimerWindowActivity : RowsActivity() {
             ) { cancelTimer() }
         }
 
+        val always = SleepTimerPrefs.always(this)
+        val lastMin = SleepTimerPrefs.lastMinutes(this)
         for (m in SleepTimerPrefs.MINUTE_CHOICES) {
             val active = ReaderEngine.sleepMode == ReaderEngine.SLEEP_MINUTES &&
                 ReaderEngine.sleepMinutes == m
+            // «15 минут — всегда»: слышно, что это время будет ставиться само.
+            val hint = when {
+                active -> getString(R.string.sleep_timer_now)
+                always && lastMin == m -> getString(R.string.sleep_always_word)
+                else -> null
+            }
             addRow(
                 getString(R.string.sleep_min, m),
-                if (active) getString(R.string.sleep_timer_now) else null,
+                hint,
                 tag = tagMinutes(m),
             ) { pickMinutes(m) }
         }
@@ -117,7 +159,11 @@ class SleepTimerWindowActivity : RowsActivity() {
         val chapterActive = ReaderEngine.sleepMode == ReaderEngine.SLEEP_CHAPTER
         addRow(
             getString(R.string.sleep_chapter),
-            if (chapterActive) getString(R.string.sleep_timer_now) else null,
+            when {
+                chapterActive -> getString(R.string.sleep_timer_now)
+                always && SleepTimerPrefs.lastChapter(this) -> getString(R.string.sleep_always_word)
+                else -> null
+            },
             tag = TAG_CHAPTER,
         ) { pickChapter() }
 
@@ -176,6 +222,13 @@ class SleepTimerWindowActivity : RowsActivity() {
         const val TAG_OFF = "sleep_off"
         const val TAG_CHAPTER = "sleep_chapter"
         const val TAG_SETTINGS = "sleep_settings"
+
+        /** Строка галочки «Ставить таймер каждый раз» (12.11.2026). */
+        const val TAG_ALWAYS = "sleep_always"
+
+        /** Сколько ставить, если галочку включили, а время ни разу не выбирали.
+         *  Те же пятнадцать минут, что и в движке ([ReaderEngine]). */
+        const val AUTO_FIRST_MINUTES = 15
 
         fun tagMinutes(m: Int) = "sleep_min_$m"
     }

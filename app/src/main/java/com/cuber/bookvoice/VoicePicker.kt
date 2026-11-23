@@ -637,6 +637,7 @@ class VoicePicker(
                     val pkg = engines[which].first
                     if (pkg == p.enginePackage) return@setSingleChoiceItems
                     switched = true
+                    val wasEngine = p.enginePackage
                     host.toast(ctx.getString(R.string.voice_engine_switch))
                     // msg5726: уходящий движок забирает свой голос с собой.
                     // Без этой записи выбор, сделанный до смены движка, потерялся
@@ -657,10 +658,24 @@ class VoicePicker(
                             // системный».
                             Diag.log(
                                 ctx, "tts",
-                                "движок ${pkg ?: "системный"} не запустился — возвращаю системный"
+                                "движок ${pkg ?: "системный"} не запустился — возвращаю прежний"
                             )
-                            p.setEngine(null) { _ -> afterEngineChange(p, temp) }
-                            host.toast("Движок не запустился, вернул системный")
+                            // 19.11.2026, решение Сержа («уберём совсем подмену»):
+                            // на системный БОЛЬШЕ НЕ ПЕРЕКЛЮЧАЕМСЯ. Прежде отказ
+                            // её движка уводил читалку на Google, и человек слышал
+                            // «синтезатор сам переключился». Возвращаемся к ПРЕЖНЕМУ
+                            // движку — это снова её выбор, а не подмена, — и говорим
+                            // словами, что новый не запустился.
+                            if (wasEngine != null) host.engineApplied(wasEngine)
+                            p.setEngine(wasEngine) { _ ->
+                                // Знак «это подмена» оставляем: значение в
+                                // настройках уже вернули руками ([engineApplied]),
+                                // а `MainActivity.persist*` не должны переписать
+                                // его живым состоянием.
+                                p.noteEngineSubstituted()
+                                afterEngineChange(p, temp)
+                            }
+                            host.toast("Движок не запустился, вернул прежний")
                         } else {
                             // msg5604: движок сменили на ходу — перечитываем
                             // текущее предложение новым движком. Именно ЗДЕСЬ, а

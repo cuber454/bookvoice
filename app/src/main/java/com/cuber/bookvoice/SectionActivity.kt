@@ -69,11 +69,16 @@ abstract class SectionActivity : AppCompatActivity() {
         pickDoc.launch(types)
     }
 
-    /** Пикер папки-дерева (SAF) — для страницы окна. */
-    fun openTreePicker(onResult: (Uri?) -> Unit) {
+    /** Пикер папки-дерева (SAF) — для страницы окна. [initial] — папка, с которой
+     *  системный выбор открывается (вкладка «Файлы»: «Сделать эту папку папкой
+     *  книг», 20.11.2026). До API 26 система extra не слушает — откроется как
+     *  обычно, человек дойдёт сам. */
+    fun openTreePicker(onResult: (Uri?) -> Unit) = openTreePicker(null, onResult)
+
+    fun openTreePicker(initial: Uri?, onResult: (Uri?) -> Unit) {
         LibraryActivity.suppressNextAutoOpen = true
         treeCb = onResult
-        pickTree.launch(null)
+        pickTree.launch(initial)
     }
 
     /** Запустить [intent] и отдать результат (голосовой поиск каталога и т.п.) —

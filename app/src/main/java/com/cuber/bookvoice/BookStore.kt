@@ -213,9 +213,50 @@ object BookStore {
                 if (p != null && externalPath(p) && !AllFiles.granted(context)) return true
                 p != null && File(p).exists()
             } else {
-                context.contentResolver.query(
-                    u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
-                )?.use { it.moveToFirst() } ?: false
+                // 07.11.2026 (журнал тестера, Samsung SM-S931B): спросить у
+                // провайдера имя документа МАЛО. Часть проводников на такой запрос
+                // отвечает пусто или отказом, хотя файл исправно отдаёт. Полка
+                // тогда говорила «файла нет» про живую книгу: в журнале
+                // «нажата запись без файла», а через минуту та же ссылка
+                // открывалась в читалке, и fileGone (он смотрит ПОТОК)
+                // пропавшей её не считал. Отсюда и жалоба «библиотека не видит
+                // книгу». Поэтому пустой или упавший запрос — повод проверить сам
+                // поток: книга жива, если провайдер открыл его.
+                val byName = runCatching {
+                    context.contentResolver.query(
+                        u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+                    )?.use { it.moveToFirst() }
+                }.getOrNull() ?: false
+                if (byName) {
+                    true
+                } else {
+                    try {
+                        context.contentResolver.openInputStream(u)?.close()
+                        true
+                    } catch (_: java.io.FileNotFoundException) {
+                        // Честный ответ «документа нет» — как в fileGone.
+                        false
+                    } catch (_: SecurityException) {
+                        // 07.11.2026: доступа к адресу больше нет. Файл может лежать
+                        // на месте, но по этой ссылке его не открыть (жалоба Сержа:
+                        // «нажимаю книгу — файла нет на месте», а книга в папке).
+                        // Настоящее лечение — переписать адрес сканом (deadTwins),
+                        // он ищет файл в папке книг заново и место чтения сохраняет.
+                        false
+                    } catch (e: Exception) {
+                        // 23.11.2026: та же цепочка, что в fileGone: провайдер прячет
+                        // «файла нет» внутри IllegalArgumentException. Не открываем
+                        // то, чего нет; настоящую неизвестность трактуем в пользу
+                        // книги, как и раньше.
+                        var t: Throwable? = e
+                        var chain = ""
+                        while (t != null) {
+                            chain += " " + t.javaClass.name + ": " + t.message
+                            t = t.cause
+                        }
+                        !(chain.contains("FileNotFoundException") || chain.contains("Missing file"))
+                    }
+                }
             }
         } catch (_: Exception) {
             false
@@ -266,6 +307,34 @@ object BookStore {
         return fromResolver ?: u.lastPathSegment ?: uri
     }
 
+    /** Файла нет. Пропал ли он НАВЕРНЯЯ или просто «не видно»:
+     *  23.11.2026 (разбор журнала Сержа, жалоба «удалил пачку файлов
+     *  сторонним менеджером — записи на полке висят, скан их не убирает,
+     *  приходится давить по одной»). Прежнее правило требовало, чтобы
+     *  РОДИТЕЛЬСКАЯ ПАПКА файла осталась. Пачка же ложится в папку
+     *  «Автор\Серия», и менеджер, убирая её целиком, стирает и папку:
+     *  «папки нет» раньше считалось отключённым диском, запись оставалась
+     *  навечно. Теперь вверх по пути ищем первый существующий предок:
+     *  нашёлся — папки были, их удалили, запись мертва; не нашёлся вовсе —
+     *  это правда отключённый том, не трогаем. Сменные карты (не
+     *  «emulated») при отсутствии themselves тоже НЕ решаем: их корень —
+     *  граница суждения (тома монтируются целиком, их отсутствие — не
+     *  удаление книг). */
+    private fun folderDeleted(path: String): Boolean {
+        var d = File(path).parentFile
+        while (d != null && !d.isDirectory) {
+            val name = d.name
+            val parent = d.parentFile
+            // /storage/AAAA-1111/... без самого AAAA-1111 — карта не
+            // примонтирована, не «удалена папка».
+            if (parent != null && parent.name == "storage" &&
+                parent.parentFile?.path == "/" && name != "emulated"
+            ) return false
+            d = parent ?: return false
+        }
+        return d?.isDirectory == true
+    }
+
     /** Файла за записью больше нет — запись мёртвая (28.09.2026).
      *
      *  Отличаем «файла нет» от «проверить нечем»:
@@ -291,7 +360,7 @@ object BookStore {
                 // их проверяем как раньше).
                 if (externalPath(path) && !AllFiles.granted(context)) return false
                 val f = File(path)
-                if (f.exists()) false else f.parentFile?.isDirectory == true
+                if (f.exists()) false else folderDeleted(path)
             }
             "content" -> try {
                 val stream = context.contentResolver.openInputStream(u)
@@ -301,8 +370,32 @@ object BookStore {
                 }
             } catch (_: java.io.FileNotFoundException) {
                 true
-            } catch (_: Exception) {
-                false
+            } catch (_: SecurityException) {
+                // 07.11.2026 (жалоба Сержа: «нажимаю книгу — говорит, что файла нет,
+                // предлагает убрать запись», хотя книга лежит в папке книг):
+                // провайдер отказал в доступе, потому что наш грант на ЭТОТ адрес
+                // кончился (книгу брали ссылкой из проводника, а такая ссылка живёт
+                // до перезапуска). Файл при этом на месте, поэтому адрес надо не
+                // оплакивать, а переписать: скан папки считает запись мёртвой
+                // (deadTwins) и находит тот же файл заново, сохраняя место чтения.
+                // «Не знаем» здесь означало бы мёртвую строку на полке навсегда.
+                true
+            } catch (e: Exception) {
+                // 23.11.2026 (найдено на эмуляторе; жалоба Сержа «удалил файлы
+                // сторонним менеджером — запись не убирается, надо по одной»):
+                // проводник на СТЕРТЫЙ документ дерева отвечает НЕ
+                // FileNotFoundException, а IllegalArgumentException, внутри которого
+                // спрятан тот же FileNotFoundException («Missing file for
+                // primary:…»). Это шло в «не знаем» — и мёртвая запись висела
+                // вечно. Цепочка причин с «FileNotFoundException» / «Missing file»
+                // — честная смерть файла; прочее и далее «не знаем».
+                var t: Throwable? = e
+                var chain = ""
+                while (t != null) {
+                    chain += " " + t.javaClass.name + ": " + t.message
+                    t = t.cause
+                }
+                chain.contains("FileNotFoundException") || chain.contains("Missing file")
             }
             else -> false
         }

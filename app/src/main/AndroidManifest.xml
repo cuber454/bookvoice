@@ -34,6 +34,11 @@
          плана со своим уведомлением — полоса и кнопка «Отменить». Без этого
          разрешения Android 14+ не даст поднять службу такого типа. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Пачка «вся серия/автор» ходит в specialUse (см. DownloadService): с
+     * targetSdk 34 одного типа в <service> МАЛО — система требует ещё и это
+     * разрешение, иначе SecurityException на старте (найдено на эмуляторе
+     * 22.11.2026: долгое на «Все книги автора» роняло приложение). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- «После звонка» (#98): конец настоящего звонка → продолжить чтение.
@@ -315,11 +320,18 @@
         <!-- Скачивание книги из сетевого каталога (0.4.83, msg7004). Служба
              переднего плана: загрузка продолжается, когда окно каталога закрыли,
              о ходе говорит тихое уведомление с полосой и кнопкой «Отменить».
-             Тип dataSync — «качаю данные по просьбе владельца». -->
+             Тип dataSync — «качаю данные по просьбе владельца». Пакетное
+             скачивание всей серии (20.11.2026) кладём сверху specialUse: с
+             Android 14 у dataSync есть лимит ~10 минут в фоне, а пачка из
+             сотни книг идёт дольше — система сняла бы службу на середине. -->
         <service
             android:name=".DownloadService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse" >
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="download of an entire book series on user request" />
+        </service>
 
         <!-- Медиа-кнопки гарнитуры и «волшебное касание» диктора приходят
              сюда, receiver передаёт их в активную MediaSessionCompat.

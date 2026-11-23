@@ -255,6 +255,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     private var searchMatches: List<Pair<Int, Int>> = emptyList()
     private var searchCurrent = -1
     private var searchGen = 0
+    // 12.11.2026 (жалоба «нажимаю „Далее“, а ничего не делает»): проход по книге
+    // идёт в фоне, и кнопки обязаны говорить, ЧТО происходит, а не молчать.
+    // searchRunning — поиск ещё идёт; searchQuery — что искали (пусто = ещё не
+    // искали, это разные случаи для объяснения).
+    private var searchRunning = false
+    private var searchQuery = ""
 
     // Свой распознаватель речи (msg6270, перенос из каталога): микрофон внутри
     // приложения вместо системного окна. voiceFinished глушит запоздалые
@@ -569,7 +575,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         binding.btnVoiceClose.setOnClickListener { hideVoicePanel() }
         binding.btnToc.setOnClickListener { showTocDialog() }
         // Поиск по книге: короткое нажатие — панель (поле, микрофон,
-        // Найти/Назад/Далее/Закрыть); долгое — сразу голосовой ввод слова.
+        // Назад/Далее/Закрыть); долгое — сразу голосовой ввод слова.
+        // 12.11.2026, решение Сержа: кнопки «Найти» в панели больше нет — её
+        // работу делает «Далее»: нет результатов — ищет, есть — шагает вперёд.
         binding.btnSearch.setOnClickListener { onSearchButtonTap() }
         binding.btnSearch.setOnLongClickListener {
             onSearchLongPress()
@@ -578,7 +586,6 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg6288: framework после долгого нажатия рассылает LONG_CLICKED, и
         // диктор объявляет кнопку второй раз — уже поверх открытого микрофона.
         A11y.muteLongClickAnnouncement(binding.btnSearch)
-        binding.btnSearchGo.setOnClickListener { searchFromField() }
         binding.btnSearchMic.setOnClickListener { startVoiceSearch() }
         binding.btnSearchPrev.setOnClickListener { stepSearch(-1) }
         binding.btnSearchNext.setOnClickListener { stepSearch(+1) }
@@ -892,8 +899,29 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
                     if (ok) {
                         voiceName?.let { p.selectVoice(it) }
                     } else {
-                        prefs.edit().remove(KEY_ENGINE).apply()
-                        p.setEngine(null) { _ -> livePlayer?.let { v -> voiceName?.let { v.selectVoice(it) } } }
+                        // 17.11.2026, журнал тестера 18:14:38: её движок
+                        // `dev.msvoice.tts` ответил `init status=-1` (телефон в
+                        // этот момент убивал процессы по нехватке памяти) — и мы
+                        // СТИРАЛИ её выбор движка из настроек, причём молча: ни
+                        // одной строки в журнале. Дальше читалка говорила
+                        // системным, а человек слышал «синтезатор сам
+                        // переключился на Google». Отказ на одном запуске — не
+                        // повод забывать выбор: сейчас читаем системным, при
+                        // следующем открытии книги снова пробуем её движок.
+                        //
+                        // 19.11.2026, решение Сержа («уберём совсем подмену,
+                        // просто скажем, что синтезатор не отвечает»): системным
+                        // БОЛЬШЕ НЕ ЧИТАЕМ. Это и было её «переключился на
+                        // Google»: её движок один раз не поднялся, и книга
+                        // поехала чужим голосом. Теперь говорим словами
+                        // ДИКТОРОМ (он не зависит от движка чтения), а выбор
+                        // человека остаётся в силе.
+                        Diag.log(
+                            this, "tts",
+                            "выбранный движок $savedEngine не поднялся — подменять не буду: " +
+                                "говорю словами, выбор оставляю в силе"
+                        )
+                        binding.sentenceList.announceForAccessibility(TtsHealth.stopText(this))
                     }
                 }
             }
@@ -2550,7 +2578,9 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
             G_PLAY -> togglePlay()
             G_PAUSE -> if (playing) pausePlayback(keepFocus = true)
             G_REPEAT -> startSpeakingCurrent()
-            G_POSITION -> announcePosition()
+            // «Сообщить место в книге» — это прямой вопрос «где я», а не листание:
+            // здесь номер предложения уместен и шумом не считается.
+            G_POSITION -> announcePosition(withSentence = true)
             G_SPEED_UP -> nudgeSpeed(up = true)
             G_SPEED_DOWN -> nudgeSpeed(up = false)
             G_TOC -> showTocDialog()
@@ -3319,7 +3349,7 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (!playing) binding.tvSpeed.announceForAccessibility(speedText(rate))
     }
 
-    private fun updatePosition() {
+    internal fun updatePosition() {
         val bk = book
         if (bk == null) {
             binding.tvPosition.text = ""
@@ -3331,9 +3361,12 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // 30.10.2026: номер и всего глав берём из самой книги (см.
         // ReaderEngine.chapterPlaceLine): счёт разбора считал титул и предисловие
         // главами, и строка говорила «глава восьмая» там, где в книге пятая.
-        // «· 271 из 614» убрано по просьбе Сержа: номера предложений человеку
-        // ничего не говорят — в строке остаётся «Глава 15 из 40».
-        binding.tvPosition.text = ReaderEngine.chapterPlaceLine(withSentence = false)
+        // 12.11.2026, просьба Сержа: номер предложения ВЕРНУТЬ — «глава 5,
+        // предложение 185». Пишется словом и без «из N»: это счётчик
+        // прочитанного, а не дробь. Писать ли его вообще — выбор человека
+        // ([PlaceLine]): «Глава и предложение» / «Только глава».
+        binding.tvPosition.text =
+            ReaderEngine.chapterPlaceLine(withSentence = PlaceLine.withSentence(this))
         syncSlider()
         updateStats()
     }
@@ -3561,9 +3594,19 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
     /** Объявить место, куда встали. [kindRes] — слово о ТИПЕ границы
      *  («Разделитель», «Заголовок»): по нему слышно, сработал ли жест, ведь
      *  сама строка места одинакова после любого прыжка. [withTitle] — добавить
-     *  название главы (для прыжков по главам и заголовкам). */
-    private fun announcePosition(kindRes: Int? = null, withTitle: Boolean = false) {
-        val place = binding.tvPosition.text?.toString().orEmpty()
+     *  название главы (для прыжков по главам и заголовкам).
+     *
+     *  12.11.2026, просьба Сержа: «может, когда прыгаешь кнопками, не озвучивать
+     *  это — будет много слишком шума когда листаешь». Номер предложения В СТРОКЕ
+     *  НА ЭКРАНЕ остаётся (его видно и слышно по касанию), а в объявлении прыжка
+     *  его нет: при листании кнопками это была бы трескотня. Поэтому место берём
+     *  у движка БЕЗ предложения, а не из [android.widget.TextView] строки. */
+    private fun announcePosition(
+        kindRes: Int? = null,
+        withTitle: Boolean = false,
+        withSentence: Boolean = false,
+    ) {
+        val place = ReaderEngine.chapterPlaceLine(withSentence = withSentence)
         val title = if (withTitle) {
             // 0.4.71: название, которое придумали МЫ («Стр. N» у PDF без закладок),
             // вслух не читаем. У PDF каждая страница — глава, поэтому здесь и
@@ -3630,21 +3673,35 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         searchGen++ // идущий в фоне поиск больше не нужен
         searchMatches = emptyList()
         searchCurrent = -1
+        searchRunning = false
+        searchQuery = ""
         binding.tvSearchResult.text = ""
         hideKeyboard()
     }
 
+    /** Спрятать клавиатуру. Голоса здесь нет нарочно: пуск поиска сам говорит,
+     *  что он делает, а на каждый вызов эта функция только убирает клавиатуру. */
     private fun hideKeyboard() {
         val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
         imm.hideSoftInputFromWindow(binding.etSearch.windowToken, 0)
     }
 
-    /** «Найти» по тексту из поля. */
+    /** Пуск поиска с КЛАВИШИ «Поиск» на клавиатуре. Поиску по мере ввода сказано
+     *  «нет» (Серж, 12.11.2026: «вдруг я что-то набираю, потом отвлёкся, а он уже
+     *  пошёл искать»), поэтому пуск всегда явный: клавиша «Поиск» или кнопка
+     *  «Далее» (см. [stepSearch] — отдельной «Найти» в панели больше нет). */
     private fun searchFromField() {
         if (book == null) return
         hideKeyboard()
-        val q = binding.etSearch.text?.toString().orEmpty().trim()
+        val raw = binding.etSearch.text?.toString().orEmpty()
+        val q = SearchMatch.normalizeNeedle(raw)
         if (q.isEmpty()) {
+            searchGen++ // начатый проход больше не нужен
+            searchRunning = false
+            searchMatches = emptyList()
+            searchCurrent = -1
+            searchQuery = ""
+            Diag.log(this, "search", "пуск поиска: в поле пусто — прошу ввести слово")
             binding.etSearch.announceForAccessibility(getString(R.string.search_empty_hint))
             binding.etSearch.requestFocus()
             return
@@ -3652,35 +3709,84 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         runSearch(q)
     }
 
-    /** Полный проход по книге в фоне: ищем слово без учёта регистра во всех
-     *  главах. Результат — список (глава, предложение). searchGen отбрасывает
-     *  устаревшие ответы (панель закрыли, нажали «Найти» повторно). */
+    /** Полный проход по книге в фоне. Результат — список (глава, предложение) в
+     *  КРУГОВОМ порядке: сначала всё от текущего места вперёд, потом с начала
+     *  книги. Так «Далее» всегда значит «вперёд по книге», а первое совпадение —
+     *  самое ближайшее.
+     *
+     *  12.11.2026, жалоба Сержа: «ввёл слово, нажал „Найти“, потом „Далее“ — а она
+     *  ничего не делает». Три причины, и все три закрыты:
+     *  1) молчание на старте. Проход быстрый (см. [SearchMatch]), но если он
+     *     затянулся дольше [SEARCH_SLOW_MS], вслух говорим «ищу …»;
+     *  2) молчание «Далее», пока список пуст (см. [stepSearch]) — теперь кнопка
+     *     объясняет причину;
+     *  3) слово не находилось из-за точного сравнения (регистр, `ё`, лишние
+     *     пробелы) — сравнение стало терпимым, а «не нашёл» называется словом
+     *     через то, что искали. */
     private fun runSearch(query: String) {
         val bk = book ?: return
+        val needle = SearchMatch.normalizeNeedle(query)
+        if (needle.isEmpty()) {
+            // Сюда можно прийти только из голосового ввода (слово распознали
+            // пустым) — молчать нельзя: скажем то же, что и «Найти» с пустым
+            // полем.
+            Diag.log(this, "search", "поиск: запрос пустой (голосовый ввод ничего не принёс)")
+            binding.sentenceList.announceForAccessibility(getString(R.string.search_empty_hint))
+            return
+        }
         val gen = ++searchGen
-        val needle = query.lowercase(Locale.ROOT)
+        searchQuery = needle
+        searchMatches = emptyList()
+        searchCurrent = -1
+        searchRunning = true
+        val fromCh = chapterIdx
+        val fromSent = sentenceIdx
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        Diag.log(
+            this, "search",
+            "поиск «$needle»: старт от главы $fromCh, предложения $fromSent (глав ${bk.chapters.size})"
+        )
+        // «Ищу» — только если проход не успел быстро, иначе над результатом
+        // висело бы два голоса подряд.
+        val slowFuse = Runnable {
+            if (gen == searchGen && searchRunning) {
+                binding.sentenceList.announceForAccessibility(
+                    getString(R.string.search_started, needle)
+                )
+            }
+        }
+        handler.postDelayed(slowFuse, SEARCH_SLOW_MS)
         Thread {
             val found = ArrayList<Pair<Int, Int>>()
-            for ((ci, ch) in bk.chapters.withIndex()) {
-                for ((si, s) in ch.sentences.withIndex()) {
-                    if (s.text.lowercase(Locale.ROOT).contains(needle)) found.add(ci to si)
+            val chs = bk.chapters
+            val n = chs.size
+            for (step in 0 until n) {
+                if (gen != searchGen) return@Thread // панель закрыли или ищут другое
+                val ci = (fromCh + step) % n
+                val sentences = chs[ci].sentences
+                val start = if (step == 0) fromSent else 0
+                for (si in start until sentences.size) {
+                    if (SearchMatch.contains(sentences[si].text, needle)) found.add(ci to si)
                 }
-                if (gen != searchGen) return@Thread // панель закрыли — хватит искать
             }
+            val ms = android.os.SystemClock.elapsedRealtime() - startedAt
             handler.post {
                 if (gen != searchGen) return@post
-                searchMatches = found
+                handler.removeCallbacks(slowFuse)
+                searchRunning = false
+                Diag.log(
+                    this, "search",
+                    "поиск «$needle»: совпадений ${found.size} за $ms мс"
+                )
                 if (found.isEmpty()) {
-                    searchCurrent = -1
                     binding.tvSearchResult.text = getString(R.string.search_none)
-                    binding.sentenceList.announceForAccessibility(getString(R.string.search_none))
+                    binding.sentenceList.announceForAccessibility(
+                        getString(R.string.search_none_for, needle)
+                    )
                     return@post
                 }
-                // Первое совпадение — текущее или ближайшее следующее за ним.
-                val g = currentGlobal()
-                var idx = found.indexOfFirst { (c, s) -> (chapterStart.getOrNull(c) ?: 0) + s >= g }
-                if (idx < 0) idx = 0
-                searchCurrent = idx
+                searchMatches = found
+                searchCurrent = 0
                 jumpToMatch()
             }
         }.start()
@@ -3705,9 +3811,42 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         }
     }
 
-    /** «Далее»/«Назад» по списку совпадений (по кругу в обе стороны). */
+    /** «Далее»/«Назад» — одна кнопка на два дела (12.11.2026, решение Сержа:
+     *  «убрать кнопку поиска, оставить кнопку „Далее“, которая после ввода будет
+     *  продолжать поиск»). Отдельной «Найти» в панели больше нет:
+     *   - слово в поле НЕ равно тому, что уже искали (или поиска ещё не было) —
+     *     ЭТА кнопка ищет это слово;
+     *   - поиск был и нашёл — шагаем вперёд, «Назад» — назад;
+     *   - поиск был ЭТИМ ЖЕ словом и ничего не нашёл — говорим про это, второй
+     *     раз тот же проход не запускаем: иначе кнопка ходила бы по кругу.
+     *  Кнопка НИКОГДА не молчит (прежняя жалоба: «нажал „Далее“ — ничего не
+     *  делает», потому что при пустом списке она молча выходила). */
     private fun stepSearch(delta: Int) {
-        if (searchMatches.isEmpty()) return
+        if (searchRunning) {
+            Diag.log(this, "search", "«Далее» во время прохода — говорю „ещё ищу“")
+            binding.sentenceList.announceForAccessibility(getString(R.string.search_wait))
+            return
+        }
+        val q = SearchMatch.normalizeNeedle(binding.etSearch.text?.toString().orEmpty())
+        if (q.isEmpty()) {
+            Diag.log(this, "search", "«Далее»: поле пустое — прошу ввести слово")
+            binding.etSearch.announceForAccessibility(getString(R.string.search_empty_hint))
+            binding.etSearch.requestFocus()
+            return
+        }
+        if (q != searchQuery) {
+            Diag.log(this, "search", "«Далее» как пуск: ищем «$q»")
+            hideKeyboard()
+            runSearch(q)
+            return
+        }
+        if (searchMatches.isEmpty()) {
+            Diag.log(this, "search", "«Далее»: «$q» уже искали, совпадений нет")
+            binding.sentenceList.announceForAccessibility(
+                getString(R.string.search_none_for, q)
+            )
+            return
+        }
         val n = searchMatches.size
         searchCurrent = ((searchCurrent + delta) % n + n) % n
         jumpToMatch()
@@ -4792,7 +4931,21 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         val list = player.voices
         val vce = voiceName?.takeIf { player.isReady && list.any { v -> v.name == it } }
             ?: rec.voice.takeIf { list.isEmpty() }
-        savePerBook(player.enginePackage, vce, player.speed)
+        // 17.11.2026, жалоба тестера через Сержа: она закрыла панель «Голос и
+        // речь» после того, как лестница отказов сама подставила другой движок
+        // или голос, — и книга ЗАПОМНИЛА подмену. Ей это слышно как
+        // «синтезатор вылетел и заменился». Подмену не пишем: остаётся то, что
+        // было записано до неё.
+        val eng = if (player.engineChosenByUser) player.enginePackage else rec.voiceEngine
+        val voice = if (player.voiceChosenByUser) vce else rec.voice
+        if (eng != player.enginePackage || voice != vce) {
+            Diag.log(
+                this, "tts",
+                "голос книги оставляю прежний (движок ${eng ?: "системный"}, " +
+                    "голос ${voice ?: "не назван"}): нынешний подставили мы"
+            )
+        }
+        savePerBook(eng, voice, player.speed)
     }
 
     /** #55 (msg2669): панель голоса закрыта БЕЗ галочки и что-то меняли — текущие
@@ -4806,10 +4959,28 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         if (!player.isReady) return
         val e = prefs.edit()
         val eng = player.enginePackage
-        if (eng != null) e.putString(KEY_ENGINE, eng) else e.remove(KEY_ENGINE)
+        if (player.engineChosenByUser) {
+            if (eng != null) e.putString(KEY_ENGINE, eng) else e.remove(KEY_ENGINE)
+        } else {
+            // 17.11.2026, журнал тестера 18:02 и 18:20: её движок молчал,
+            // лестница отказов подставила `org.nobody.multitts`, человек закрыл
+            // панель — и подменённый движок становился её выбором навсегда.
+            // В настройках живёт только то, что выбрал человек.
+            Diag.log(
+                this, "tts",
+                "не сохраняю движок ${eng ?: "системный"}: его подставила лестница " +
+                    "отказов, а не человек"
+            )
+        }
         val list = player.voices
         val vc = voiceName?.takeIf { list.any { v -> v.name == it } }
-        if (vc != null) {
+        if (!player.voiceChosenByUser) {
+            Diag.log(
+                this, "tts",
+                "не сохраняю голос ${vc ?: voiceName ?: "не назван"}: его подобрал " +
+                    "движок, а не человек"
+            )
+        } else if (vc != null) {
             e.putString(KEY_VOICE, vc)
             // #70: вместе с глобальным голосом помним и его язык — иначе строка
             // «Язык» в Настройках осталась бы от прежнего голоса.
@@ -4825,7 +4996,18 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
         // msg3550: по пустому списку настройку не стираем — «ещё не знаю» ≠
         // «голоса нет»; иначе закрытие панели в неудачный момент сносило
         // выбранный голос из настроек насовсем.
-        else if (list.isNotEmpty()) e.remove(KEY_VOICE)
+        // 17.11.2026: НЕ стираем KEY_VOICE и когда голос просто не нашёлся в
+        // списке. Список движка приезжает с задержкой, и в её журнале
+        // (18:11, 18:15) закрытие панели сносило выбранный голос, после чего
+        // читалка говорила первым голосом подряд — даже суахили. Пропавший из
+        // списка голос — это «подождем», а не «забудем».
+        else if (voiceName != null) {
+            Diag.log(
+                this, "tts",
+                "голос «$voiceName» сейчас не в списке движка (список мог " +
+                    "опоздать) — настройку не трогаю"
+            )
+        }
         e.putFloat(KEY_SPEED, player.speed)
         e.apply()
     }
@@ -5774,6 +5956,14 @@ class MainActivity : AppCompatActivity(), ReaderEngine.Host {
          *  и за один щипок их проходит до двадцати; без паузы диктор захлебнулся бы
          *  и отстал от пальцев. 250 мс — «быстренько», как просил тестер. */
         private const val FONT_ANNOUNCE_MS = 250L
+
+        /** 12.11.2026: через сколько молчания поиск вслух скажет «ищу». Проход по
+         *  книге быстрый (десятки миллисекунд, см. [SearchMatch]), и говорить
+         *  «ищу» перед готовым результатом — лишний голос. Но на толстой книге
+         *  пауза есть, и всё это время человек тыкает «Далее», ничего не слыша и
+         *  решая, что кнопка сломалась. 300 мс — порог, после которого молчание
+         *  уже похоже на поломку. */
+        private const val SEARCH_SLOW_MS = 300L
 
         /** 30.10.2026: сколько держим короткую подпись ползунка («19%») после
          *  последнего изменения. Полторы секунды — чтобы серия свайпов по

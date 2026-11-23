@@ -157,6 +157,13 @@ sealed class OpdsItem {
         val seriesFeed: OpdsRelated? = null,
         /** Веб-страница книги в каталоге («Перейти на сайт»). */
         val siteUrl: String? = null,
+        /** У Coollib (22.11.2026) заблокированные правообладателем книги
+         *  приходят БЕЗ acquisition-ссылки и без type="text/html", но с
+         *  <rights>«Заблокировано! Скачивание невозможно»</rights>. Отдельного
+         *  знака в модели нет — пачка считает книгой без файла запись, у
+         *  которой нет files, но есть сюда (страница сайта). Флибустовские
+         *  навигационные папки так не считаются: у них нет ни <rights>,
+         *  ни text/html-ссылки. */
     ) : OpdsItem() {
         /** Первый автор — для строки списка (вся страница книги хранит [authors]). */
         val author: String? get() = authors.firstOrNull()?.takeIf { it.isNotBlank() }
@@ -187,7 +194,10 @@ object OpdsPrefs {
      */
     val DEFAULT_URL = "http://flibusta.is/opds"
 
-    /** Куда качать книги из каталога: tree-uri (SAF) или null = в приложение. */
+    /** УПРАЗДНЁН 20.11.2026 (Серж: объединить папку книг и папку скачивания —
+     *  «пускай всё в одну папку качается, в нашу для книг»). Каталог качает в
+     *  [LibraryActivity.KEY_TREE]; константа осталась только чтобы подмести
+     *  старое значение у тех, кто её выбирал. НОВЫМ кодом не читать. */
     const val KEY_DL_DIR = "opds_dl_dir"
 
     /** Формат для большой кнопки «Скачать»: fb2/epub/txt (#45). */
@@ -456,6 +466,7 @@ object OpdsParser {
         val eGenres = ArrayList<String>()
         var eContent: String? = null
         var eSummary: String? = null
+        var eRights = ""
         val eLinks = ArrayList<Link>()
 
         fun resolve(href: String): String = URL(URL(finalUrl), href).toString()
@@ -476,6 +487,12 @@ object OpdsParser {
         fun noteOf(): String? = eContent
             ?.let(::cleanText)
             ?.takeIf { it.isNotBlank() }
+
+        /** Имя записи: каталоги вписывают его в заголовок с разметкой — у Coollib
+         *  «Книги автора  \n   Thanaton» (22.11.2026). Пробельные дыры схлопываем
+         *  здесь, у источника: тогда и список, и страница книги, и имя папки
+         *  пачки (cleanFeedTitle берёт заголовок ленты) слышат чистое имя. */
+        fun entryTitle(): String = eTitle.replace(Regex("\\s+"), " ").trim()
 
         /** Связанный раздел среди related-ссылок: «Все книги автора…» / серии… */
         fun relatedFeed(kw: String): OpdsRelated? =
@@ -515,7 +532,7 @@ object OpdsParser {
                     OTHER_FORMATS.mapNotNull { fmts[it] }
                 val first = acq[0]
                 items.add(OpdsItem.Book(
-                    title = eTitle,
+                    title = entryTitle(),
                     // КОПИИ, не сами накопители (msg5443): eAuthors/eGenres — один
                     // список на весь разбор, его чистит начало следующей записи.
                     // Передав ссылку, мы отдавали ВСЕМ книгам ленты автора и жанры
@@ -536,7 +553,29 @@ object OpdsParser {
             }
             val folder = eLinks.firstOrNull { isCatalogLink(it) }
             if (folder != null) {
-                items.add(OpdsItem.Folder(eTitle, resolve(folder.href), noteOf()))
+                val site = eLinks.firstOrNull { it.rel == "alternate" && it.type?.contains("html") == true }
+                // Книга без файла (заблокирована) — НЕ папка: у неё есть
+                // страница на сайте и <rights> о блокировке. Иначе пачка
+                // спутала бы её с навигацией (Coollib, 22.11.2026).
+                if (eRights.contains("блокир", ignoreCase = true) ||
+                    (eRights.isNotBlank() && site != null && folder.rel?.contains("related") == true)
+                ) {
+                    items.add(OpdsItem.Book(
+                        title = entryTitle(),
+                        authors = ArrayList(eAuthors),
+                        url = site?.let { resolve(it.href) } ?: "",
+                        ext = "",
+                        genres = ArrayList(eGenres),
+                        annotation = annotationOf(),
+                        annotationHtml = annotationHtmlOf(),
+                        downloads = emptyList(),
+                        authorFeed = relatedFeed("автор"),
+                        seriesFeed = relatedFeed("сери"),
+                        siteUrl = site?.let { resolve(it.href) },
+                    ))
+                } else {
+                    items.add(OpdsItem.Folder(entryTitle(), resolve(folder.href), noteOf()))
+                }
             }
         }
 
@@ -552,6 +591,7 @@ object OpdsParser {
                             eGenres.clear()
                             eContent = null
                             eSummary = null
+                            eRights = ""
                             eLinks.clear()
                         }
                         "link" -> {
@@ -598,6 +638,14 @@ object OpdsParser {
                         "content" -> {
                             if (inEntry && eContent == null) {
                                 eContent = readElementText(p).trim()
+                            }
+                        }
+                        // <rights> у Coollib говорит «Заблокировано!» — по нему
+                        // запись считается книгой без файла, а не папкой.
+                        "rights" -> {
+                            if (inEntry) {
+                                val r = readElementText(p).trim()
+                                if (r.isNotEmpty()) eRights = r
                             }
                         }
                         "summary" -> {

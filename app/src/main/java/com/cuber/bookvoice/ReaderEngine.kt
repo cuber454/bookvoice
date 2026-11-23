@@ -965,7 +965,8 @@ internal object ReaderEngine {
 
     /** Строка места для экрана, карточки и озвучки: «Глава 5 из 21» — по номеру
      *  из книги, а если номеров в названиях нет, прежняя «Глава 8 из 25» по счёту
-     *  разбора. [withSentence] добавляет «· N из M» предложений главы. */
+     *  разбора. [withSentence] добавляет « · предложение 185» (12.11.2026: писать
+     *  ли его, решает настройка [PlaceLine]). */
     fun chapterPlaceLine(withSentence: Boolean = true): String {
         val bk = book ?: return ""
         refreshPrintedChapterNos()
@@ -987,7 +988,12 @@ internal object ReaderEngine {
         if (!withSentence) return head
         val cur = bk.chapters.getOrNull(chapterIdx)?.sentences
         val pos = if (cur != null && cur.isNotEmpty()) {
-            " · ${sentenceIdx.coerceIn(0, cur.size - 1) + 1} из ${cur.size}"
+            // 12.11.2026, просьба Сержа: «вернуть в статус прочитанного, чтобы
+            // предложение тоже показывало, сколько прочитано — глава 5,
+            // предложение 185». Пишем СЛОВОМ и БЕЗ «из N»: человеку нужен счётчик
+            // прочитанного, а не дробь (дробь «271 из 614» он в 30.10 просил
+            // убрать).
+            " · предложение ${sentenceIdx.coerceIn(0, cur.size - 1) + 1}"
         } else ""
         return head + pos
     }
@@ -1119,14 +1125,24 @@ internal object ReaderEngine {
      *  (msg5622). Список приезжает позже init, а публичного «список готов» в SDK
      *  нет (msg3550) — спрашиваем опросом. Не дождались за ~3 с — зовём как есть:
      *  молчание тут хуже, чем решение по неполным данным. */
-    fun whenVoicesReady(attempt: Int = 0, on: SpeechPlayer? = player, block: () -> Unit) {
+    fun whenVoicesReady(
+        attempt: Int = 0,
+        on: SpeechPlayer? = player,
+        needFresh: Boolean = false,
+        block: () -> Unit,
+    ) {
         val p = on ?: return
-        if ((!p.isReady || p.voices.isEmpty()) && attempt < 15) {
+        // [needFresh] — ждать список ГЛАВНОГО движка, а не снимок прежнего
+        // (19.11.2026). Иначе решение о голосе принимается по чужому списку:
+        // в журнале тестера движку Google поставили «ru» от Nefonit за 376 мс до
+        // того, как Google отдал свои 473 голоса.
+        val stale = needFresh && !p.voicesFresh
+        if ((!p.isReady || p.voices.isEmpty() || stale) && attempt < 15) {
             // 24.10.2026: список сам не приедет — просим его В СТОРОНЕ (см.
             // SpeechPlayer.refreshVoices). На главном потоке этот вопрос к движку
             // вешал окно выбора голоса: телефон показывал «закрыть или подождать».
             if (attempt % 4 == 0) p.refreshVoices()
-            main.postDelayed({ whenVoicesReady(attempt + 1, on, block) }, 200)
+            main.postDelayed({ whenVoicesReady(attempt + 1, on, needFresh, block) }, 200)
             return
         }
         block()
@@ -1344,6 +1360,10 @@ internal object ReaderEngine {
         // фразу вместе с чтением.
         SampleVoice.stop()
         playing = true
+        // 12.11.2026, просьба Сержа: начало чтения по просьбе человека — момент,
+        // когда ставится таймер «каждый раз» (если включён). Отсчёт идёт с начала
+        // ЧТЕНИЯ, а не с открытия книги: человек может листать молча.
+        armAutoSleepTimer(userAsked && !preview)
         // msg4211 (#19): чтение начинается — держим процессор, чтобы телефон,
         // лежащий экраном вниз, не заснул между фразами (лог тестера: сторож
         // сработал через 42 с вместо 15 — таймеры не шли, процесс спал).
@@ -1361,7 +1381,9 @@ internal object ReaderEngine {
         Diag.log(
             ctx, "activity",
             "старт чтения (глава $chapterIdx, предл. $sentenceIdx); движок=${p.enginePackage}, " +
-                "голос=$voiceName, версия $versionLabel"
+                "голос=$voiceName, версия $versionLabel; " +
+                "выбор: движок=${if (p.engineChosenByUser) "человека" else "подставлен нами"}, " +
+                "голос=${if (p.voiceChosenByUser) "человека" else "подставлен нами"}"
         )
         requestAudioFocus()
         host?.onShowCurrent()
@@ -2483,6 +2505,9 @@ internal object ReaderEngine {
      *  ВЫБОР ЧЕЛОВЕКА НЕ ПЕРЕПИСЫВАЕМ: в настройках остаётся его движок и голос. */
     private var autoEngineSwitched = false
 
+    /** НЕ ЗОВЁТСЯ с 19.11.2026 — подмену движка убрали (см. [onEngineSilent]).
+     *  Оставлена целиком, чтобы откат был одной строкой, если Серж передумает. */
+    @Suppress("unused")
     private fun switchToOtherEngineAfterSilence(): Boolean {
         if (autoEngineSwitched) return false
         val p = player ?: return false
@@ -2494,7 +2519,7 @@ internal object ReaderEngine {
         Diag.log(
             ctx, "voice",
             "движок молчит: ищу локальный голос того же языка в другом движке " +
-                "(нынешний $from, язык ${lang ?: "неизвестен"})"
+                "(нынешний $from, язык ${lang ?: "неизвестен"}); ${Diag.memoryLine(ctx)}"
         )
         LocalVoiceFinder.find(ctx, lang, from) { found ->
             if (found == null) {
@@ -2526,14 +2551,17 @@ internal object ReaderEngine {
                 // третье своё). Здесь же проверяем, что обещанный [LocalVoiceFinder]
                 // голос движок правда знает; не знает — берём его собственный
                 // локальный того же языка.
-                whenVoicesReady(on = np) {
+                whenVoicesReady(on = np, needFresh = true) {
                     val list = runCatching { np.voices }.getOrNull().orEmpty()
                     val local = { v: android.speech.tts.Voice ->
                         runCatching { !v.isNetworkConnectionRequired }.getOrDefault(false)
                     }
+                    // ТРЕТЬЕГО ПРАВИЛА БОЛЬШЕ НЕТ (19.11.2026). Прежде последним
+                    // был «любой локальный голос», и русская книга могла заговорить
+                    // голосом чужого языка. Если локального голоса НУЖНОГО языка у
+                    // этого движка нет — не подставляем ничего, движок скажет своим.
                     val v = list.firstOrNull { it.name == found.voice }
                         ?: list.firstOrNull { local(it) && (lang == null || it.locale?.language == lang) }
-                        ?: list.firstOrNull { local(it) }
                     val name = v?.name ?: found.voice
                     if (v == null || name != found.voice) {
                         Diag.log(
@@ -2543,6 +2571,15 @@ internal object ReaderEngine {
                     }
                     voiceName = name
                     np.selectVoice(name)
+                    // 17.11.2026, жалоба тестера через Сержа (её журнал 18:02 и
+                    // 18:20): после такой подмены достаточно было закрыть
+                    // панель «Голос и речь», чтобы временный движок и голос
+                    // уехали в настройки и в запись книги — «синтезатор сам
+                    // переключился на Google». Оба знака «это подобрали мы, а не
+                    // человек» ставим ПОСЛЕ [SpeechPlayer.selectVoice]: он сам
+                    // считает всякий свой вызов выбором человека.
+                    np.noteEngineSubstituted()
+                    np.noteVoiceSubstituted()
                     restartAfterSwitch(withPreview = playing || previewUnit)
                 }
             }
@@ -2550,6 +2587,9 @@ internal object ReaderEngine {
         return true
     }
 
+    /** НЕ ЗОВЁТСЯ с 19.11.2026 — подмену убрали (см. [onEngineSilent]).
+     *  Оставлена целиком, чтобы откат был одной строкой, если Серж передумает. */
+    @Suppress("unused")
     private fun switchToLocalVoiceAfterSilence(): Boolean {
         if (autoVoiceSwitched) return false
         val p = player ?: return false
@@ -2573,6 +2613,10 @@ internal object ReaderEngine {
         )
         voiceName = local.name
         p.selectVoice(local.name)
+        // Голос подставили мы, а не человек: в настройки и в запись книги он
+        // уехать не должен (17.11.2026, жалоба тестера — «голос из этой же
+        // группы сменился сам»). Знак ставим ПОСЛЕ [SpeechPlayer.selectVoice].
+        p.noteVoiceSubstituted()
         host?.onAnnounce("Сетевой голос не отвечает. Читаю локальным голосом ${local.name}.")
         // Проба тут нужна ровно тогда, когда звучала проба (см. [previewUnit]):
         // иначе после отказа движка фразу никто не перечитает, а «чтение идёт»
@@ -2616,13 +2660,18 @@ internal object ReaderEngine {
             chapterIdx = ch
             sentenceIdx = (pos % 1_000_000L).toInt().coerceIn(0, cur.lastIndex.coerceAtLeast(0))
         }
-        // 24.10.2026: ЛЕСТНИЦА ОТКАЗОВ (решение Сержа: «повтор → локальный голос
-        // того же движка → голос другого движка», каждый шаг объявляем словами).
-        // Первый шаг уже сделал плеер (перезапуск и перечитывание фразы), теперь
-        // пробуем локальный голос: сетевой мог просто не получить сеть, а
-        // локальный в том же движке молчит разве что вместе с движком.
-        if (switchToLocalVoiceAfterSilence()) return
-        if (switchToOtherEngineAfterSilence()) return
+        // 24.10.2026: ЛЕСТНИЦА ОТКАЗОВ. ОСТАВШИЕСЯ ДВЕ СТУПЕНИ УБРАНЫ 19.11.2026
+        // (слова Сержа: «давай уберём совсем подмену, просто скажем, что
+        // синтезатор не отвечает» и «убирай тоже, чтобы не было путаницы, а то
+        // потом возникают вопросы — а почему другой голос»). Прежде здесь
+        // подставлялся локальный голос того же движка, а потом и чужой движок:
+        // и то и другое человек слышит как «голос сам поменялся». Теперь при
+        // отказе сначала повторяет сам плеер (перезапуск и перечитка фразы),
+        // а дальше — встаём и говорим словами ДИКТОРОМ, не трогая ни голос, ни
+        // движок.
+        // Откат, если Серж передумает: вернуть строки
+        // `if (switchToLocalVoiceAfterSilence()) return` и
+        // `if (switchToOtherEngineAfterSilence()) return` — обе функции целы.
         stopAfterSilentEngine()
     }
 
@@ -2710,6 +2759,43 @@ internal object ReaderEngine {
     // экраном вниз — чтение продолжилось ещё на N минут. Не тронул — чтение
     // встаёт на паузу, как раньше. Минута ожидания и есть «окно».
 
+    /** Поставить таймер САМ, если включена галочка «Ставить таймер каждый раз»
+     *  (12.11.2026, просьба Сержа: человек один раз выбрал свои 15 минут или час —
+     *  и больше об этом не думает).
+     *
+     *  Правила: ставим только в начале ЧТЕНИЯ (не при открытии книги — человек
+     *  может просто листать); уже стоящий таймер не перебиваем, его выбрали
+     *  руками; не выбирал время ни разу — берём пятнадцать минут и говорим об
+     *  этом только журналом (вслух это скрипка над книгой, а галочку человек
+     *  только что сам включил и услышал подтверждение). */
+    private fun armAutoSleepTimer(byUserStart: Boolean) {
+        if (!byUserStart) return
+        if (!SleepTimerPrefs.always(ctx)) return
+        if (sleepMode != SLEEP_OFF) return
+        val last = SleepTimerPrefs.lastMinutes(ctx)
+        when {
+            last > 0 -> {
+                setSleepTimerMinutes(last)
+                Diag.log(ctx, "sleep", "таймер сна поставлен сам: $last минут (галочка «каждый раз»)")
+            }
+            SleepTimerPrefs.lastChapter(ctx) -> {
+                setSleepTimerChapterEnd()
+                Diag.log(ctx, "sleep", "таймер сна поставлен сам: до конца главы (галочка «каждый раз»)")
+            }
+            else -> {
+                setSleepTimerMinutes(AUTO_DEFAULT_MINUTES)
+                Diag.log(
+                    ctx, "sleep",
+                    "таймер сна поставлен сам: $AUTO_DEFAULT_MINUTES минут " +
+                        "(время ещё не выбирали — берём умолчание)",
+                )
+            }
+        }
+    }
+
+    /** Сколько минут ставить, если галочка включена, а время ещё не выбрано. */
+    private const val AUTO_DEFAULT_MINUTES = 15
+
     /** Поставить таймер «уснуть через [minutes] минут». Прежний режим снимается.
      *  [byGesture] — продление жестом: тогда [sleepBaseMinutes] (выставленное
      *  человеком число) не трогаем, иначе «продлевать столько же» съезжало бы. */
@@ -2722,7 +2808,12 @@ internal object ReaderEngine {
         }
         sleepMode = SLEEP_MINUTES
         sleepMinutes = minutes
-        if (!byGesture) sleepBaseMinutes = minutes
+        if (!byGesture) {
+            sleepBaseMinutes = minutes
+            // 12.11.2026: выбор человека запоминаем — из него ЗАПОМИНАЕТСЯ время
+            // для автоматического таймера (галочка «Ставить таймер каждый раз»).
+            SleepTimerPrefs.setLastMinutes(ctx, minutes)
+        }
         val ms = minutes * 60_000L
         sleepEndAt = SystemClock.elapsedRealtime() + ms
         main.postDelayed(sleepRunnable, ms)
@@ -2741,6 +2832,7 @@ internal object ReaderEngine {
         removeSleepRunnable()
         sleepMode = SLEEP_CHAPTER
         sleepMinutes = 0
+        SleepTimerPrefs.setLastChapter(ctx)
         Diag.log(ctx, "sleep", "таймер сна: до конца главы")
     }
 
@@ -3343,6 +3435,9 @@ internal object ReaderEngine {
             return
         }
         if (eng != null && eng != p.enginePackage) {
+            // Прежний движок — тоже выбор человека; на него и вернёмся, если
+            // движок книги не поднимется (см. ветку !ok).
+            val wasEngine = p.enginePackage
             p.setEngine(eng) { ok ->
                 main.post {
                     if (ok) {
@@ -3354,10 +3449,28 @@ internal object ReaderEngine {
                         // (пустой). Проходим тем же циклом, а не проверяем сразу.
                         waitApplyBookVoice(0, 0)
                     } else {
-                        p.setEngine(null) { _ ->
+                        // 17.11.2026, журнал тестера: голос книги не поднялся —
+                        // читаем системным. Это ВЫНУЖДЕННАЯ подмена, а не выбор
+                        // человека: в настройки и в запись книги она уезжать не
+                        // должна, при следующем открытии книги снова пробуем
+                        // её движок.
+                        //
+                        // 19.11.2026, решение Сержа («уберём совсем подмену,
+                        // просто скажем, что синтезатор не отвечает»): на
+                        // системный БОЛЬШЕ НЕ ПЕРЕКЛЮЧАЕМСЯ — именно это звучало
+                        // у тестера как «переключился на Google». Возвращаемся к
+                        // ПРЕЖНЕМУ движку (он снова её выбор, а не подмена) и
+                        // говорим словами, что движок книги не запустился.
+                        Diag.log(
+                            ctx, "tts",
+                            "движок книги $eng не поднялся — возвращаю прежний " +
+                                "${wasEngine ?: "системный"}, выбор оставляю в силе"
+                        )
+                        p.setEngine(wasEngine) { _ ->
                             main.post {
                                 if (vce != null) announceIfBookVoiceMissing(vce)
                                 host?.onSpeedUiRefresh()
+                                host?.onAnnounce(TtsHealth.stopText(ctx))
                             }
                         }
                     }

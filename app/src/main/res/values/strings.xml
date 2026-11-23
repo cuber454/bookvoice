@@ -97,6 +97,126 @@
     <string name="lib_filter_all">Все</string>
     <string name="lib_filter_empty">Книг в этой категории пока нет.</string>
 
+    <!-- Вкладка «Файлы» — менеджер папок (просьба Сержа, 19.11.2026). Полка
+         показывает реестр, менеджер — действительное содержимое папок:
+         «родительская папка», подпапки со счётчиками книжных файлов, файлы.
+         Файл, которого нет на полке, открывается отсюда с заведением записи;
+         отметка «не возвращать при скане» при касании снимается. -->
+    <string name="lib_filter_files">Файлы</string>
+    <string name="files_btn_current">К текущей книге</string>
+    <string name="files_btn_search">Искать</string>
+    <string name="files_up_title">Наверх</string>
+    <string name="files_home_title">В папку книг</string>
+    <string name="files_on_shelf">на полке</string>
+    <string name="files_many">файлов много</string>
+    <plurals name="files_n">
+        <item quantity="one">%d файл</item>
+        <item quantity="few">%d файла</item>
+        <item quantity="many">%d файлов</item>
+        <item quantity="other">%d файла</item>
+    </plurals>
+    <plurals name="files_subdirs">
+        <item quantity="one">%d подпапка</item>
+        <item quantity="few">%d подпапки</item>
+        <item quantity="many">%d подпапок</item>
+        <item quantity="other">%d подпапки</item>
+    </plurals>
+    <string name="files_root_name">Внутренняя память</string>
+    <string name="files_empty_here">Здесь нет ни папок, ни книг.</string>
+    <string name="files_unreadable">Папка не открылась.</string>
+    <string name="files_none_mode">Нужно выбрать папку книг или включить доступ ко всем файлам.</string>
+    <string name="files_no_book">Открытых книг ещё нет.</string>
+    <string name="files_book_outside">Не вижу, в какой папке лежит эта книга.</string>
+    <string name="files_menu_refresh">Обновить список</string>
+    <string name="files_menu_system">Выбрать файл системой</string>
+    <string name="files_menu_all">Смотреть весь телефон</string>
+    <string name="files_all_explain">Сейчас менеджер ходит только внутри выбранной папки книг. Доступ ко всем файлам позволит показывать весь телефон: и внутреннюю память, и папки за пределами библиотечной.</string>
+    <string name="files_go_home">Перейти в папку книг</string>
+    <string name="files_menu_info">Сведения о файле</string>
+    <!-- 23.11.2026, просьба Сержа: долгое на файле вне библиотеки теперь даёт и
+         «Добавить в библиотеку» — раньше файл мог попасть на полку только
+         касанием (сразу читалка) или долгим по папке (весь лес). -->
+    <string name="files_menu_add">Добавить в библиотеку</string>
+    <string name="files_add_done">Книга добавлена в библиотеку: %1$s</string>
+    <!-- %1$s не нужен: второй случай — константа. Отдельный ключ без плейсхолдера,
+         иначе Android ругнётся на неиспользованный аргумент. -->
+    <string name="files_add_was">Эта книга уже в библиотеке</string>
+    <string name="files_menu_delete">Удалить файл</string>
+    <string name="files_delete_title">Удалить файл?</string>
+    <string name="files_delete_msg">Файл „%1$s“ будет удалён с диска навсегда. Отменить это нельзя.</string>
+    <string name="files_delete_msg_shelf">Файл „%1$s“ будет удалён с диска навсегда, книга уйдёт с полки вместе с ним. Отменить это нельзя.</string>
+    <string name="files_delete_ok">Файл удалён</string>
+    <!-- 23.11.2026, просьба Сержа: «под долгим удержанием на файле и на папке
+         добавился пункт удалить». У файлов удаление было и раньше («Удалить
+         файл» вне полки, «Удалить из библиотеки» на полке); теперь то же и у
+         папок — со всем содержимым, с переспросом. -->
+    <string name="files_menu_delete_dir">Удалить папку</string>
+    <string name="files_delete_dir_title">Удалить папку?</string>
+    <string name="files_delete_dir_msg">Папка „%1$s“ и все файлы в ней будут удалены с диска навсегда. Отменить это нельзя. Книги из неё уберутся с полки сами при следующем сканировании.</string>
+    <string name="files_dir_deleted">Папка удалена: %1$s</string>
+    <string name="files_dir_delete_failed">Папку стереть не удалось — файлы на месте</string>
+    <string name="files_delete_fail">Файл удалить не удалось</string>
+    <string name="files_info_path">Папка</string>
+    <string name="files_info_size">Размер</string>
+    <string name="files_info_date">Изменён</string>
+    <string name="files_search_title">Искать в папке</string>
+    <string name="files_search_hint">Начало названия</string>
+    <string name="files_search_go">Найти</string>
+    <string name="files_search_empty">Сначала продиктуй или набери хотя бы пару букв.</string>
+    <string name="files_not_found">Не нашёл „%1$s“. Попробуй искать по части слова.</string>
+    <string name="files_sort_title">Порядок в папке</string>
+    <string name="files_sort_name">По названию</string>
+    <string name="files_sort_new">Сначала свежие файлы</string>
+    <string name="files_sort_old">Сначала старые файлы</string>
+
+    <!-- Долгое касание папки (20.11.2026, просьба Сержа): добавить ВСЮ папку с
+         подпапками на полку, либо сделать её папкой книг (полка тогда сама
+         сканирует её при каждом открытии). Массовое добавление метки «не
+         возвращать при скане» НЕ снимает — только называет их число. -->
+    <string name="files_folder_add_all">Добавить все книги в библиотеку</string>
+    <string name="files_folder_make_books">Сделать папкой книг</string>
+    <string name="files_wait_folder">Папка ещё читается, подожди секунду</string>
+    <string name="files_add_busy">Собираю книги из папки…</string>
+    <string name="files_add_none">Новых книг здесь нет.</string>
+    <string name="files_add_already_were">Уже были на полке: %1$d</string>
+    <string name="files_add_hidden_were">Скрытых отметкой «не возвращать»: %1$d — их возвращает касание файла</string>
+    <string name="files_add_confirm_title">Новых книг: %1$d</string>
+    <string name="files_add_confirm_msg">Добавить все новые книги из папки „%1$s“? Полка вырастет ровно на столько строк.</string>
+    <string name="files_add_go">Добавить</string>
+    <string name="files_add_done_head">Готово:</string>
+    <plurals name="files_added">
+        <item quantity="one">добавил %d книгу</item>
+        <item quantity="few">добавил %d книги</item>
+        <item quantity="many">добавил %d книг</item>
+        <item quantity="other">добавил %d книги</item>
+    </plurals>
+    <string name="files_walk_limit">В папке больше 20 тысяч файлов — дальше не смотрел</string>
+    <string name="files_make_title">Сделать „%1$s“ папкой книг</string>
+    <string name="files_make_msg">Полка будет сканировать эту папку при каждом открытии. Старые книги с полки НЕ убираются, файлы не переносятся. Android спросит подтверждение — там сразу откроется эта папка.</string>
+    <string name="files_make_go">Выбрать эту папку</string>
+
+    <!-- Дополнительные папки для сканирования (20.11.2026, просьба Сержа):
+         полка сама заглядывает в вторую-третью папку при каждом открытии.
+         Читаются напрямую с диска — значит нужен «Доступ ко всем файлам». -->
+    <string name="scan_folders_title">Папки для сканирования</string>
+    <string name="scan_folders_none">не добавлены</string>
+    <string name="scan_folders_off">— нужен доступ ко всем файлам</string>
+    <plurals name="scan_folders_count">
+        <item quantity="one">%d папка</item>
+        <item quantity="few">%d папки</item>
+        <item quantity="many">%d папок</item>
+        <item quantity="other">%d папка</item>
+    </plurals>
+    <string name="scan_folders_add">Добавить папку…</string>
+    <string name="scan_folders_added">Папка „%1$s“ добавлена. Полка просканирует её при открытии.</string>
+    <string name="scan_folders_dup">Такая папка уже в списке.</string>
+    <string name="scan_folders_is_main">Это и так папка книг — она сканируется всегда.</string>
+    <string name="scan_folders_not_disk">Эту папку нельзя читать напрямую — выбирайте папки на памяти телефона.</string>
+    <string name="scan_folders_need_access">Дополнительные папки читаются напрямую с диска, для них нужен «Доступ ко всем файлам». Открыть настройку доступа?</string>
+    <string name="scan_folders_remove_msg">Перестать сканировать папку „%1$s“? Её книги на полке ОСТАНУТСЯ — просто полка перестанет сама находить в ней новинки.</string>
+    <string name="scan_folders_remove_ok">Убрать</string>
+    <string name="scan_folders_removed">Убрал из сканирования, книги остались на полке.</string>
+
     <!-- msg5939/5943/5947: меню «⋮» → «Удалить всё из категории» — чистит
          ОТКРЫТУЮ вкладку (что видно на полке, то и убираем). На «Избранном»
          это снятие метки, а не удаление: книги остаются на полке. Галочка про
@@ -298,6 +418,44 @@
          не говорим ни разу — вехи «Скачано 25 процентов» перебивали чтение
          книги; прогресс виден в уведомлении, там же кнопка «Отменить». -->
     <string name="dl_cancel">Отменить</string>
+
+    <!-- Пакетное скачивание: «всю серию / всего автора» долгим на строке
+         «Все книги…» страницы книги (20.11.2026, просьба Сержа). Без переспроса:
+         служба собирает список по страницам, говорит число и качает подряд;
+         отмена — кнопкой в шторке или тем же долгим на той же строке. -->
+    <string name="catalog_batch_title">Скачивание из каталога</string>
+    <string name="catalog_batch_row_action">Скачать весь этот список</string>
+    <plurals name="catalog_batch_n">
+        <item quantity="one">%d книга</item>
+        <item quantity="few">%d книги</item>
+        <item quantity="many">%d книг</item>
+        <item quantity="other">%d книга</item>
+    </plurals>
+    <string name="catalog_batch_go">Качаю: %1$s. Папка — „%2$s“</string>
+    <string name="catalog_batch_card">„%1$s“: книга %2$d из %3$d</string>
+    <string name="catalog_batch_none">В этом списке нет новых книг — всё уже на полке.</string>
+    <string name="catalog_batch_nofile">В этом списке каталог не отдаёт ни одной книги: файлы заблокированы или требуют входа.</string>
+    <string name="catalog_batch_nofile_more">Без файла в списке ещё %d — каталог их не отдаёт.</string>
+    <string name="catalog_batch_toobig">В списке больше %1$d книг — это сбой навигации, не серия. Ничего не качаю.</string>
+    <string name="catalog_batch_done">Скачано книг: %1$d. Папка — „%2$s“</string>
+    <string name="catalog_batch_failed">не скачалось: %1$d (подробно в журнале)</string>
+    <string name="catalog_batch_login">Каталог просит вход — остановился. Успел скачать: %1$d.</string>
+    <string name="catalog_batch_cancelled">Пачку отменил. Скачано до отмены: %1$d из %2$d.</string>
+    <string name="catalog_batch_cancelling">Отменяю скачивание списка…</string>
+    <!-- 23.11.2026, просьба Сержа: «при долгом нажатии на серию была менюшка и в
+         ней скачать всю серию или всего автора» + «несколько серий подряд — все
+         в очередь». Пункты долгого меню и слова про очередь: -->
+    <string name="catalog_batch_all_series">Скачать всю серию</string>
+    <string name="catalog_batch_all_author">Скачать все книги автора</string>
+    <string name="catalog_batch_cancel_row">Отменить качание этого списка</string>
+    <string name="catalog_batch_drop_row">Убрать этот список из очереди</string>
+    <string name="catalog_batch_unqueued">Убрал эту пачку из очереди.</string>
+    <plurals name="catalog_batch_queued">
+        <item quantity="one">В очереди: качается ещё %d список перед этим.</item>
+        <item quantity="few">В очереди: качается ещё %d списка перед этим.</item>
+        <item quantity="many">В очереди: качается ещё %d списков перед этим.</item>
+        <item quantity="other">В очереди: качается ещё %d списков перед этим.</item>
+    </plurals>
     <string name="dl_cancelled">Скачивание отменено</string>
     <string name="dl_notif_done">Скачано, книга в библиотеке</string>
     <!-- Кнопка на карточке итога (26.09.2026): жалоба «уведомление висит и
@@ -785,6 +943,11 @@
     <string name="ui_voice_title">Кнопка «Голос чтения»</string>
     <string name="ui_slider_title">Ползунок перемотки по книге</string>
     <string name="ui_position_title">Строка с местом в книге (глава, предложение)</string>
+    <!-- 12.11.2026: что писать в строке места (PlaceLine). Серж попросил вернуть
+         номер предложения, но чтобы это был ВЫБОР, а не возврат навсегда. -->
+    <string name="place_line_title">Строка места: что писать</string>
+    <string name="place_line_both">Глава и предложение</string>
+    <string name="place_line_chapter">Только глава</string>
     <string name="ui_stats_title">Строка «Прочитано, осталось»</string>
     <string name="ui_toc_title">Кнопка «Оглавление»</string>
     <string name="ui_bookmark_title">Кнопка «Закладка»</string>
@@ -793,7 +956,9 @@
 
     <!-- Поиск в читалке: панель над списком предложений, основной текст не перекрывает -->
     <string name="search_button_cd">Поиск</string>
-    <string name="search_find_btn">Найти</string>
+    <!-- 12.11.2026, решение Сержа: кнопки «Найти» в панели поиска больше нет —
+         её работу делает «Далее» (нет результатов — ищет, есть — шагает).
+         Строку search_find_btn убрали вместе с кнопкой. -->
     <string name="search_prev_btn">Назад</string>
     <string name="search_next_btn">Далее</string>
     <string name="search_close_btn">Закрыть поиск</string>
@@ -802,6 +967,12 @@
     <string name="search_counter">Совпадение %1$d из %2$d</string>
     <string name="search_none">Ничего не найдено</string>
     <string name="search_empty_hint">Сначала введи или продиктуй слово для поиска</string>
+    <!-- 12.11.2026, жалоба Сержа: «ввёл слово, нажал „Найти“, потом „Далее“ — а
+         она ничего не делает». Правило: кнопки поиска НЕ молчат — они говорят,
+         что происходит или почему ничего не вышло. -->
+    <string name="search_started">Ищу «%1$s»…</string>
+    <string name="search_none_for">Не нашёл «%1$s». Попробуй искать по части слова</string>
+    <string name="search_wait">Ещё ищу, подожди секунду</string>
     <string name="search_voice_prompt">Продиктуй слово для поиска</string>
     <string name="search_voice_unavailable">Голосовой ввод на этом устройстве недоступен</string>
     <string name="search_voice_retry">Не расслышал слово, попробуй ещё раз</string>
@@ -1051,6 +1222,15 @@
     <string name="library_menu_unfinish">Вернуть в читаемые</string>
     <string name="library_menu_info">Информация о книге</string>
     <string name="library_menu_delete">Удалить из библиотеки</string>
+    <!-- 23.11.2026, просьба Сержа: «в библиотеке можно добавить пункт — из
+         библиотеки убрать». Прежнее «Удалить» стирает и файл; этот пункт снимает
+         только запись, файл остаётся на диске (метка «не возвращать при скане»
+         ставится — человек спрятал книгу осознанно, скан её не навязывает). -->
+    <string name="library_menu_unshelve">Убрать с полки, файл оставить</string>
+    <string name="unshelve_title">Убрать с полки</string>
+    <string name="unshelve_msg">Убрать „%1$s“ из библиотеки? Файл останется на диске, книга вернётся, если тронуть её в менеджере файлов.</string>
+    <string name="unshelf_yes">Убрать</string>
+    <string name="unshelved">Книга убрана с полки, файл остался на диске</string>
     <!-- msg2559: ручное «название для полки» — показывается вместо имени файла,
          файл на диске не переименовывается. -->
     <string name="rename_dialog_title">Название книги</string>
@@ -1080,10 +1260,31 @@
     <string name="book_delete_msg">Удалить „%1$s“ из библиотеки и сам файл с устройства? Это необратимо.</string>
     <string name="book_delete_yes">Удалить</string>
     <string name="book_deleted">Книга и файл удалены</string>
+    <!-- 19.11.2026, жалоба Сержа: «не могу удалить книгу — файла уже нету».
+         Стирать было нечего, запись теперь снимаем и говорим это прямо. -->
+    <string name="book_deleted_file_missing">Файла уже не было — убрал книгу с полки</string>
     <!-- 12.10.2026, решение Сержа: файл стереть не вышло — книгу не убираем
          молча, а говорим правду и оставляем её на полке. Файл он уберёт
          проводником, и запись уйдёт при скане сама. -->
     <string name="book_delete_file_stays">Файл стереть не удалось: книга осталась на полке. Удали файл проводником — полка уберёт запись сама</string>
+    <!-- 07.11.2026, жалоба тестера «нажимаю Удалить — книга остаётся в списке»:
+         у папки книг было право ТОЛЬКО ЧТЕНИЕ, поэтому файл не стирался. Говорим
+         причину и даём выход одним касанием — выбрать ту же папку заново. -->
+    <string name="book_delete_no_write_title">Папка книг только для чтения</string>
+    <string name="book_delete_no_write_msg">Файл не стирается: у BookVoice право только читать папку книг. Покажи эту папку заново — при выборе система даст и запись, и удаление заработает</string>
+    <!-- 07.11.2026, просьба Сержа: если приложение не может что-то сделать из-за
+         разрешения, оно обязано сказать это словами и предложить выход, а не
+         молчать. Здесь — папка книг перестала открываться (разрешение отозвано
+         системой или папку убрали). -->
+    <string name="folder_lost_title">Папка книг не открывается</string>
+    <string name="folder_lost_msg">Android больше не даёт BookVoice читать папку книг: разрешение отозвано или папка переехала. Покажи папку заново — полка снова увидит книги</string>
+    <!-- 12.11.2026, жалоба Сержа после обновления: «пишет, что библиотека не
+         найдена, дайте разрешение к папке». Когда папка не открывается НИ через
+         системный выбор папки, НИ напрямую по диску, самая частая причина —
+         прошивка сняла «Доступ ко всем файлам» (она делает это при обновлении
+         приложения). Ведём человека прямо на системный экран этого доступа. -->
+    <string name="folder_lost_all_files_msg">Папка книг не открывается: Android снял у BookVoice «Доступ ко всем файлам» — так бывает после обновления приложения. Включи этот доступ снова, и полка увидит книги. Если не поможет — выбери папку заново.</string>
+    <string name="folder_repick_btn">Выбрать папку заново</string>
 
     <string name="catalog_gesture_hint">В списке книг: короткое касание открывает страницу книги, долгое — сразу скачивает книгу. На странице книги: долгое касание по кнопке «Скачать» показывает все форматы, какие есть на сайте</string>
     <string name="catalog_book_open">Открыть в читалке</string>
@@ -1459,6 +1660,9 @@
     <string name="tts_not_reading">Синтезатор не дал ни звука. Похоже, он не работает — проверьте движок и голос в настройках синтезатора.</string>
     <!-- 17.10.2026: когда чтение встало из-за молчания движка, говорим «не готов» —\n         так Серж и просил сформулировать. -->
     <string name="tts_not_ready">Синтезатор не готов читать: он не дал ни звука. Проверьте движок и голос в настройках синтезатора.</string>
+    <!-- 19.11.2026, просьба Сержа: «просто скажем, что синтезатор не отвечает».
+         Говорит ДИКТОР (скринридер), он не зависит от движка чтения. -->
+    <string name="tts_not_answering">Синтезатор не отвечает. Чтение остановил. Попробуйте нажать «Читать» ещё раз или проверьте движок и голос в настройках синтезатора.</string>
     <string name="reader_back_done">Вернулся: %1$s</string>
 
     <!-- msg2567/2575: таймер сна в ⋮-меню читалки -->
@@ -1474,6 +1678,14 @@
     <string name="sleep_timer_title">Таймер сна</string>
     <string name="sleep_timer_intro">Через сколько остановить чтение. Таймер работает и при погашенном экране, и когда окно книги закрыто.</string>
     <string name="sleep_timer_now">Уже стоит</string>
+    <!-- 12.11.2026, просьба Сержа: таймер можно включить «насовсем» — выбранное
+         время запоминается и ставится само при каждом начале чтения. Галочка,
+         а не выбор из двух положений: человек просил привычный флажок. -->
+    <string name="sleep_always_title">Ставить таймер каждый раз</string>
+    <string name="sleep_always_hint">Включено: выбранное время запоминается и ставится само при каждом начале чтения. Выключено: таймер работает один раз, как раньше.</string>
+    <string name="sleep_always_word">всегда</string>
+    <string name="sleep_always_on">Таймер буду ставить сам: %1$s</string>
+    <string name="sleep_always_off">Таймер — только когда выберу</string>
     <string name="sleep_timer_left">осталось %1$d мин</string>
     <string name="sleep_timer_left_chapter">ждёт конца главы</string>
     <!-- 30.09.2026: нижняя подсказка окна таймера убрана: строкой выше уже

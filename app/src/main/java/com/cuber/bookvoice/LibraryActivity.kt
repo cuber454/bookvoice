@@ -87,6 +87,10 @@ class LibraryActivity(private val act: SectionActivity) {
     // запуск — иначе фраза звучала бы при каждом открытии полки.
     private var accessMissingTold = false
 
+    // 07.11.2026: о неоткрывающейся папке книг спрашиваем один раз за показ
+    // полки — иначе окно выскакивало бы при каждом возврате из книги.
+    private var folderAskShown = false
+
     // Фильтр списка по статусу (msg643): 0..2 — конкретный статус из
     // BookRecord, FILTER_ALL — показывать всё, FILTER_FAV — избранное (msg2555).
     // Выбранный фильтр помним в prefs.
@@ -191,8 +195,84 @@ class LibraryActivity(private val act: SectionActivity) {
             getString(R.string.library_menu_rename) to { renameBook(rec) },
             getString(if (finished) R.string.library_menu_unfinish else R.string.library_menu_finish)
                 to { toggleFinished(rec, finished) },
+            // 23.11.2026, просьба Сержа: «можно добавить пункт — из библиотеки
+            // убрать». Перед «Удалить» — чтобы опасное осталось последним.
+            getString(R.string.library_menu_unshelve) to { confirmUnshelve(rec) },
             getString(R.string.library_menu_delete) to { confirmDelete(rec) },
         )
+    }
+
+    // 19.11.2026 (просьба Сержа): вкладка «Файлы» — менеджер папок, живёт в
+    // [FileBrowser]. Полка даёт ему свой список и свои же пути открытия
+    // (openReader/addAndOpen/меню книги), чтобы поведение строки книги ни чем
+    // не расходилось: файл, найденный менеджером, открывается ровно той же
+    // дорогой, что строка полки.
+    private val browser by lazy { FileBrowser(act, this, binding.bookList, binding.tvEmpty) }
+
+    /** Вкладку «Файлы» только что открыли переключением (или при первом показе
+     *  окна): при следующем refresh() менеджер сам войдёт в свою папку и
+     *  попробует встать на последнюю читаемую книгу. */
+    private var filesJustEntered = true
+
+    // ——— узкие двери для менеджера: те же функции полки, без дублирования ———
+
+    internal fun openReaderViaBrowser(rec: BookRecord) = openReader(rec)
+    internal fun openNewFileViaBrowser(uri: Uri, name: String) = addAndOpen(uri, name)
+    internal fun bookMenuViaBrowser(rec: BookRecord, extra: Pair<String, () -> Unit>? = null) =
+        showBookMenu(rec, extra)
+    internal fun bookRowActionsViaBrowser(rec: BookRecord): List<Pair<String, () -> Unit>> =
+        bookRowActions(rec)
+    internal fun currentFilterMode(): Int = filterMode
+    internal fun treeUri(): String? = prefs.getString(KEY_TREE, null)
+    internal fun openSystemFileViaBrowser() {
+        act.openDocPicker(arrayOf("*/*")) { uri -> if (uri != null) onBookPicked(uri) }
+    }
+
+    /** Массовое добавление из менеджера (20.11.2026): завести файл в библиотеку
+     *  ровно так же, как его заводит скан папки, — то же чтение метаданных, те же
+     *  серия и аннотация. Дверь одна на скан и менеджер: второй копий правил
+     *  быть не должно. Вернёт false, если запись с таким адресом уже есть.
+     *  Дубль по реальному пути (тот же файл под другим адресом) менеджер
+     *  отсеивает сам ОДНИМ проходом по полке: проверять путь на каждом файле —
+     *  квадрат по размеру библиотеки, три тысячи файлов стояли бы минутами. */
+    internal fun addFoundFileToShelf(uriStr: String, name: String): Boolean {
+        if (BookStore.byUri(act, uriStr) != null) return false
+        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return false
+        val meta = if (needsBookMeta(name)) readMeta(uri, name) else null
+        BookStore.upsert(act, BookRecord(
+            uri = uriStr,
+            name = name,
+            title = meta?.title?.takeIf { BookRecord.usableTitle(it) },
+            author = meta?.author,
+            annotation = if (meta != null && canHaveFileAnnotation(name)) {
+                meta.annotation ?: ""
+            } else {
+                null
+            },
+            series = if (meta != null && BookParser.canCarrySeries(name)) meta.series ?: "" else null,
+            seriesNo = if (meta != null && BookParser.canCarrySeries(name)) meta.seriesNo else null,
+            addedAt = System.currentTimeMillis(),
+        ))
+        return true
+    }
+
+    /** «Сделать эту папку папкой книг» из менеджера: системный выбор, открытый
+     *  сразу внутри этой папки. Дальше — обычная дорога полки ([onFolderPicked]:
+     *  вечный грант, запомнить, сканировать). Старые записи НЕ трогаем: они
+     *  живые, их файлы никуда не делись. */
+    internal fun openBooksFolderPicker(initial: Uri?) {
+        act.openTreePicker(initial) { tree -> if (tree != null) onFolderPicked(tree) }
+    }
+
+    /** Файл для менеджера показываем только книжный. Одно место на полку и
+     *  «Файлы»: расширение поддержано — значит, и скан его добавит, и
+     *  менеджер покажет. */
+    internal fun supportedFileName(name: String): Boolean {
+        val lower = name.lowercase(Locale.ROOT)
+        return lower.endsWith(".fb2") || lower.endsWith(".txt") ||
+            lower.endsWith(".zip") || lower.endsWith(".xml") || lower.endsWith(".epub") ||
+            lower.endsWith(".pdf") || lower.endsWith(".docx") || lower.endsWith(".odt") ||
+            lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml")
     }
 
     /** Построить полку в контейнере [container] хоста. Зовётся один раз при
@@ -260,6 +340,9 @@ class LibraryActivity(private val act: SectionActivity) {
         }
         binding.btnMore.contentDescription = getString(R.string.lib_more)
         binding.btnMore.setOnClickListener { showMoreMenu() }
+        // 19.11.2026: ряд кнопок вкладки «Файлы» (виден только на ней).
+        binding.btnFilesJump.setOnClickListener { browser.goToCurrentBook() }
+        binding.btnFilesSearch.setOnClickListener { browser.showSearch() }
 
         // Фильтры по статусу (msg643): верхние вкладки «Читаю / Новые / Дочитано /
         // Все». Выбранный фильтр помним и возвращаемся к нему. Дефолт — «Все»,
@@ -276,6 +359,8 @@ class LibraryActivity(private val act: SectionActivity) {
         // buildFilterTabs мог скорректировать filterMode (активную вкладку скрыли
         // в настройках) — тогда и сортировку держим от актуального фильтра.
         sortMode = LibraryActivity.tabSort(prefs, filterMode)
+        // Чей список сейчас в RecyclerView — книг или файлов (19.11.2026).
+        applyListMode()
 
         // msg559: если доступ в интернет у BookVoice отключён (realme/Oppo —
         // отдельный переключатель «Интернет»), один раз за запуск подсказываем,
@@ -406,9 +491,46 @@ class LibraryActivity(private val act: SectionActivity) {
             Diag.log(act, "focus", "L1b: возврат из ридера, полка не собрана — строю полку")
         }
         // Авто-скан выбранной папки — в фоне, чтобы новые книги добавлялись
-        // даже когда сразу переходим в последнюю книгу.
-        if (treeUri() != null) {
+        // даже когда сразу переходим в последнюю книгу. 07.11.2026: раз в показ
+        // проверяем, ОТКРЫВАЕТСЯ ли папка вообще — иначе отозванное разрешение
+        // выглядело бы тишиной (полка просто не видит новых книг). Проверка идёт
+        // в фоне: это запрос к чужому провайдеру, на главном потоке он может
+        // подвиснуть.
+        val treeNow = treeUri()?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        if (treeNow == null && ScanFolders.list(act).isNotEmpty()) {
+            //Главной папки нет, но человек добавил свои для сканирования —
+            //скан всё равно должен идти (20.11.2026).
+            Diag.log(act, "shelf", "папки книг нет, но есть папки для сканирования — сканую их")
             scanInBackground { refresh() }
+        } else if (treeNow != null) {
+            Thread {
+                val reachable = folderReachable(treeNow)
+                act.runOnUiThread {
+                    if (act.isFinishing || act.isDestroyed) return@runOnUiThread
+                    if (reachable) {
+                        scanInBackground { refresh() }
+                    } else if (!folderAskShown) {
+                        folderAskShown = true
+                        // 12.11.2026: папка не открылась НИ одним путём. Самая
+                        // частая причина после обновления приложения — прошивка
+                        // сняла «Доступ ко всем файлам». Тогда ведём прямо на
+                        // системный экран этого доступа, а не «выбери папку
+                        // заново»: перевыбор папки без этого доступа тоже упрётся.
+                        val noAllFiles = !AllFiles.granted(act)
+                        val ask = if (noAllFiles) "включить доступ ко всем файлам"
+                        else "выбрать папку заново"
+                        Diag.log(
+                            act, "shelf",
+                            "папка книг не открывается ни одним путём: прошу $ask",
+                        )
+                        if (noAllFiles) {
+                            AllFiles.ask(act, getString(R.string.folder_lost_all_files_msg))
+                        } else {
+                            askRepickFolder(R.string.folder_lost_title, R.string.folder_lost_msg)
+                        }
+                    }
+                }
+            }.start()
         }
         // Автобэкап по расписанию (#100): проверяем дешёвым гейтом (частота +
         // когда была последняя копия), тяжёлую запись делаем в фоне.
@@ -419,13 +541,31 @@ class LibraryActivity(private val act: SectionActivity) {
         // перед finish(). Хост не finish'ится — вкладки живут под читалкой (L1b).
         val suppress = suppressNextAutoOpen
         suppressNextAutoOpen = false
+        // 07.11.2026 (жалоба тестера и Сержа): «файл пришёл снаружи» — это признак
+        // ОДНОГО показа полки, как и suppress. Раньше флаг ставился и НЕ снимался:
+        // после первого же открытия книги из проводника («Открыть с помощью»)
+        // авто-открытие последней книги умирало до конца жизни процесса — то есть
+        // человек с тех пор каждый раз открывал книгу руками.
+        val launchExternal = launchWasExternal
+        launchWasExternal = false
         Diag.log(act, "focus", "полка показана: авто-открытие ${if (suppress) "подавлено (окно-поверх/ридер закрылись)" else "не подавлено — возможен уход в книгу"}")
 
         // Запуск «Открыть с помощью» (msg748): внешний файл уже открыт в build(),
         // авто-возврат к последней книге сейчас не нужен — остальное (скан, полка)
         // выполняется как обычно.
         val startPref = prefs.getString(MainActivity.KEY_START, MainActivity.START_LAST)
-        if (!suppress && !launchWasExternal && startPref == MainActivity.START_LAST) {
+        // 07.11.2026 (жалобы «последняя книга не открывается сама»): решение о
+        // авто-открытии пишем ЦЕЛИКОМ — по одной строке видно, что помешало:
+        // подавление, внешний файл или настройка «начинать с полки». Живость
+        // адреса здесь НЕ проверяем (это открытие потока, а мы на главном
+        // потоке) — про неё скажет ветка ниже.
+        val lastForLog = prefs.getString(MainActivity.KEY_URI, null)
+        Diag.log(
+            act, "focus",
+            "авто-открытие: подавление=$suppress, файл снаружи=$launchExternal, " +
+                "настройка=$startPref, последняя=${lastForLog ?: "—"}",
+        )
+        if (!suppress && !launchExternal && startPref == MainActivity.START_LAST) {
             val lastUri = prefs.getString(MainActivity.KEY_URI, null)
             if (lastUri != null && lastBookReadable(lastUri)) {
                 if (shelfReady) {
@@ -492,6 +632,13 @@ class LibraryActivity(private val act: SectionActivity) {
                 }
                 return
             }
+            // Адреса нет или файл по нему не читается — говорим об этом прямо:
+            // иначе по журналу не отличить «настройка не та» от «книга мертва».
+            Diag.log(
+                act, "focus",
+                if (lastUri == null) "авто-открытие: последней книги нет (адрес пуст)"
+                else "авто-открытие: последняя книга не читается ($lastUri)"
+            )
         }
         // msg1807-страховка: сюда приходят только НЕ-холодные показы полки
         // (без отложенного авто-открытия), поэтому скрытие на время холодного
@@ -530,7 +677,7 @@ class LibraryActivity(private val act: SectionActivity) {
         // Здесь полка уже собрана и объявлена, окно можно звать через секунду —
         // не накрывая имя окна. Условие «свежая полка» и есть признак запуска;
         // suppress/внешний файл — не запуск, а чужой сценарий.
-        if (freshShelf && !suppress && !launchWasExternal) {
+        if (freshShelf && !suppress && !launchExternal) {
             binding.root.postDelayed({
                 if (!act.isFinishing) WhatsNew.showOnLaunch(act) { }
             }, 1000)
@@ -579,6 +726,13 @@ class LibraryActivity(private val act: SectionActivity) {
         if (readerFocusDone) return
         readerFocusDone = true
         val target = uri ?: prefs.getString(MainActivity.KEY_URI, null)
+        // Возврат из книги на вкладке «Файлы» (19.11.2026): строки ищет
+        // менеджер — он знает, что книга лежит в этой папке под каким-то из
+        // своих адресов.
+        if (filterMode == FILTER_FILES) {
+            browser.returnToBook(target)
+            return
+        }
         val idx = target?.let { u -> shownRecords.indexOfFirst { it.uri == u } } ?: -1
         if (idx < 0) {
             Diag.log(act, "focus", "возврат из книги: строки нет в списке — фокус на заголовок")
@@ -608,6 +762,10 @@ class LibraryActivity(private val act: SectionActivity) {
      *  Книги в списке нет (другой фильтр/сортировка её спрятал) — первая книга,
      *  как при приходе на вкладку. */
     private fun focusBookOnShelf(uri: String) {
+        if (filterMode == FILTER_FILES) {
+            browser.returnToBook(uri)
+            return
+        }
         val idx = shownRecords.indexOfFirst { it.uri == uri }
         if (idx < 0) {
             Diag.log(act, "focus", "L1: книга не в списке — естественный возврат")
@@ -654,27 +812,23 @@ class LibraryActivity(private val act: SectionActivity) {
      *  «⋮ → Выход из приложения». Окно-дом решает, как свернуть, само
      *  (LibraryWindowActivity.rootBack); у окна поверх было бы finish(). */
     fun onBackKey(): Boolean {
+        // 19.11.2026 (просьба Сержа): «назад» на вкладке «Файлы» поднимает на
+        // уровень выше и НЕ сворачивает приложение. На верхней границе
+        // (корень памяти / край папки книг) — обычное поведение полки.
+        if (filterMode == FILTER_FILES && browser.onBack()) return true
         act.rootBack()
         return true
     }
 
     /** Последняя книга открывается автоматически, только если файл ещё на
-     *  месте — иначе приложение каждый запуск прыгало бы в ридер с ошибкой. */
-    private fun lastBookReadable(u: String): Boolean {
-        val uri = Uri.parse(u)
-        return try {
-            if (uri.scheme == "file") {
-                val p = uri.path
-                p != null && java.io.File(p).exists()
-            } else {
-                contentResolver.query(
-                    uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
-                )?.use { it.moveToFirst() } ?: false
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
+     *  месте — иначе приложение каждый запуск прыгало бы в ридер с ошибкой.
+     *
+     *  07.11.2026 (журнал тестера): здесь была СВОЯ копия проверки — «спросить у
+     *  провайдера имя документа». Она отвечала «нет» там, где книга читается, и
+     *  холодный старт молча уходил на полку вместо книги: по жалобе выходило
+     *  «вышел из программы — последняя книга не открывается». Одна проверка на
+     *  всё: [BookStore.openable] (он же в открытии записи с полки и в «Продолжить»). */
+    private fun lastBookReadable(u: String): Boolean = BookStore.openable(act, u)
 
     // ---------------- Фильтры по статусу ----------------
 
@@ -812,6 +966,7 @@ class LibraryActivity(private val act: SectionActivity) {
     /** Выбрать вкладку-фильтр: запомнить, подсветить, озвучить и пересобрать полку.
      *  Один вход и для касания, и для свайпа, и для жеста диктора (29.10.2026). */
     private fun selectFilter(mode: Int) {
+        val enteredFiles = mode == FILTER_FILES && filterMode != FILTER_FILES
         filterMode = mode
         prefs.edit().putInt(KEY_LIB_FILTER, mode).apply()
         activeFilterMode = mode
@@ -819,6 +974,9 @@ class LibraryActivity(private val act: SectionActivity) {
         filterLabels.getOrNull(currentTabModes.indexOf(mode))?.announceForAccessibility(
             TabNav.tabDesc(getString(LibraryActivity.tabLabelRes(mode)), true)
         )
+        if (enteredFiles) filesJustEntered = true
+        // Чей список в RecyclerView — книг или файлов; ряд кнопок «Файлов» — туда же.
+        applyListMode()
         refresh()
         binding.filterBar.post { scrollSelectedTabIntoView() }
     }
@@ -996,6 +1154,9 @@ class LibraryActivity(private val act: SectionActivity) {
         binding.btnLast.importantForAccessibility = mode
         binding.btnCatalogs.importantForAccessibility = mode
         binding.btnMore.importantForAccessibility = mode
+        // 19.11.2026: ряд кнопок вкладки «Файлы» — часть контента полки, прячем
+        // вместе с ним на время холодного авто-открытия.
+        binding.filesBar.importantForAccessibility = mode
         binding.bookList.importantForAccessibility = mode
         binding.tvEmpty.importantForAccessibility = mode
     }
@@ -1010,7 +1171,42 @@ class LibraryActivity(private val act: SectionActivity) {
 
     // ---------------- Список ----------------
 
+    /** Чей список стоит в [ActivityLibraryBinding.bookList]: книг или файлов.
+     *  Вкладка «Файлы» (19.11.2026) делит с полкой один RecyclerView, поэтому
+     *  при переключении меняем адаптер и показываем/прячем ряд её кнопок.
+     *  23.11.2026 (Серж: «делай одинаково для всех»): вид «список/сетка»
+     *  больше НЕ привязан к полке — раскладку ставит applyViewMode обоим
+     *  спискам, сетка есть и на «Файлах» (карточки файлов с обложками). */
+    private fun applyListMode() {
+        val files = filterMode == FILTER_FILES
+        binding.filesBar.visibility = if (files) View.VISIBLE else View.GONE
+        if (files) {
+            browser.attach()
+        } else if (binding.bookList.adapter !== adapter) {
+            binding.bookList.adapter = adapter
+        }
+        applyViewMode()
+    }
+
     private fun refresh() {
+        // Вкладка «Файлы» — не реестр: показом папки ведёт [FileBrowser], и
+        // дедупликация записей ниже его списка не касается (19.11.2026).
+        if (filterMode == FILTER_FILES) {
+            // 24.11.2026 (жалоба Сержа: «когда активна вкладка Файлы, кнопка
+            // сетевой библиотеки съезжает влево, а кнопка последней книги
+            // исчезает»): ранний возврат обходил updateContinueButton — при
+            // запуске прямо на «Файлах» btnLast оставался с XML-умолчания
+            // (gone), и btnCatalogs — единственный видимый ребёнок ряда —
+            // уезжал к левому краю. Кнопка последней книги нужна на всех
+            // вкладках: ряд не должен менять форму.
+            updateContinueButton()
+            browser.refresh(filesJustEntered)
+            filesJustEntered = false
+            return
+        }
+        // Страховка: вкладку «Файлы» могли скрыть в Настройках, пока на ней
+        // стояли (forgetActiveFilter) — к книжному списку возвращаем адаптер.
+        if (binding.bookList.adapter !== adapter) applyListMode()
         // msg2713/2717: у каждой вкладки-фильтра своя сортировка — перечитываем
         // её под актуальный фильтр при каждой пересборке полки.
         sortMode = LibraryActivity.tabSort(prefs, filterMode)
@@ -1314,6 +1510,12 @@ class LibraryActivity(private val act: SectionActivity) {
      *  персональный для вкладки; пункт «Как у остальных» снимает его и возвращает
      *  вкладку к общей сортировке (KEY_SORT). */
     private fun showSortDialog(mode: Int) {
+        // Долгое удержание вкладки «Файлы»: у списка папок своя сортировка —
+        // названию нет, автору или серии у файла взяться неоткуда.
+        if (mode == FILTER_FILES) {
+            browser.showSortDialog()
+            return
+        }
         val opts = SORT_CHOICES.map { getString(sortLabelRes(it)) }.toMutableList()
         val resetIdx = opts.size
         opts.add(getString(R.string.sort_reset))
@@ -1381,6 +1583,12 @@ class LibraryActivity(private val act: SectionActivity) {
      *  «О программе» (msg2934) отсюда убран — живёт в Настройках → «Разное»
      *  (msg3061). Если папка ещё не выбрана, пункт про неё предлагает её выбрать. */
     private fun showMoreMenu() {
+        // Вкладка «Файлы»: у неё своё меню — обновить, системный выбор файла,
+        // доступ ко всему телефону (19.11.2026).
+        if (filterMode == FILTER_FILES) {
+            browser.showMenu()
+            return
+        }
         val tree = treeUri()
         val qCount = QuoteStore.all(act).size
         // msg5939/5947: меню одно на всю полку, поэтому пункт «Удалить всё из
@@ -1403,7 +1611,15 @@ class LibraryActivity(private val act: SectionActivity) {
             startActivity(Intent(act, CatalogWindowActivity::class.java))
         }
         item(getString(R.string.lib_menu_open_file)) {
-            act.openDocPicker(arrayOf("*/*")) { uri -> if (uri != null) onBookPicked(uri) }
+            // 19.11.2026 (решение Сержа): «открыть файл» теперь ведёт в НАШ
+            // менеджер — вкладку «Файлы». Системный выбор остался внутри него
+            // (пункт «Выбрать файл системой»), а если человек спрятал вкладку
+            // «Файлы» в настройках — идём прежним путём, без самовольства.
+            if (LibraryActivity.FILTER_FILES in currentTabModes) {
+                selectFilter(LibraryActivity.FILTER_FILES)
+            } else {
+                act.openDocPicker(arrayOf("*/*")) { uri -> if (uri != null) onBookPicked(uri) }
+            }
         }
         item(getString(if (tree == null) R.string.choose_folder else R.string.lib_menu_scan)) {
             onFolderButton()
@@ -1583,16 +1799,41 @@ class LibraryActivity(private val act: SectionActivity) {
     /** Применить вид к полке: сетка — колонки карточек (одна при крупном
      *  шрифте, см. [gridColumns]), список — строки. Зовётся при первом показе и
      *  при смене в меню «Ещё». Вместе с видом ставим галочку обложек: она имеет
-     *  смысл только в сетке, и держать её в двух местах незачем. */
+     *  смысл только в сетке, и держать её в двух местах незачем.
+     *  23.11.2026 (Серж: «делай одинаково для всех»): вид теперь общий и для
+     *  вкладки «Файлы» — раскладку ставим одному общему RecyclerView, а
+     *  адаптерам говорим «сменить вид» пересозданием холдеров. Новый
+     *  layoutManager создаём ТОЛЬКО когда вид или число колонок вправду
+     *  сменились: раньше это молча сбрасывало прокрутку при каждом заходе
+     *  на вкладку. */
     private fun applyViewMode() {
         adapter.viewMode = viewMode
         adapter.coversEnabled = coversEnabled()
-        binding.bookList.layoutManager = if (viewMode == BookAdapter.VIEW_GRID) {
-            GridLayoutManager(act, gridColumns())
-        } else {
-            LinearLayoutManager(act)
+        browser.onViewModeChanged()
+        val want = viewMode == BookAdapter.VIEW_GRID
+        val lm = binding.bookList.layoutManager
+        val have = lm is GridLayoutManager
+        val colsOk = !want || (lm as? GridLayoutManager)?.spanCount == gridColumns()
+        if (lm == null || have != want || !colsOk) {
+            binding.bookList.layoutManager = if (want) {
+                GridLayoutManager(act, gridColumns())
+            } else {
+                LinearLayoutManager(act)
+            }
         }
     }
+
+    /** Текущий вид полки для чужих адаптеров (вкладка «Файлы»). */
+    fun shelfViewGrid(): Boolean = viewMode == BookAdapter.VIEW_GRID
+
+    /** Обложки для карточек вкладки «Файлы»: тот же источник и те же размеры,
+     *  что у полки; null — галочка обложек снята (карточки будут текстовые).
+     *  Тип — интерфейс [CoverSource]: сам BookCovers помечен internal. */
+    fun fileCardCovers(): CoverSource? = if (coversEnabled()) covers else null
+
+    /** Диалог «Вид: список/сетка» для меню вкладки «Файлы» (23.11.2026) —
+     *  один и тот же выбор на все вкладки, просит Сержа не плодить места. */
+    fun showShelfViewDialog() = showViewDialog()
 
     private fun coversEnabled(): Boolean =
         prefs.getBoolean(KEY_LIB_COVERS, LIB_COVERS_DEFAULT)
@@ -1628,7 +1869,7 @@ class LibraryActivity(private val act: SectionActivity) {
                 if (ok) BackupStore.recordBackupTime(act)
                 runOnUiThread {
                     if (act.isFinishing || act.isDestroyed) return@runOnUiThread
-                    if (ok) toast(getString(R.string.backup_created))
+                    if (ok) toast(getString(R.string.backup_created)) else tellBackupFailed()
                 }
             } catch (t: Throwable) {
                 // Фоновая гигиена (0.3.43, msg1075): автобэкап НЕ должен ронять
@@ -1640,7 +1881,28 @@ class LibraryActivity(private val act: SectionActivity) {
 
     // ---------------- Папка с книгами ----------------
 
-    private fun treeUri(): String? = prefs.getString(KEY_TREE, null)
+    // treeUri() — над классом, одна функция на полку и менеджер (19.11.2026).
+
+    /** Сказать вслух, что автобэкап не записывается (07.11.2026, просьба Сержа:
+     *  «пускай приложение спрашивает, а не молчит, что не может»). Папка копий
+     *  могла остаться «только для чтения» — прежние сборки сохраняли разрешение
+     *  без права записи, — или пропасть совсем; тогда копии молча не писались
+     *  вовсе, а человек был уверен, что они есть. Говорим не чаще раза в сутки:
+     *  автобэкап пробуется на каждом запуске, и без порога это был бы нудёж. */
+    private fun tellBackupFailed() {
+        val now = System.currentTimeMillis()
+        val toldAt = prefs.getLong(KEY_BACKUP_FAIL_TOLD, 0L)
+        val fresh = now - toldAt >= BACKUP_FAIL_TOLD_MS
+        Diag.log(
+            act, "backup",
+            "автобэкап не записался: папка копий не даёт запись (говорю вслух: $fresh)",
+        )
+        if (!fresh) return
+        prefs.edit().putLong(KEY_BACKUP_FAIL_TOLD, now).apply()
+        val msg = getString(R.string.backup_dir_unwritable)
+        toast(msg)
+        binding.tvTitle.announceForAccessibility(msg)
+    }
 
     /**
      * Пункт меню «Сканировать».
@@ -1663,13 +1925,30 @@ class LibraryActivity(private val act: SectionActivity) {
     }
 
     private fun onFolderPicked(tree: Uri) {
-        try {
-            contentResolver.takePersistableUriPermission(
-                tree, Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        } catch (_: Exception) {
+        // 07.11.2026 (жалоба тестера: «нажимаю Удалить — книга остаётся в списке»):
+        // разрешение на папку сохранялось ТОЛЬКО НА ЧТЕНИЕ. Пока приложение живо,
+        // удаление и запись шли — система даёт доступ до конца процесса. После
+        // перезапуска SAF отвечал отказом: файл не стирался, запись с полки
+        // снималась, и авто-скан возвращал книгу следующей же строкой. Отсюда
+        // «удаление не происходит». Просим и чтение, и запись — при выборе папки
+        // система даёт оба права по умолчанию. Не дала — откатываемся на чтение,
+        // чтобы папка не потерялась вовсе.
+        val read = Intent.FLAG_GRANT_READ_URI_PERMISSION
+        val write = Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        val both = runCatching {
+            contentResolver.takePersistableUriPermission(tree, read or write)
+        }.isSuccess
+        if (!both) {
+            // Не дала запись — берём хотя бы чтение, чтобы папка не потерялась.
+            runCatching { contentResolver.takePersistableUriPermission(tree, read) }
         }
+        Diag.log(
+            act, "lib",
+            "папка книг: доступ сохранён — " +
+                if (both) "чтение и запись" else "ТОЛЬКО ЧТЕНИЕ (удалять и писать не сможем)",
+        )
         prefs.edit().putString(KEY_TREE, tree.toString()).apply()
+        folderAskShown = false
         toast(getString(R.string.folder_added))
         rescanFolder()
     }
@@ -1805,6 +2084,20 @@ class LibraryActivity(private val act: SectionActivity) {
             } catch (_: Throwable) {
                 ScanReport(0, 0)
             }
+            // ДОПОЛНИТЕЛЬНЫЕ ПАПКИ ДЛЯ СКАНИРОВАНИЯ (20.11.2026, просьба Сержа):
+            // человек добавил в настройках вторую-третью папку — скан обязан
+            // проходить по ним ВМЕСТЕ с главной, а не вместо неё. Считаем
+            // отдельно и складываем в один итог: и по журналу видно каждую
+            // папку, и тост один.
+            val extras = try {
+                scanExtraFolders()
+            } catch (_: Throwable) {
+                ScanReport(0, 0)
+            }
+            val report1 = report0.copy(
+                added = report0.added + extras.added,
+                skippedHidden = report0.skippedHidden + extras.skippedHidden,
+            )
             // НАЗВАНИЯ, ВЗЯТЫЕ ИЗ ТИТУЛЬНОГО ЛИСТА (16.10.2026, 264x, просьба
             // Сержа: «когда мы будем запускать сканирование, наши неправильные
             // названия в библиотеке переделываются?»). Скан смотрит только
@@ -1816,7 +2109,7 @@ class LibraryActivity(private val act: SectionActivity) {
             } catch (_: Throwable) {
                 0
             }
-            val report = report0.copy(titlesFixed = fixedTitles)
+            val report = report1.copy(titlesFixed = fixedTitles)
             // Записи, за которыми нет файла, убираем с полки сразу и без вопросов
             // (28.09.2026, просьба Сержа) — до пересборки списка, чтобы книга не
             // мелькнула на полке ещё раз.
@@ -2292,10 +2585,22 @@ class LibraryActivity(private val act: SectionActivity) {
      *  Записи делаем с адресом `file://` — по нему книга открывается так же, как
      *  скопированная в память приложения. Существующие записи не трогаем, скрытые
      *  меткой «не возвращать при скане» — пропускаем. */
-    private fun scanByFiles(tp: BookDelete.TreePaths): ScanReport {
-        val root = tp.dir
+    private fun scanByFiles(tp: BookDelete.TreePaths): ScanReport =
+        scanFilesUnder(tp.dir, "папка книг")
+
+    /** Скан ЛЮБОЙ папки напрямую с диска (файлами, без SAF): общий механизм для
+     *  главной папки книг (запасный путь, 29.10.2026) и для ДОПОЛНИТЕЛЬНЫХ
+     *  папок сканирования (20.11.2026, просьба Сержа). `avoidPaths` — пути,
+     *  которые полка уже знает под другим адресом (главным образом когда
+     *  доп. папка лежит ВНУТРИ папки книг: тот же файл не должен завестись
+     *  вторым адресом). Один проход по реестру на папку, не на файл. */
+    private fun scanFilesUnder(
+        root: File,
+        label: String,
+        avoidPaths: MutableSet<String>? = null,
+    ): ScanReport {
         if (!root.isDirectory) {
-            Diag.log(act, "shelf", "скан по диску: папки книг нет: ${root.path}")
+            Diag.log(act, "shelf", "скан по диску: $label нет на месте: ${root.path}")
             return ScanReport(0, 0)
         }
         val files = ArrayList<File>()
@@ -2304,14 +2609,20 @@ class LibraryActivity(private val act: SectionActivity) {
                 if (f.isFile && supportedFileName(f.name)) files.add(f)
             }
         }.onFailure { e ->
-            Diag.log(act, "shelf", "скан по диску: папка не читается: ${e.message}")
+            Diag.log(act, "shelf", "скан по диску: $label не читается: ${e.message}")
         }
-        Diag.log(act, "shelf", "скан по диску: книжных файлов ${files.size}")
+        Diag.log(act, "shelf", "скан по диску ($label): книжных файлов ${files.size}")
         val hiddenPaths = prefs.getStringSet(BookDelete.KEY_HIDDEN_PATHS, null) ?: emptySet()
         var added = 0
         var skippedHidden = 0
+        var skippedTwin = 0
         for (f in files) {
             val path = runCatching { f.canonicalPath }.getOrNull() ?: f.path
+            if (avoidPaths != null && path in avoidPaths) {
+                skippedTwin++
+                continue
+            }
+            avoidPaths?.add(path)
             if (path in hiddenPaths) {
                 skippedHidden++
                 continue
@@ -2339,8 +2650,56 @@ class LibraryActivity(private val act: SectionActivity) {
             ))
             added++
         }
-        Diag.log(act, "shelf", "скан по диску: добавил $added, пропустил по метке $skippedHidden")
+        Diag.log(
+            act, "shelf",
+            "скан по диску ($label): добавил $added, по метке пропустил $skippedHidden, " +
+                "уже был на полке под своим адресом $skippedTwin",
+        )
         return ScanReport(added, skippedHidden)
+    }
+
+    /** ДОПОЛНИТЕЛЬНЫЕ ПАПКИ ДЛЯ СКАНИРОВАНИЯ (20.11.2026, просьба Сержа):
+     *  книги, лежащие в двух-трёх постоянных местах, должны появляться на полке
+     *  сами, а не «добавить всё» из менеджера каждый раз.
+     *
+     *  Папки хранятся ПУТЯМИ НА ДИСКЕ ([ScanFolders]) и читаются напрямую —
+     *  значит нужен «Доступ ко всем файлам»; без него говорим это в журнале и
+     *  не сканируем молча. Те же правила, что у скана главной папки: только
+     *  книжные расширения ([supportedFileName] — одна функция на всех), метка
+     *  «не возвращать при скане» уважается, глубина та же ([MAX_SCAN_DEPTH]). */
+    private fun scanExtraFolders(): ScanReport {
+        val folders = ScanFolders.list(act)
+        if (folders.isEmpty()) return ScanReport(0, 0)
+        if (!AllFiles.granted(act)) {
+            Diag.log(
+                act, "shelf",
+                "папок для сканирования добавлено ${folders.size}, но доступа ко всем " +
+                    "файлам нет — дополнительные папки не сканирую",
+            )
+            return ScanReport(0, 0)
+        }
+        // Пути всех записей полки ОДНИМ проходом: доп. папка может лежать
+        // внутри папки книг, и тот же файл уже стоит под SAF-адресом.
+        val tp = BookDelete.treeResolver(act)
+        val knownPaths = HashSet<String>()
+        for (r in BookStore.all(act)) {
+            val p = if (r.uri.startsWith("file://")) {
+                runCatching { File(Uri.parse(r.uri).path ?: "").canonicalPath }.getOrNull()
+            } else {
+                tp?.let { BookDelete.diskPathOf(r.uri, it) }
+            }
+            if (p != null) knownPaths.add(p)
+        }
+        var added = 0
+        var hidden = 0
+        for (path in folders) {
+            // knownPaths пополняется прямо в обходе (scanFilesUnder): соседняя
+            // доп. папка не должна завести тот же файл вторым адресом.
+            val r = scanFilesUnder(File(path), "«${ScanFolders.name(path)}»", knownPaths)
+            added += r.added
+            hidden += r.skippedHidden
+        }
+        return ScanReport(added, hidden)
     }
 
     /** Починить записи, у которых имя файла потеряно (29.10.2026).
@@ -2447,13 +2806,9 @@ class LibraryActivity(private val act: SectionActivity) {
      *  и с типами, объявленными в манифесте (msg5013): если файл пришёл из
      *  чужого проводника, а расширения тут нет — человек получит отказ на
      *  ровном месте. */
-    private fun supportedFileName(name: String): Boolean {
-        val lower = name.lowercase(Locale.ROOT)
-        return lower.endsWith(".fb2") || lower.endsWith(".txt") ||
-            lower.endsWith(".zip") || lower.endsWith(".xml") || lower.endsWith(".epub") ||
-            lower.endsWith(".pdf") || lower.endsWith(".docx") || lower.endsWith(".odt") ||
-            lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml")
-    }
+    // supportedFileName — одна функция на весь файл (над классом, у browser-двери):
+    // скан, менеджер и проверка выбранного файла судят об одном и том же списке
+    // расширений (19.11.2026).
 
     // ---------------- Открытие книги ----------------
 
@@ -2481,7 +2836,18 @@ class LibraryActivity(private val act: SectionActivity) {
         // Книга уже в библиотеке (в папке книг или в памяти приложения) — читаем
         // её на месте: копировать нечего.
         if (LibraryImport.inside(act, uri, tree)) {
-            addAndOpen(uri, name)
+            // 07.11.2026 (журнал тестера): «на месте» — не значит «по чужой
+            // ссылке». Проводник присылает обычный content://…/document/…, а он
+            // живёт до перезапуска; в записи оставался именно он, и потом полка
+            // говорила «файла нет». Переписываем на адрес через наше дерево —
+            // файл тот же, грант наш и постоянный. Не вышло — забираем копию:
+            // копия лучше мёртвой записи.
+            val durable = tree?.let { LibraryImport.throughTree(uri, it) } ?: uri
+            if (durable == uri && uri.scheme == "content" && tree != null) {
+                startImport(uri, name)
+                return
+            }
+            addAndOpen(durable, name)
             return
         }
         // Книга снаружи (чужой проводник, Telegram, письмо). 30.09.2026, просьба
@@ -2552,6 +2918,24 @@ class LibraryActivity(private val act: SectionActivity) {
         if (existing != null) {
             toast(getString(R.string.already_in_library))
             openReader(existing)
+            return
+        }
+        // 07.11.2026 (журнал тестера): книга уже была на полке, но под МЁРТВЫМ
+        // адресом — ссылкой чужого проводника, которая умерла вместе с грантом.
+        // Человек принёс ту же книгу заново: адрес переписываем, а запись
+        // оставляем. Место чтения, статус, закладки и цитаты принадлежат книге, а
+        // не ссылке. Скан папки лечит такие записи так же (deadTwins), но ему
+        // нужен файл в папке, а здесь книгу принесла рука.
+        val clean = LibraryImport.cleanName(name)
+        val dead = BookStore.all(act).firstOrNull {
+            it.name.equals(clean, ignoreCase = true) && !BookStore.openable(act, it.uri)
+        }
+        if (dead != null) {
+            runCatching { BookCache.remove(act, Uri.parse(dead.uri)) }
+            BookStore.changeUri(act, dead.uri, dead.copy(uri = u))
+            Diag.log(act, "shelf", "адрес книги переписан (прежний был мёртв): ${dead.name}")
+            Vibra.confirm(act)
+            openReader(dead.copy(uri = u))
             return
         }
         val rec = BookRecord(uri = u, name = name, addedAt = System.currentTimeMillis())
@@ -2734,25 +3118,34 @@ class LibraryActivity(private val act: SectionActivity) {
      *  полки до нажатия, а в меню оно сбивало: пункт «Информация о книге» уезжал
      *  в середину списка, и до него надо было листать. Название книги никуда не
      *  пропало — оно первой строкой в самом окне информации. */
-    private fun showBookMenu(rec: BookRecord) {
+    private fun showBookMenu(rec: BookRecord, extra: Pair<String, () -> Unit>? = null) {
         val finished = rec.status == BookRecord.STATUS_FINISHED
-        val opts = arrayOf(
-            getString(R.string.library_menu_info),
-            getString(R.string.library_menu_share),
-            getString(if (rec.favorite) R.string.library_menu_unfav else R.string.library_menu_fav),
-            getString(R.string.library_menu_rename),
-            getString(if (finished) R.string.library_menu_unfinish else R.string.library_menu_finish),
-            getString(R.string.library_menu_delete),
+        // 23.11.2026 (просьба Сержа: «в меню файла по долгому в менеджере чтобы
+        // было тоже удаление файла»): менеджер дописывает LAST-пункт своим
+        // action'ом — на полке ничего лишнего не появляется.
+        val opts = ArrayList(
+            listOf(
+                getString(R.string.library_menu_info),
+                getString(R.string.library_menu_share),
+                getString(if (rec.favorite) R.string.library_menu_unfav else R.string.library_menu_fav),
+                getString(R.string.library_menu_rename),
+                getString(if (finished) R.string.library_menu_unfinish else R.string.library_menu_finish),
+                getString(R.string.library_menu_unshelve),
+                getString(R.string.library_menu_delete),
+            ),
         )
+        if (extra != null) opts.add(extra.first)
         MaterialAlertDialogBuilder(act)
-            .setItems(opts) { _, which ->
+            .setItems(opts.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> showBookInfo(rec)
                     1 -> shareBook(rec)
                     2 -> toggleFavorite(rec)
                     3 -> renameBook(rec)
                     4 -> toggleFinished(rec, finished)
-                    5 -> confirmDelete(rec)
+                    5 -> confirmUnshelve(rec)
+                    6 -> confirmDelete(rec)
+                    else -> extra?.second?.invoke()
                 }
             }
             // msg1977: «Закрыть» убрана — жест «назад»/тап мимо и так закрывает
@@ -3011,6 +3404,36 @@ class LibraryActivity(private val act: SectionActivity) {
             .show()
     }
 
+    /** «Убрать с полки, файл оставить» (23.11.2026, просьба Сержа). Ядро — общее
+     *  с удалением, только withFiles=false: запись снимается, файл лежит где лежал,
+     *  и файл осознанно прячется от авто-скана (иначе скан вернул бы книгу на
+     *  полку через минуту и просьба «убрать» означала бы ничего). Вернуть —
+     *  касание файла в менеджере «Файлы» (openFile снимает метку) или долгое
+     *  «Добавить в библиотеку». */
+    private fun confirmUnshelve(rec: BookRecord) {
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.unshelve_title)
+            .setMessage(getString(R.string.unshelve_msg, rec.displayTitle))
+            .setPositiveButton(R.string.unshelf_yes) { _, _ ->
+                val o = removeBook(rec, withFiles = false)
+                Diag.log(
+                    act, "lib",
+                    "убрать с полки ${rec.name}: " +
+                        if (o.removed) "запись снята, файл остался" else "не вышло — книга осталась на полке",
+                )
+                if (o.removed) {
+                    Vibra.confirm(act)
+                    toast(getString(R.string.unshelved))
+                } else {
+                    Vibra.error(act)
+                    toast(getString(R.string.book_delete_file_stays))
+                }
+                refresh()
+            }
+            .setNegativeButton(getString(R.string.dialog_cancel), null)
+            .show()
+    }
+
     /** Удаление из библиотеки (msg1351 — по решению владельца стираем и файл).
      *  Сначала пробуем стереть физический файл: file:// — напрямую (AllFiles);
      *  content:// из сканируемой папки — по реальному пути, если папка
@@ -3026,21 +3449,114 @@ class LibraryActivity(private val act: SectionActivity) {
             act, "lib",
             "удаление книги ${rec.name}: " + when {
                 !o.removed -> "файл стереть не удалось — книга осталась на полке"
+                // 19.11.2026: файла уже не было (его убрали проводником или
+                // переименовали) — запись снята, и это НЕ ошибка.
+                o.fileWasMissing -> "файла на месте уже не было — запись снята с полки"
                 o.fileGone -> "книга и файл удалены"
                 else -> "книга убрана с полки, файл остался"
             }
         )
         if (o.removed) {
             Vibra.confirm(act)
-            toast(getString(R.string.book_deleted))
+            // Жалоба Сержа 19.11.2026: файла уже нет, а приложение отвечало
+            // «файл стереть не удалось» и книгу не убирало. Теперь убирает и
+            // говорит честно, что файла уже не было.
+            toast(
+                getString(
+                    if (o.fileWasMissing) R.string.book_deleted_file_missing
+                    else R.string.book_deleted
+                )
+            )
         } else {
             // Не получилось — и толчок об этом: он у нас значит «готово»/«не вышло».
             Vibra.error(act)
             val msg = getString(R.string.book_delete_file_stays)
             toast(msg)
             binding.tvTitle.announceForAccessibility(msg)
+            // 07.11.2026 (жалоба тестера «удаление не происходит»): если у папки
+            // книг есть только право чтения, человек будет жать «Удалить» сколько
+            // угодно раз без толку. Сказать причину и дать выход — выбрать папку
+            // заново: при выборе система даёт и запись.
+            if (!folderWritable()) {
+                askRepickFolder(
+                    R.string.book_delete_no_write_title,
+                    R.string.book_delete_no_write_msg,
+                )
+            }
         }
         refresh()
+    }
+
+    /** Есть ли у нас ПРАВО ЗАПИСИ на выбранную папку книг. Папки, выбранные
+     *  прежними сборками, сохранялись «только для чтения» — с них и начинается
+     *  «файл не стирается, книга возвращается на полку». */
+    private fun folderWritable(): Boolean {
+        val treeStr = treeUri() ?: return true
+        val tree = runCatching { Uri.parse(treeStr) }.getOrNull() ?: return true
+        return contentResolver.persistedUriPermissions.any {
+            it.uri == tree && it.isWritePermission
+        }
+    }
+
+    /** Открывается ли выбранная папка книг ПРЯМО СЕЙЧАС — ЛЮБЫМ из двух путей.
+     *  07.11.2026, просьба Сержа: «чтобы приложение спрашивало, а не молчало, что
+     *  не может». Разрешение на папку система вправе отозвать, папку могли
+     *  переименовать или убрать — и тогда полка просто перестаёт видеть новые
+     *  книги, без единого слова. Спрашиваем не «выдан ли грант», а «открывается ли
+     *  папка»: ошибка проверки не должна пугать живое приложение.
+     *
+     *  12.11.2026 (жалоба Сержа после обновления: «пишет, что библиотека не
+     *  найдена, дайте разрешение к папке»). ПРАВИЛО: путей к папке ДВА, и проверять
+     *  надо оба, прежде чем жаловаться:
+     *    1) системный выбор папки (SAF, «постоянное разрешение на папку»);
+     *    2) напрямую по пути на диске — работает, когда выдано «Доступ ко всем
+     *       файлам» (`AllFiles.granted`).
+     *  Прежде смотрели ТОЛЬКО в (1). Прошивка при обновлении приложения снимает
+     *  «все файлы», постоянного разрешения на папку у человека может не быть вовсе
+     *  — и приложение объявляло «нет доступа», даже не постучавшись вторым путём.
+     *  В журнале после такого сообщения не было ни одной строки о сканировании.
+     */
+    private fun folderReachable(tree: Uri): Boolean {
+        val viaSaf = runCatching {
+            val kids = DocumentsContract.buildChildDocumentsUriUsingTree(
+                tree, DocumentsContract.getTreeDocumentId(tree),
+            )
+            contentResolver.query(
+                kids, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID), null, null, null,
+            )?.use { true } ?: false
+        }.getOrDefault(false)
+        if (viaSaf) {
+            Diag.log(act, "shelf", "папка книг открывается: через системный выбор папки")
+            return true
+        }
+        val viaDisk = runCatching {
+            if (!AllFiles.granted(act)) return@runCatching false
+            val dir = AllFiles.resolveDir(tree) ?: return@runCatching false
+            // canRead() у чужих папок врёт, поэтому пробуем прочитать содержимое:
+            // пустая папка — тоже «открывается».
+            dir.isDirectory && (dir.list() != null)
+        }.getOrDefault(false)
+        Diag.log(
+            act, "shelf",
+            "папка книг: системный выбор папки не отвечает, напрямую по пути " +
+                (if (viaDisk) "открывается" else "тоже нет") +
+                " (доступ ко всем файлам: " +
+                (if (AllFiles.granted(act)) "есть" else "нет") + ")",
+        )
+        return viaDisk
+    }
+
+    /** Объяснить словами, почему действие не вышло, и предложить починить это
+     *  одним касанием: повторно выбрать ту же самую папку. */
+    private fun askRepickFolder(titleRes: Int, messageRes: Int) {
+        MaterialAlertDialogBuilder(act)
+            .setTitle(titleRes)
+            .setMessage(messageRes)
+            .setPositiveButton(R.string.folder_repick_btn) { _, _ ->
+                act.openTreePicker { uri -> if (uri != null) onFolderPicked(uri) }
+            }
+            .setNegativeButton(getString(R.string.dialog_cancel), null)
+            .show()
     }
 
     /** Ядро удаления (msg1351, msg5947) переехало в [BookDelete] 07.10.2026: тот
@@ -3173,6 +3689,11 @@ class LibraryActivity(private val act: SectionActivity) {
          *  копия могла быть создана только что, а запись о книге ещё в пути. */
         private const val ORPHAN_AGE_MS = 60L * 60L * 1000L
 
+        /** Когда в последний раз вслух сказали, что автобэкап не записывается
+         *  (07.11.2026): чаще раза в сутки это был бы нудёж, а молчать нельзя. */
+        private const val KEY_BACKUP_FAIL_TOLD = "backup_fail_told_at"
+        private const val BACKUP_FAIL_TOLD_MS = 24L * 60L * 60L * 1000L
+
         // internal — экран настроек читает/пишет сортировку и папку в те же prefs.
         internal const val KEY_SORT = "sort"
         internal const val KEY_TREE = "tree_uri"
@@ -3244,6 +3765,12 @@ class LibraryActivity(private val act: SectionActivity) {
         // пересекается со STATUS_*). Скрывается/переставляется как остальные,
         // кроме неснимаемой «Все».
         internal const val FILTER_FAV = 4
+        // 19.11.2026 (просьба Сержа): вкладка «Файлы» — не фильтр реестра, а
+        // менеджер папок ([FileBrowser]): «родительская папка», подпапки,
+        // файлы текущей папки, и ходит за пределы папки книг, если есть
+        // «Доступ ко всем файлам». id выбран свободным: не пересекается ни со
+        // STATUS_*, ни с FILTER_FAV/FILTER_ALL.
+        internal const val FILTER_FILES = 5
 
         internal const val KEY_TABS_ORDER = "lib_tabs_order"
         internal const val KEY_TABS_HIDDEN = "lib_tabs_hidden"
@@ -3252,7 +3779,7 @@ class LibraryActivity(private val act: SectionActivity) {
          *  «Избранное» (FILTER_FAV) — перед «Все», по умолчанию видна. */
         internal val TAB_MODES = intArrayOf(
             BookRecord.STATUS_READING, BookRecord.STATUS_NEW,
-            BookRecord.STATUS_FINISHED, FILTER_FAV, FILTER_ALL,
+            BookRecord.STATUS_FINISHED, FILTER_FAV, FILTER_ALL, FILTER_FILES,
         )
 
         /** Подпись вкладки-фильтра по id режима (не по позиции в списке). */
@@ -3261,6 +3788,7 @@ class LibraryActivity(private val act: SectionActivity) {
             BookRecord.STATUS_NEW -> R.string.lib_filter_new
             BookRecord.STATUS_FINISHED -> R.string.lib_filter_finished
             FILTER_FAV -> R.string.lib_filter_fav
+            FILTER_FILES -> R.string.lib_filter_files
             else -> R.string.lib_filter_all
         }
 

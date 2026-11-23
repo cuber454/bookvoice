@@ -135,6 +135,17 @@ class CatalogActivity(private val act: SectionActivity) {
      *  библиотеку (#20): служба сообщает, что книга просит логин. */
     private var lastDlBook: OpdsItem.Book? = null
     private var lastDlFmt: OpdsFormat? = null
+    // Последняя попытка пачки («вся серия/автор»): если каталог попросит вход,
+    // после входа повторяем её же, как окно повторяет одиночную книгу.
+    private var lastBatchFeed: String? = null
+    private var lastBatchName: String? = null
+    private var lastBatchKind: String = "author"
+    /** Какой вид у ленты по её адресу («author»/«series»): ставим при входе по
+     *  ссылке «Все книги автора/серии» со страницы книги и наследуем подлентам.
+     *  От вида зависит форма папки пачки («Автор» / «Автор\Серия») — сама лента
+     *  об этом молчит (23.11.2026, просьба Сержа: долгое на книге в списке
+     *  автора/серии даёт меню со скачкой всей пачки). */
+    private val batchKinds = HashMap<String, String>()
 
     /** Служебная нижняя строка ленты («Догружаю…» / кнопка повтора) — её убираем. */
     private var pendingRow: View? = null
@@ -175,25 +186,6 @@ class CatalogActivity(private val act: SectionActivity) {
 
     private val prefs by lazy { act.getSharedPreferences("reader", Context.MODE_PRIVATE) }
 
-    /** Смена папки скачиваний (кнопка в «Настройках скачивания»). Пикер дерева
-     *  регистрирует хост (у страницы нет Activity) — зовём act.openTreePicker. */
-    private fun openDlDirPicker() {
-        act.openTreePicker { uri -> if (uri != null) onDlDirPicked(uri) }
-    }
-
-    private fun onDlDirPicked(uri: Uri) {
-        try {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-        } catch (_: Exception) {
-        }
-        prefs.edit().putString(OpdsPrefs.KEY_DL_DIR, uri.toString()).apply()
-        toast(getString(R.string.dl_folder_saved))
-        probeDlDir(uri)
-    }
-
     /** Результат системного распознавания речи (см. startVoiceSearch, msg1421):
      *  распознанная непустая фраза уходит в поиск по каталогу (тот же путь, что
      *  у текстового окна). */
@@ -213,43 +205,6 @@ class CatalogActivity(private val act: SectionActivity) {
         runSearch(s, q)
     }
 
-    /** Проверка папки скачиваний сразу после выбора (0.3.47, msg1165/1167) —
-     *  копия SettingsActivity.probeDlDir: MixPlorer и другие сторонние проводники
-     *  отдают tree-uri, но не умеют createDocument. Нерабочую папку сбрасываем
-     *  (скачивания идут во внутреннюю память) и предупреждаем. */
-    private fun probeDlDir(tree: Uri) {
-        Thread {
-            val ok = runCatching {
-                val probe = DocumentsContract.createDocument(
-                    contentResolver, tree, "application/json", "BookVoice_probe"
-                ) ?: return@runCatching false
-                DocumentsContract.deleteDocument(contentResolver, probe)
-                true
-            }.getOrDefault(false)
-            runOnUiThread {
-                if (act.isFinishing || act.isDestroyed) return@runOnUiThread
-                if (ok) return@runOnUiThread
-                // SAF-запись не вышла (MixPlorer и т.п. не умеют createDocument).
-                // Если папке можно сопоставить реальный путь — она заработает
-                // через «Доступ ко всем файлам», сбрасывать её рано.
-                val dir = AllFiles.resolveDir(tree)
-                if (dir == null) {
-                    prefs.edit().remove(OpdsPrefs.KEY_DL_DIR).apply()
-                    toast(getString(R.string.dl_folder_unwritable))
-                    return@runOnUiThread
-                }
-                if (AllFiles.granted(act)) {
-                    if (!AllFiles.probeViaRealPath(act, tree)) {
-                        prefs.edit().remove(OpdsPrefs.KEY_DL_DIR).apply()
-                        toast(getString(R.string.dl_folder_unwritable))
-                    }
-                    // доступ есть и реальный путь пишет — папка рабочая, молчим
-                } else {
-                    AllFiles.ask(act, getString(R.string.all_files_explain))
-                }
-            }
-        }.start()
-    }
     private var dlDialog: AlertDialog? = null
 
     private val acceptFeed = "application/atom+xml, application/xml;q=0.9, */*;q=0.8"
@@ -521,6 +476,19 @@ class CatalogActivity(private val act: SectionActivity) {
         actions.add(getString(R.string.go_library) to {  // домой: до полки.
             leaveToLibrary()  // msg2445: место каталога запоминаем перед уходом.
         })
+        // 22.11.2026: не каждый каталог дарит ссылку «Все книги серии» (флибуста
+        // молчит про часть книг). Если человек УЖЕ внутри списка с книгами —
+        // пачку берётся сам этот список: адрес ленты есть, имя — заголовок
+        // страницы. Работает в любом каталоге, не только флибусте.
+        val feedNow = nav.lastOrNull() as? Nv.Feed
+        val sessNow = feedNow?.let { sessions[it.url] }
+        if (sessNow != null && sessNow.loadedOnce &&
+            sessNow.items.any { it is OpdsItem.Book }
+        ) {
+            actions.add(getString(R.string.catalog_batch_row_action) to {
+                batchToggle(sessNow.url, sessNow.title, "series")
+            })
+        }
         actions.add(getString(R.string.catalog_dl_settings_title) to { openDlSettings() })
         // msg4657: «Настройки программы» — как в «⋮» полки и читалки, чтобы из
         // сетевых библиотек не приходилось идти на полку ради настроек. Окном
@@ -736,9 +704,24 @@ class CatalogActivity(private val act: SectionActivity) {
 
     /** Повторить последнюю попытку скачивания (после входа в библиотеку). */
     private fun retryLastDownload() {
-        val b = lastDlBook ?: return
-        val fmt = lastDlFmt ?: return
-        downloadFormat(b, fmt)
+        val b = lastDlBook
+        val fmt = lastDlFmt
+        if (b != null && fmt != null) {
+            downloadFormat(b, fmt)
+            return
+        }
+        // Это была пачка («вся серия/автор») — повторяем её же. Очередь (23.11.2026)
+        // сама отсеет повтор: та же лента дважды не встанет, а если она ещё и
+        // качается — старт ничего не делает. Ждать конца текущей НЕ нужно.
+        val feed = lastBatchFeed
+        val name = lastBatchName
+        if (feed != null) {
+            lastBatchFeed = null
+            lastBatchName = null
+            DownloadService.startBatch(
+                act, feed, DownloadStore.safeName(name ?: "список"), lastBatchKind,
+            )
+        }
     }
 
     // ---------------- Отрисовка верхнего уровня ----------------
@@ -1368,6 +1351,19 @@ class CatalogActivity(private val act: SectionActivity) {
         val tv = addRowText(label) {
             stashScroll()
             currentFeedSession()?.focusUrl = f.url
+            // Подлента наследует вид родительской (авторская «по алфавиту» —
+            // всё тот же автор), НО только если её собственный заголовок не
+            // кричит о другом виде (из авторской ленты в «Произведения серии»
+            // — это уже серия, не автор) и это не разветвитель «по сериям»
+            // (там каждая строка — своя серия; навязать ей «автора» — значит
+            // врать в пункте меню) (23.11.2026).
+            val s = currentFeedSession()
+            val pk = s?.let { batchKinds[it.url] ?: guessBatchKind(it.title) }
+            if (pk != null && !batchKinds.containsKey(f.url) &&
+                guessBatchKind(f.title) == null && !f.title.lowercase().contains("сери")
+            ) {
+                batchKinds[f.url] = pk
+            }
             nav.add(Nv.Feed(f.url, f.title))
             renderTop()
         }
@@ -1377,7 +1373,11 @@ class CatalogActivity(private val act: SectionActivity) {
 
     /** Строка книги в списке — это НЕ кнопка (скринридер не говорит «кнопка»):
      *  двойной тап открывает страницу книги, долгое нажатие скачивает формат по
-     *  умолчанию и подтверждается короткой вибрацией. */
+     *  умолчанию и подтверждается короткой вибрацией. 23.11.2026 (просьба
+     *  Сержа): если мы стоим в списке автора или серии, долгое открывает МЕНЮ
+     *  — «Скачать эту книгу» + «Скачать все книги автора»/«Скачать всю серию»
+     *  (пачка в «Автор» или «Автор\Серия»); контекста нет — прежнее мгновенное
+     *  скачивание одной книги, меню из одного пункта только мешал бы. */
     private fun addBookRow(b: OpdsItem.Book) {
         val authorsLine = b.authors.filter { it.isNotBlank() }.joinToString(", ")
         val label = if (authorsLine.isEmpty()) b.title else b.title + "\n" + authorsLine
@@ -1389,15 +1389,31 @@ class CatalogActivity(private val act: SectionActivity) {
         tv.tag = b.url
         tv.setOnLongClickListener {
             vibrate(70)
-            downloadDefault(b)
+            val batch = bookBatchActions(b)
+            if (batch.isEmpty()) {
+                downloadDefault(b)
+            } else {
+                val acts = ArrayList<Pair<String, () -> Unit>>()
+                acts.add(getString(R.string.catalog_dl_action) to { vibrate(70); downloadDefault(b) })
+                acts.addAll(batch)
+                MaterialAlertDialogBuilder(act)
+                    .setItems(acts.map { it.first }.toTypedArray()) { _, which -> acts[which].second() }
+                    .show()
+            }
             true
         }
         // msg7003: долгий тап скачивает книгу — тот же поступок доступен из меню
-        // TalkBack, пункт «Действия», без удержания пальца.
-        tv.setA11yActions(getString(R.string.catalog_dl_action) to {
-            vibrate(70)
-            downloadDefault(b)
-        })
+        // TalkBack, пункт «Действия», без удержания пальца. Те же пункты, что в
+        // меню долгого (23.11.2026): книга + пачка автора/серии, если мы в ней.
+        run {
+            val acts = ArrayList<Pair<String, () -> Unit>>()
+            acts.add(getString(R.string.catalog_dl_action) to {
+                vibrate(70)
+                downloadDefault(b)
+            })
+            acts.addAll(bookBatchActions(b))
+            tv.setA11yActions(*acts.toTypedArray())
+        }
     }
 
     /** Строка-элемент без роли «кнопки»: клик — основное действие. Возвращает
@@ -1851,28 +1867,178 @@ class CatalogActivity(private val act: SectionActivity) {
      *  кнопки — кнопочные плашки на карточке он попросил убрать, действия
      *  остались прежние. */
     private fun addBottomLinks(b: OpdsItem.Book) {
-        val links = ArrayList<Pair<String, () -> Unit>>()
+        // (подпись, касание = переход, долгое = меню пачки; у «сайта» длинного
+        // нет). Пакет по долгому — 20.11.2026, просьба Сержа; с 23.11.2026 долгое
+        // открывает МЕНЮШКУ («была менюшка и в ней скачать всю серию или всего
+        // автора») — оба действия рядом, а не то одно, на котором держал.
+        val links = ArrayList<Triple<String, () -> Unit, (() -> Unit)?>>()
         b.authorFeed?.let { r ->
             val label = r.label.ifBlank { getString(R.string.catalog_author_link) }
-            links.add(label to {
+            // Вид ленты записан ЯВНО: с 23.11.2026 долгое на строке книги ВНУТРИ
+            // этой ленты предлагает «Скачать все книги автора» без угадывания.
+            batchKinds[r.url] = "author"
+            links.add(Triple(label, {
                 nav.add(Nv.Feed(r.url, label))
                 renderTop()
-            })
+            }, { batchRowMenu(b) }))
         }
         b.seriesFeed?.let { r ->
             val label = r.label.ifBlank { getString(R.string.catalog_series_link) }
-            links.add(label to {
+            batchKinds[r.url] = "series"
+            links.add(Triple(label, {
                 nav.add(Nv.Feed(r.url, label))
                 renderTop()
-            })
+            }, { batchRowMenu(b) }))
         }
         b.siteUrl?.takeIf { it.isNotBlank() }?.let { url ->
-            links.add(getString(R.string.catalog_site_link) to { openBrowser(url) })
+            links.add(Triple(getString(R.string.catalog_site_link), { openBrowser(url) }, null))
         }
         if (links.isEmpty()) return
         header(getString(R.string.catalog_links_title))
-        for ((label, onClick) in links) {
-            addActionText(label, onClick)
+        for ((label, onClick, onLong) in links) {
+            val tv = addActionText(label, onClick)
+            if (onLong != null) {
+                tv.setOnLongClickListener { vibrate(50); onLong(); true }
+                // То же — в меню TalkBack «Действия»: слепому долгоe удержание
+                // доступнее давать кнопкой доступа, а не жестом (msg7003).
+                tv.setA11yActions(
+                    getString(R.string.catalog_batch_row_action) to { vibrate(50); onLong() },
+                )
+            }
+        }
+    }
+
+    /** Долгое на строке «Все книги автора/серии» (23.11.2026, просьба Сержа:
+     *  «при долгом нажатии на серию была менюшка и в ней — скачать всю серию
+     *  или всего автора»). Оба действия на одном экране: раньше долгое запускало
+     *  ровно то, на чём держал, и чтобы взять «другое», надо было сначала
+     *  отменять это. Пункт сам знает состояние: пачка этой ленты качается —
+     *  «отменить», ждёт в очереди — «убрать из очереди», иначе — «скачать». */
+    private fun batchRowMenu(b: OpdsItem.Book) {
+        val acts = ArrayList<Pair<String, () -> Unit>>()
+        b.seriesFeed?.let { r ->
+            addBatchAction(
+                acts,
+                r.url,
+                r.label.ifBlank { getString(R.string.catalog_series_link) },
+                "series",
+                getString(R.string.catalog_batch_all_series),
+            )
+        }
+        b.authorFeed?.let { r ->
+            addBatchAction(
+                acts,
+                r.url,
+                b.author ?: r.label.ifBlank { getString(R.string.catalog_author_link) },
+                "author",
+                getString(R.string.catalog_batch_all_author),
+            )
+        }
+        if (acts.isEmpty()) return
+        MaterialAlertDialogBuilder(act)
+            .setItems(acts.map { it.first }.toTypedArray()) { _, which -> acts[which].second() }
+            .show()  // msg1977: без «Закрыть» — меню гасит системный «назад»
+    }
+
+    /** Один пункт пачки, знающий своё состояние: эта же лента качается —
+     *  «отменить», ждёт в очереди — «убрать из очереди», иначе — «скачать…».
+     *  Общая дорога для меню страницы книги и долгого на книге в списке
+     *  (23.11.2026) — формулировки и поведение обязаны совпадать. */
+    private fun addBatchAction(
+        acts: ArrayList<Pair<String, () -> Unit>>,
+        url: String,
+        fallback: String,
+        kind: String,
+        startLabel: String,
+    ) {
+        when {
+            DownloadService.batchUrl == url -> acts.add(
+                getString(R.string.catalog_batch_cancel_row) to { batchToggle(url, fallback, kind) },
+            )
+            DownloadService.isQueued(url) -> acts.add(
+                getString(R.string.catalog_batch_drop_row) to { batchToggle(url, fallback, kind) },
+            )
+            else -> acts.add(startLabel to { batchToggle(url, fallback, kind) })
+        }
+    }
+
+    /** Вид ленты по её заголовку, когда вход не был по ссылке страницы книги:
+     *  Coollib подписывает «Книги автора X», флибуста — «Автор: X»,
+     *  серии — «Произведения серии „X“» / «Серия: X». Перепутать опасно
+     *  (папка «Автор» против «Автор\Серия»), поэтому только явные подписи;
+     *  не угадали — в меню просто не будет пункта пачки либо возьмёмся за
+     *  related-ссылку самой книги (она точнее любого заголовка). */
+    private fun guessBatchKind(title: String): String? {
+        val t = title.lowercase()
+        return when {
+            t.contains("книги автора") || t.contains("все книги автора") || t.startsWith("автор:") -> "author"
+            t.contains("книги серии") || t.contains("книги в серии") || t.contains("в серии") ||
+                t.contains("все книги серии") ||
+                t.contains("произведения серии") || t.startsWith("серия:") -> "series"
+            else -> null
+        }
+    }
+
+    /** Действия пачки для долгого на СТРОКЕ КНИГИ в списке (23.11.2026, просьба
+     *  Сержа: «стою на авторе, долгий тап — и в менюшке скачать все книги
+     *  автора; то же на серии — скачать всю серию, и папка „Автор\Серия“»).
+     *  Контекст берём от текущей ленты: вид записан при входе со страницы
+     *  книги, у подлент наследуется, иначе угадан по заголовку; если вида
+     *  нет — related-ссылки самой книги (автор/серия), если каталог их даёт.
+     *  Адрес тот же, что качает меню страницы книги: дедуп и очередь — общие. */
+    private fun bookBatchActions(b: OpdsItem.Book): List<Pair<String, () -> Unit>> {
+        val acts = ArrayList<Pair<String, () -> Unit>>()
+        val s = currentFeedSession()
+        val kind = s?.let { batchKinds[it.url] ?: guessBatchKind(it.title) }
+        if (s != null && kind != null) {
+            addBatchAction(
+                acts, s.url, s.title, kind,
+                getString(
+                    if (kind == "series") R.string.catalog_batch_all_series
+                    else R.string.catalog_batch_all_author,
+                ),
+            )
+        } else {
+            b.seriesFeed?.let { r ->
+                addBatchAction(
+                    acts, r.url, r.label.ifBlank { getString(R.string.catalog_series_link) },
+                    "series", getString(R.string.catalog_batch_all_series),
+                )
+            }
+            b.authorFeed?.let { r ->
+                addBatchAction(
+                    acts, r.url, b.author ?: r.label.ifBlank { getString(R.string.catalog_author_link) },
+                    "author", getString(R.string.catalog_batch_all_author),
+                )
+            }
+        }
+        return acts
+    }
+
+    /** Долгое на строке «Все книги автора/серии» и пункт «⋮» на списке: запустить
+     *  пачку, а если эта же пачка уже качается — отменить, если ждёт в очереди —
+     *  убрать из неё (Серж: «кнопка отмена либо в шторке, либо долгим удержанию
+     *  там же», и 23.11.2026: «несколько серий подряд — все в очередь»).
+     *  Переспроса нет: служба соберёт список, скажет число и начнёт; итог —
+     *  тостом и карточкой. */
+    private fun batchToggle(feedUrl: String, fallbackName: String, kind: String) {
+        if (DownloadService.batchUrl == feedUrl) {
+            DownloadService.cancelNow(act)
+            toast(getString(R.string.catalog_batch_cancelling))
+            return
+        }
+        if (DownloadService.dropQueued(feedUrl)) {
+            toast(getString(R.string.catalog_batch_unqueued))
+            return
+        }
+        lastBatchFeed = feedUrl
+        lastBatchName = fallbackName
+        lastBatchKind = kind
+        // Сколько пачек впереди: текущая (если служба занята) плюс ожидающие.
+        val ahead = (if (DownloadService.running) 1 else 0) + DownloadService.queuedBatches
+        DownloadService.startBatch(act, feedUrl, DownloadStore.safeName(fallbackName), kind)
+        if (ahead > 0) {
+            toast(act.resources.getQuantityString(R.plurals.catalog_batch_queued, ahead, ahead))
         }
     }
 
@@ -2232,48 +2398,16 @@ class CatalogActivity(private val act: SectionActivity) {
 
     // ---------------- Настройки скачивания (кнопка ⚙) ----------------
 
-    /** Диалог: формат по умолчанию и папка, куда качать. Открывается из шапки
-     *  каталога, чтобы не уходить ради этого в общие настройки. */
+    /** Осталась одна ручка — формат. Раньше тут был ещё выбор «папки
+     *  скачивания»; с 20.11.2026 скачивание идёт в папку книг (Серж: «давай
+     *  объединим наши папки… пускай всё в одну папку качается, в нашу для
+     *  книг»), отдельной папки скачивания в настройках больше нет. */
     private fun openDlSettings() {
         dlDialog?.dismiss()
-        val fmtBtn = Button(act).apply {
-            textSize = 16f
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            setOnClickListener {
-                dlDialog?.dismiss()
-                openDlFormatDialog()
-            }
-        }
-        val dirBtn = Button(act).apply {
-            textSize = 16f
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            setOnClickListener {
-                dlDialog?.dismiss()
-                openDlDirDialog()
-            }
-        }
-        fun refresh() {
-            fmtBtn.text = getString(R.string.dl_format_title) + ": " + opdsFormatLabel(dlFmtKey())
-            val tree = dlTree()
-            dirBtn.text = getString(R.string.dl_folder_title) + ": " +
-                if (tree == null) getString(R.string.dl_folder_none) else treeLabel(Uri.parse(tree))
-        }
-        refresh()
-        val body = LinearLayout(act).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), dp(4))
-            addView(fmtBtn, lp().apply { bottomMargin = dp(4) })
-            addView(dirBtn)
-        }
-        dlDialog = MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.catalog_dl_settings_title)
-            .setView(body)
-            .setNegativeButton(R.string.dialog_close, null)
-            .show()
+        openDlFormatDialog()
     }
 
+    /** «Куда качать» больше не спрашиваем — окно только про формат. */
     private fun openDlFormatDialog() {
         dlDialog = MaterialAlertDialogBuilder(act)
             .setTitle(R.string.dl_format_title)
@@ -2289,42 +2423,9 @@ class CatalogActivity(private val act: SectionActivity) {
                 // На странице книги большая кнопка показывает формат — обновляем её.
                 val cur = nav.lastOrNull()
                 if (cur is Nv.Book) renderBookPage(cur, announce = false)
-                openDlSettings()
             }
             .setNegativeButton(R.string.dialog_close, null)
             .show()
-    }
-
-    private fun openDlDirDialog() {
-        if (dlTree() == null) {
-            openDlDirPicker()
-            return
-        }
-        dlDialog = MaterialAlertDialogBuilder(act)
-            .setTitle(R.string.dl_folder_title)
-            .setItems(
-                arrayOf(
-                    getString(R.string.dl_folder_change),
-                    getString(R.string.dl_folder_to_app),
-                ),
-            ) { _, which ->
-                if (which == 0) {
-                    openDlDirPicker()
-                } else {
-                    prefs.edit().remove(OpdsPrefs.KEY_DL_DIR).apply()
-                    toast(getString(R.string.dl_folder_internal))
-                    openDlSettings()
-                }
-            }
-            .setNegativeButton(R.string.dialog_close, null)
-            .show()
-    }
-
-    /** Человеческое имя папки из tree-uri (например "primary:Books" -> "Books"). */
-    private fun treeLabel(tree: Uri): String {
-        val docId = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull() ?: return ""
-        val raw = if (docId.contains(':')) docId.substringAfter(':') else docId
-        return raw.substringAfterLast('/').ifBlank { raw }
     }
 
     // ---------------- Скачивание книги ----------------
@@ -2337,8 +2438,9 @@ class CatalogActivity(private val act: SectionActivity) {
             ?: OpdsPrefs.DEFAULT_DL_FMT
     }
 
-    /** Куда качать (из настроек): tree-uri папки или null = во внутреннюю папку. */
-    private fun dlTree(): String? = prefs.getString(OpdsPrefs.KEY_DL_DIR, null)
+    /** Куда качать: папка КНИГ (20.11.2026 — объединение, отдельной папки
+     *  скачивания нет). null = во внутреннюю папку приложения. */
+    private fun dlTree(): String? = prefs.getString(LibraryActivity.KEY_TREE, null)
 
     /** Скачанные из каталога записи: лежат во внутренней папке или в выбранной. */
     private fun downloadedRecords(): List<BookRecord> {

@@ -90,7 +90,7 @@ class SettingsActivity(private val act: SectionActivity) {
     private var jumpFwdRow: Button? = null   // msg5234: прыжок — число вперёд
     private var jumpBackRow: Button? = null  // msg5234: прыжок — число назад
     private var folderRow: Button? = null
-    private var dlFolderRow: Button? = null
+    private var scanFoldersRow: Button? = null
     private var dlFormatRow: Button? = null
     // Строки-резюме назначенных жестов (#77).
     private var gestureRightRow: Button? = null
@@ -225,6 +225,9 @@ class SettingsActivity(private val act: SectionActivity) {
     // ([BtnColor]). Обе — выбор из готовых вариантов, обе применяются сразу.
     private var selColorRow: Button? = null
     private var btnColorRow: Button? = null
+    // 12.11.2026: что писать в строке места ([PlaceLine]) — «Глава и
+    // предложение» / «Только глава». Живёт в подразделе «Что показывать в книге».
+    private var placeLineRow: Button? = null
     // Открытый раздел (null = экран списка групп).
     private var group: Group? = null
 
@@ -273,9 +276,67 @@ class SettingsActivity(private val act: SectionActivity) {
         act.openTreePicker { uri -> if (uri != null) onFolderPicked(uri) }
     }
 
-    // Папка скачиваний из каталога (#44) — нужен доступ на запись, отдельный пикер.
-    private fun openDlFolderPicker() {
-        act.openTreePicker { uri -> if (uri != null) onDlFolderPicked(uri) }
+    // ——— Дополнительные папки для сканирования (20.11.2026, просьба Сержа) ———
+
+    /** Список «сверху вниз» без посредников: первой строкой «Добавить папку…»,
+     *  дальше сами папки; касание папки — спросить и убрать. Отдельного экрана
+     *  ради трёх строк не заводим: этот диалог диктор читает целиком. */
+    private fun openScanFoldersDialog() {
+        val folders = ScanFolders.list(act)
+        val labels = ArrayList<String>()
+        labels.add(getString(R.string.scan_folders_add))
+        for (p in folders) labels.add(ScanFolders.name(p))
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.scan_folders_title)
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which == 0) addScanFolder() else confirmRemoveScanFolder(folders[which - 1])
+            }
+            .show()
+    }
+
+    /** Добавление — обычным системным выбором папки, но в списке держим ПУТЬ на
+     *  диске: дополнительные папки читаются файлами (как «скан по диску» главной),
+     *  поэтому без «Доступа ко всем файлам» они бессмысленны — сначала туда. */
+    private fun addScanFolder() {
+        if (!AllFiles.granted(act)) {
+            AllFiles.ask(act, getString(R.string.scan_folders_need_access))
+            return
+        }
+        act.openTreePicker { uri ->
+            if (uri == null) return@openTreePicker
+            val dir = runCatching { AllFiles.resolveDir(uri) }.getOrNull()
+            if (dir == null) {
+                toast(getString(R.string.scan_folders_not_disk))
+                return@openTreePicker
+            }
+            val path = runCatching { dir.canonicalPath }.getOrNull() ?: dir.path
+            val main = runCatching {
+                BookDelete.treeResolver(act)?.dir?.let { File(it.path).canonicalPath }
+            }.getOrNull()
+            if (path == main) {
+                toast(getString(R.string.scan_folders_is_main))
+                return@openTreePicker
+            }
+            if (!ScanFolders.add(act, path)) {
+                toast(getString(R.string.scan_folders_dup))
+            } else {
+                toast(getString(R.string.scan_folders_added, ScanFolders.name(path)))
+            }
+            refreshRows()
+        }
+    }
+
+    private fun confirmRemoveScanFolder(path: String) {
+        MaterialAlertDialogBuilder(act)
+            .setTitle(ScanFolders.name(path))
+            .setMessage(getString(R.string.scan_folders_remove_msg, ScanFolders.name(path)))
+            .setPositiveButton(R.string.scan_folders_remove_ok) { _, _ ->
+                ScanFolders.remove(act, path)
+                toast(getString(R.string.scan_folders_removed))
+                refreshRows()
+            }
+            .setNegativeButton(R.string.dialog_close, null)
+            .show()
     }
 
     // Резервная копия (#100): папка для автокопий и системный выбор файла копии.
@@ -1941,16 +2002,18 @@ class SettingsActivity(private val act: SectionActivity) {
             // кнопка, и казалось, что менять нечем.
             openFolderPicker()
         }
+        // ДОПОЛНИТЕЛЬНЫЕ ПАПКИ ДЛЯ СКАНИРОВАНИЯ (20.11.2026, просьба Сержа):
+        // книги лежат в двух-трёх постоянных местах — скан при каждом открытии
+        // полки проходит и по ним, человек больше не добавляет их руками.
+        scanFoldersRow = addValueButton { openScanFoldersDialog() }
         // 30.09.2026: подсказки «Файлы не копируются.» здесь больше нет (Серж:
         // «убери из библиотеки эту подсказку»). Что она значила: книги остаются
         // лежать в выбранной папке, приложение их не копирует к себе — полка
         // просто показывает файлы по их адресу. Человеку это знать не обязательно,
         // а остановка в списке была лишней.
-        // #44: куда скачивать книги из каталога.
-        dlFolderRow = addValueButton {
-            // Так же без окошка (см. folderRow выше).
-            openDlFolderPicker()
-        }
+        // #44 УБРАНА (20.11.2026, предложение Сержа): отдельная «папка
+        // скачивания» не нужна — каталог качает в папку книг, одна папка на
+        // всё, второй выбор только путал.
         // 30.09.2026: подсказки у этой строки больше нет — сказанное в ней и так
         // видно из названия и значения (Серж: «некоторые пункты вообще очевидные,
         // давай по минимуму уберём»).
@@ -2009,6 +2072,12 @@ class SettingsActivity(private val act: SectionActivity) {
         content().removeAllViews()
         addHint(getString(R.string.reader_group_hint))
         readerUi.forEach { (res, key) -> addCheck(res, key, true) }
+        // 12.11.2026, просьба Сержа: «может, настройку добавить, чтобы
+        // настраивался этот статус — какие-то варианты, чтобы были предложения».
+        // Стоит СРАЗУ под галочкой строки места: там решают, ВИДНА ли строка, а
+        // здесь — что в ней написано.
+        placeLineRow = addValueButton { pickPlaceLine() }
+        refreshRows()
         // Четыре кнопки читалки: своё имя у каждой — «нижняя левая кнопка: видна».
         for (b in MainActivity.READER_BUTTONS) {
             addCheckText(
@@ -2019,6 +2088,27 @@ class SettingsActivity(private val act: SectionActivity) {
         }
         scrollTop()
         binding.tvTitle.announceForAccessibility(getString(R.string.show_group_title))
+    }
+
+    /** Выбор, что писать в строке места (12.11.2026, просьба Сержа). Вариантов
+     *  два, и они названы тем, что человек УСЛЫШИТ на экране книги:
+     *  «Глава и предложение» / «Только глава». Открытая книга обновляет строку
+     *  сразу ([MainActivity.updatePosition]), иначе выбор выглядел бы непринятым
+     *  до возвращения в книгу. */
+    private fun pickPlaceLine() {
+        val cur = PlaceLine.value(act)
+        val labels = PlaceLine.VALUES.map { getString(PlaceLine.labelRes(it)) }.toTypedArray()
+        MaterialAlertDialogBuilder(act)
+            .setTitle(R.string.place_line_title)
+            .setSingleChoiceItems(labels, PlaceLine.VALUES.indexOf(cur)) { d, which ->
+                PlaceLine.set(act, PlaceLine.VALUES[which])
+                d.dismiss()
+                Diag.log(act, "ui", "строка места: ${PlaceLine.VALUES[which]}")
+                MainActivity.active?.updatePosition()
+                refreshRows()
+            }
+            .setNegativeButton(R.string.toc_close, null)
+            .show()
     }
 
     /** Сколько элементов экрана книги спрятано (0.4.86, msg7026). Число говорит
@@ -2457,6 +2547,12 @@ class SettingsActivity(private val act: SectionActivity) {
             getString(R.string.btn_color_title),
             getString(BtnColor.labelRes(BtnColor.value(act))),
         )
+        // 12.11.2026: что писать в строке места — подпись называет выбранный
+        // вариант словами, чтобы по строке было слышно, что выбор сработал.
+        placeLineRow?.text = valueLine(
+            getString(R.string.place_line_title),
+            getString(PlaceLine.labelRes(PlaceLine.value(act))),
+        )
         // Экспериментальные настройки (06.10.2026): две строки-значения. Текст
         // переписываем на месте — тогда после выбора в диалоге фокус диктора
         // остаётся на той же строке (жалоба Сержа: «фокус куда-то улетел»).
@@ -2512,11 +2608,12 @@ class SettingsActivity(private val act: SectionActivity) {
             getString(R.string.folder_title),
             if (tree == null) getString(R.string.folder_none) else folderLabel(Uri.parse(tree))
         )
-
-        val dlTree = dlTreeUri()
-        dlFolderRow?.text = valueLine(
-            getString(R.string.dl_folder_title),
-            if (dlTree == null) getString(R.string.dl_folder_none) else folderLabel(Uri.parse(dlTree))
+        val extraN = ScanFolders.list(act).size
+        scanFoldersRow?.text = valueLine(
+            getString(R.string.scan_folders_title),
+            if (extraN == 0) getString(R.string.scan_folders_none)
+            else act.resources.getQuantityString(R.plurals.scan_folders_count, extraN, extraN)
+                + if (!AllFiles.granted(act)) " " + getString(R.string.scan_folders_off) else ""
         )
 
         dlFormatRow?.text = valueLine(
@@ -3658,62 +3755,11 @@ class SettingsActivity(private val act: SectionActivity) {
         return raw.substringAfterLast('/').ifBlank { raw }
     }
 
-    // ---------------- Папка и формат скачивания из каталога ----------------
-
-    private fun dlTreeUri(): String? = prefs.getString(OpdsPrefs.KEY_DL_DIR, null)
-
-    private fun onDlFolderPicked(tree: Uri) {
-        try {
-            contentResolver.takePersistableUriPermission(
-                tree,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-        } catch (_: Exception) {
-        }
-        prefs.edit().putString(OpdsPrefs.KEY_DL_DIR, tree.toString()).apply()
-        toast(getString(R.string.dl_folder_saved))
-        refreshRows()
-        probeDlDir(tree)
-    }
-
-    /** Проверка папки скачиваний сразу после выбора. Сторонние проводники
-     *  (MixPlorer) отдают tree-uri, но не умеют createDocument — запись через
-     *  SAF падает. Папка при этом всё равно рабочая, если ей можно сопоставить
-     *  реальный путь и включён «Доступ ко всем файлам»: качаем туда обычными
-     *  File (msg1172/1192). Сбрасываем папку только если она не пишет ни SAF,
-     *  ни реальным путём — тогда скачивание уйдёт во внутреннюю память. */
-    private fun probeDlDir(tree: Uri) {
-        Thread {
-            val ok = runCatching {
-                val probe = DocumentsContract.createDocument(
-                    contentResolver, tree, "application/json", "BookVoice_probe"
-                ) ?: return@runCatching false
-                DocumentsContract.deleteDocument(contentResolver, probe)
-                true
-            }.getOrDefault(false)
-            runOnUiThread {
-                if (act.isFinishing || act.isDestroyed) return@runOnUiThread
-                if (ok) return@runOnUiThread
-                val dir = AllFiles.resolveDir(tree)
-                if (dir == null) {
-                    prefs.edit().remove(OpdsPrefs.KEY_DL_DIR).apply()
-                    refreshRows()
-                    toast(getString(R.string.dl_folder_unwritable))
-                    return@runOnUiThread
-                }
-                if (AllFiles.granted(act)) {
-                    if (!AllFiles.probeViaRealPath(act, tree)) {
-                        prefs.edit().remove(OpdsPrefs.KEY_DL_DIR).apply()
-                        refreshRows()
-                        toast(getString(R.string.dl_folder_unwritable))
-                    }
-                    // доступ есть и реальный путь пишет — папка рабочая, молчим
-                } else {
-                    AllFiles.ask(act, getString(R.string.all_files_explain))
-                }
-            }
-        }.start()
-    }
+    // ---------------- Формат скачивания из каталога ----------------
+    // Отдельной «папки скачивания» больше нет (20.11.2026, объединение папок
+    // по предложению Сержа): каталог качает в папку книг, её выбирает строка
+    // «Папка книг» выше. Старый ключ OpdsPrefs.KEY_DL_DIR игнорируется, метлу
+    // старого значения делает DownloadStore при первой записи.
 
     private fun dlFormatKey(): String {
         val key = prefs.getString(OpdsPrefs.KEY_DL_FMT, OpdsPrefs.DEFAULT_DL_FMT)
@@ -3752,15 +3798,20 @@ class SettingsActivity(private val act: SectionActivity) {
             .show()
         tmp.setEngine(prefs.getString(MainActivity.KEY_ENGINE, null)) { ok ->
             if (!ok) {
-                // 0.4.76: стирание выбранного движка — событие, а не мелочь:
-                // после него приложение везде читает системным. Пишем в журнал
-                // (раньше это было видно только по отсутствию строк).
+                // 0.4.82: движок поднялся с ответом «успех», но его уже погасили,
+                // — это тоже считаем отказом; выбор при этом НЕ трогаем.
+                //
+                // 17.11.2026, журнал тестера 18:14:39 (она просто открыла
+                // «Настройки чтения», а её `dev.msvoice.tts` в этот момент
+                // не поднялся): отсюда уходила строка `KEY_ENGINE` — и читалка
+                // навсегда оставалась говорить системным голосом. Отказ на одном
+                // запуске — не повод стирать выбор человека: закрываем окно,
+                // при следующем открытии книги движок пробуем снова.
                 Diag.log(
                     act, "tts",
                     "выбранный движок ${prefs.getString(MainActivity.KEY_ENGINE, null) ?: "системный"} " +
-                        "не запустился — забываю его, беру системный"
+                        "не запустился — читаю системным, выбор оставляю в силе"
                 )
-                prefs.edit().remove(MainActivity.KEY_ENGINE).apply()
                 runCatching { loading.dismiss() }
                 tmp.shutdown()
                 toast("Не удалось запустить голосовой движок")

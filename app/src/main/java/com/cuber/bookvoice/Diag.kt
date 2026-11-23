@@ -24,7 +24,7 @@ object Diag {
      *  телефона, по которому так и не удалось решить, есть ли в той сборке защита
      *  от «движок отвечает „готово“, не сказав ни слова»). Менять при КАЖДОЙ
      *  сборке, которую отправляем людям. */
-    const val BUILD = "294"
+    const val BUILD = "306"
 
     /** Порог, после которого журнал обрезаем, и сколько хвоста оставляем.
      *
@@ -116,7 +116,51 @@ object Diag {
                 "устройство ${android.os.Build.MODEL}, " +
                 "Android ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT}) ===",
         )
+        // 18.11.2026, разбор журнала тестера (Redmi Note 9 Pro): система гасила
+        // наш процесс с причиной «нехватка памяти», и в логе не было НИ ОДНОГО
+        // числа, по которому можно сказать «мало» или «хватает». Теперь пишем
+        // сразу: сколько памяти в телефоне, сколько свободно в этот момент,
+        // считает ли система её низкой, и сколько максимум может занять наш
+        // кучевой heap. Разбор «у неё слабый телефон или это мы» теперь идёт по
+        // этим цифрам, а не по догадкам.
+        val mem = runCatching {
+            val am = c.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                as? android.app.ActivityManager
+            val mi = android.app.ActivityManager.MemoryInfo()
+            if (am == null) null else {
+                am.getMemoryInfo(mi)
+                val rt = Runtime.getRuntime()
+                Triple(
+                    mi.totalMem / 1048576,
+                    mi.availMem / 1048576,
+                    "куча ${rt.totalMemory() / 1048576}/${rt.maxMemory() / 1048576} МБ" +
+                        (if (mi.lowMemory) ", система считает память низкой" else "")
+                )
+            }
+        }.getOrNull()
+        if (mem == null) {
+            log(c, "app", "память телефона прочитать не удалось")
+        } else {
+            log(
+                c, "app",
+                "память: всего ${mem.first} МБ, свободно ${mem.second} МБ, ${mem.third}"
+            )
+        }
     }
+
+    /** Короткая память-строка для журнала: сколько свободно и сколько держим мы.
+     *  Нужна там, где что-то срывается, чтобы по журналу отличить «телефону не
+     *  хватило» от «мы сами тормозим». (18.11.2026, разбор журнала тестера.) */
+    fun memoryLine(c: Context): String = runCatching {
+        val am = c.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            ?: return "память не прочитать"
+        val mi = android.app.ActivityManager.MemoryInfo()
+        am.getMemoryInfo(mi)
+        val rt = Runtime.getRuntime()
+        "свободно ${mi.availMem / 1048576} из ${mi.totalMem / 1048576} МБ" +
+            (if (mi.lowMemory) ", память низкая" else "") +
+            "; наша куча ${rt.totalMemory() / 1048576} из ${rt.maxMemory() / 1048576} МБ"
+    }.getOrDefault("память не прочитать")
 
     fun clear(c: Context) {
         file(c).delete()

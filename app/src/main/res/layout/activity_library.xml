@@ -86,6 +86,41 @@
         android:layout_height="1dp"
         android:background="?attr/bvTrack" />
 
+    <!-- Вкладка «Файлы» (19.11.2026, просьба Сержа): ряд её кнопок, видимый
+         только на этой вкладке (visibility ставит код). «К текущей книге» —
+         прыжок к последней открытой книге вплоть до входа в её папку (тот
+         самый «пятисотый файл» в длинном списке); «Искать» — переход по
+         началу слова продиктованным. -->
+    <LinearLayout
+        android:id="@+id/filesBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal"
+        android:paddingStart="3dp"
+        android:paddingEnd="3dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/btnFilesJump"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:text="@string/files_btn_current"
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/btnFilesSearch"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:text="@string/files_btn_search"
+            android:textSize="16sp" />
+    </LinearLayout>
+
     <!-- 29.10.2026, жалоба Сержа «кнопки съехали вверх»: на пустой вкладке список
          книг прятался (`GONE`), и нижний ряд с «Открыть книгу» и «Сетевые»
          подскакивал под сообщение.

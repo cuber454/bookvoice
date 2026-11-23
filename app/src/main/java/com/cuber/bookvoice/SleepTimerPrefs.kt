@@ -45,6 +45,16 @@ internal object SleepTimerPrefs {
      *  чтения мешает (msg4979) — сигнал и вибрация справляются сами. */
     const val KEY_VOICE = "sleep_voice"
 
+    /** Ставить таймер САМ при каждом начале чтения (12.11.2026, просьба Сержа:
+     *  «чтобы человек включил свои 15 минут или час и оно всегда так было»). */
+    const val KEY_ALWAYS = "sleep_always"
+
+    /** Последнее выбранное человеком время — из него и ставится сам. */
+    const val KEY_LAST_MIN = "sleep_last_min"
+
+    /** Последний выбор был «до конца главы». */
+    const val KEY_LAST_CHAPTER = "sleep_last_chapter"
+
     const val DEF_WAIT = true
     const val DEF_FLIP = true
     const val DEF_SIGNAL = true
@@ -89,4 +99,34 @@ internal object SleepTimerPrefs {
         val v = prefs(ctx).getInt(KEY_EXTEND, DEF_EXTEND)
         return if (v in EXTEND_CHOICES) v else DEF_EXTEND
     }
+
+    /** Ставить таймер сам при каждом начале чтения. По умолчанию ВЫКЛ: у кого
+     *  не просили — у того всё как раньше. */
+    fun always(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_ALWAYS, false)
+
+    /** Запомнить выбор «до конца главы» (12.11.2026): если человек выбрал этот
+     *  режим, автоматика повторяет именно его. */
+    fun setLastChapter(ctx: Context) {
+        prefs(ctx).edit()
+            .putBoolean(KEY_LAST_CHAPTER, true)
+            .putInt(KEY_LAST_MIN, 0)
+            .apply()
+    }
+
+    /** Запомнить выбранное время — из него автоматика и ставит таймер. */
+    fun setLastMinutes(ctx: Context, minutes: Int) {
+        if (minutes <= 0) return
+        prefs(ctx).edit()
+            .putInt(KEY_LAST_MIN, minutes)
+            .putBoolean(KEY_LAST_CHAPTER, false)
+            .apply()
+    }
+
+    /** Последнее выбранное время в минутах; 0 — не выбирали ни разу. */
+    fun lastMinutes(ctx: Context): Int =
+        prefs(ctx).getInt(KEY_LAST_MIN, 0).let { if (it in MINUTE_CHOICES) it else 0 }
+
+    /** Последним выбором был режим «до конца главы». */
+    fun lastChapter(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_LAST_CHAPTER, false) && lastMinutes(ctx) == 0
 }

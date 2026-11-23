@@ -33,9 +33,15 @@ internal object BookDelete {
     class TreePaths(val dir: File, val treeDocId: String)
 
     /** Чем кончилось удаление: [removed] — запись ушла с полки, [fileGone] — файла
-     *  на диске больше нет. Различать обязательно: удаление с файлом может и не
-     *  получиться, и тогда книгу не трогаем вовсе (12.10.2026, решение Сержа). */
-    class Outcome(val removed: Boolean, val fileGone: Boolean)
+     *  на диске больше нет, [fileWasMissing] — файла НЕ БЫЛО УЖЕ ДО удаления
+     *  (запись пережила свой файл). Различать обязательно: удаление с файлом может
+     *  и не получиться, и тогда книгу не трогаем вовсе (12.10.2026, решение
+     *  Сержа). */
+    class Outcome(
+        val removed: Boolean,
+        val fileGone: Boolean,
+        val fileWasMissing: Boolean = false,
+    )
 
     /** Ядро удаления (msg1351, msg5947): стереть файл, если [withFiles], и убрать
      *  запись с полки. Без тостов и озвучки — их зовёт вызывающий: одиночное
@@ -49,6 +55,15 @@ internal object BookDelete {
      *  полке, а скан снимет запись сам, когда файла не станет. Прежде такую
      *  книгу убирали с полки и прятали от скана — у Сержа так накопилось 17
      *  файлов, которые лежат в папке, а полка их не показывает.
+     *
+     *  ПОПРАВКА 19.11.2026 (жалоба Сержа: «не могу удалить книгу из библиотеки —
+     *  файла уже нету, файловые менеджеры её не видят, а программа видит и
+     *  выдаёт ошибку»). Правило выше — про файл, который ЛЕЖИТ. Если файла уже
+     *  нет, стирать нечего, и «файл стереть не удалось» — неправда: держать такую
+     *  запись на полке незачем, она навсегда остаётся мёртвой строкой. Поэтому
+     *  перед отказом спрашиваем [BookStore.fileGone] (единственное место, где
+     *  решается «файла правда нет»): файла нет — убираем запись с полки и говорим
+     *  об этом.
      *
      *  [withFiles] = false — файл оставляют НАМЕРЕННО: тогда книгу убираем, но
      *  прячем её от скана (и запись, и путь), иначе автоскан вернёт её на полку
@@ -80,11 +95,29 @@ internal object BookDelete {
             }
         }
         val path = tp?.let { diskPathOf(rec.uri, it) }
+        // ФАЙЛА УЖЕ НЕТ (19.11.2026, см. шапку [book]): стирать нечего, и держать
+        // запись нельзя — она осталась бы мёртвой строкой навсегда.
+        val missing = if (withFiles && !deleted) fileMissingNow(context, rec.uri, uri, path) else false
+        val fileWasMissing = missing == true
+        if (fileWasMissing) {
+            Diag.log(context, "lib", "удаление ${rec.name}: файла на месте уже нет — убираю запись с полки")
+        }
         // Файл в ПАПКЕ КНИГ не стёрся — не трогаем книгу вовсе: пусть остаётся на
         // полке (см. правило выше), а файл человек уберёт проводником. Вне папки
         // книг так рассудить нельзя — там бывает копия в памяти приложения, до
         // которой проводником не добраться: запись убираем, как раньше.
-        if (withFiles && !deleted && insideBooks(path, tp)) {
+        if (withFiles && !deleted && !fileWasMissing &&
+            (insideBooks(path, tp) || insideTree(rec.uri, treeDocId(context)))
+        ) {
+            // Строка в журнал, чтобы по следующему разбору сразу было видно, ЧТО
+            // мы решили про файл (жалоба Сержа 19.11.2026: «всё равно не
+            // исправилось» — без этой строки причина решения не видна).
+            Diag.log(
+                context, "lib",
+                "удаление ${rec.name}: отказано — файл стереть не вышло, а проверка говорит " +
+                    "«файл на месте» (uri=${uri?.scheme ?: "?"}, путь=${path ?: "не сопоставлен"}, " +
+                    "проверка=${when (missing) { true -> "нет файла"; false -> "файл есть"; null -> "не знаю" }})"
+            )
             return Outcome(removed = false, fileGone = false)
         }
         // Убираем саму запись и её близнеца-дубль (другой адрес того же файла),
@@ -112,7 +145,55 @@ internal object BookDelete {
             (twins + rec.uri).forEach { hideFromScan(context, it) }
             if (path != null) hidePathFromScan(context, path)
         }
-        return Outcome(removed = true, fileGone = deleted)
+        return Outcome(removed = true, fileGone = deleted || fileWasMissing, fileWasMissing = fileWasMissing)
+    }
+
+    /** Есть ли файл книги на месте: true — файла нет, false — есть, null — «не
+     *  знаю» (нет доступа к чужой папке; тогда книгу НЕ трогаем, иначе потеряли бы
+     *  место чтения, закладки и цитаты).
+     *
+     *  Почему не только [BookStore.fileGone] (19.11.2026). После пробы 300 Серж
+     *  сказал, что удаление всё равно отказывает, то есть проверка ответила «файл
+     *  есть». Реестровая проверка смотрит ПОТОК и любую незнакомую ошибку считает
+     *  «не знаю». Здесь три пробы по очереди, от самой точной: реальный путь на
+     *  диске (когда есть «Доступ ко всем файлам»), затем попытка ОТКРЫТЬ документ
+     *  (честные `FileNotFoundException` и `IllegalArgumentException` = документа
+     *  нет), и только потом правило реестра. */
+    private fun fileMissingNow(context: Context, uriStr: String, uri: Uri?, path: String?): Boolean? {
+        // 1. Путь на диске точнее всего — но судить по нему можно, только когда
+        //    файлы чужих папок нам видны вообще.
+        if (path != null && (uri?.scheme == "file" || AllFiles.granted(context))) {
+            return !File(path).exists()
+        }
+        if (uri == null || uri.scheme != "content") return null
+        // 2. Пробуем открыть сам документ.
+        val byOpen: Boolean? = try {
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            if (pfd == null) {
+                null
+            } else {
+                runCatching { pfd.close() }
+                false
+            }
+        } catch (_: java.io.FileNotFoundException) {
+            true
+        } catch (_: IllegalArgumentException) {
+            Diag.log(
+                context, "lib",
+                "проверка файла книги: провайдер не знает такого документа — считаю, что файла нет"
+            )
+            true
+        } catch (_: SecurityException) {
+            null
+        } catch (e: Exception) {
+            Diag.log(
+                context, "lib",
+                "проверка файла книги: ${e.javaClass.simpleName} — ответ «не знаю»"
+            )
+            null
+        }
+        // 3. Не вышло — общее правило реестра.
+        return byOpen ?: BookStore.fileGone(context, uriStr)
     }
 
     /** Лежит ли файл внутри выбранной папки книг: только там «удалю проводником»
@@ -123,6 +204,27 @@ internal object BookDelete {
         return path == dir || path.startsWith(dir + File.separator)
     }
 
+    /** То же самое, но ПО АДРЕСУ, без «Доступа ко всем файлам» (07.11.2026,
+     *  жалоба тестера «удаление не происходит, книга остаётся»). Сопоставлять
+     *  папку с диском для этого не нужно: номер дерева виден прямо в адресе.
+     *  Без этой проверки на телефоне без полного доступа к файлам файл не
+     *  стирался, а запись всё равно снималась — и скан возвращал книгу на полку,
+     *  как будто удаление не сработало. */
+    private fun insideTree(uriStr: String?, treeDocId: String?): Boolean {
+        if (uriStr == null || treeDocId == null) return false
+        val u = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return false
+        if (u.scheme != "content") return false
+        val doc = runCatching { DocumentsContract.getDocumentId(u) }.getOrNull() ?: return false
+        return doc == treeDocId || doc.startsWith("$treeDocId/")
+    }
+
+    /** Номер дерева выбранной папки книг — без требования полного доступа. */
+    fun treeDocId(context: Context): String? {
+        val treeStr = prefs(context).getString(LibraryActivity.KEY_TREE, null) ?: return null
+        val tree = runCatching { Uri.parse(treeStr) }.getOrNull() ?: return null
+        return runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull()
+    }
+
     /** Спрятать uri от авто-скана папки: запись удалена или склеена, но сам
      *  файл остаётся в папке — без скрытия скан вернул бы его строкой. */
     fun hideFromScan(context: Context, uriStr: String) {
@@ -130,6 +232,27 @@ internal object BookDelete {
         val set = (p.getStringSet(KEY_HIDDEN, null) ?: emptySet()).toMutableSet()
         if (set.add(uriStr)) {
             p.edit().putStringSet(KEY_HIDDEN, set).apply()
+        }
+    }
+
+    /** СНЯТЬ uri с метки «не возвращать при скане» (вкладка «Файлы»,
+     *  19.11.2026): человек дошёл до файла руками — значит, он ему нужен, и
+     *  прежняя отметка не должна больше прятать книгу с полки. */
+    fun unhideFromScan(context: Context, uriStr: String) {
+        val p = prefs(context)
+        val set = (p.getStringSet(KEY_HIDDEN, null) ?: emptySet()).toMutableSet()
+        if (set.remove(uriStr)) {
+            p.edit().putStringSet(KEY_HIDDEN, set).apply()
+        }
+    }
+
+    /** То же для пути файла: запись могла быть под одним адресом, а менеджер
+     *  показывает файл по реальному пути. */
+    fun unhidePathFromScan(context: Context, path: String) {
+        val p = prefs(context)
+        val set = (p.getStringSet(KEY_HIDDEN_PATHS, null) ?: emptySet()).toMutableSet()
+        if (set.remove(path)) {
+            p.edit().putStringSet(KEY_HIDDEN_PATHS, set).apply()
         }
     }
 

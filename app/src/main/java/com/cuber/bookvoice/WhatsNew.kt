@@ -214,6 +214,16 @@ object WhatsNew {
             R.string.whats_new_0_8_5,
             R.string.whats_new_0_8_6,
         ),
+        // 0.9.0: выпуск 258 — пачки из каталога, файловый менеджер, autofilter
+        // мёртвых записей, честный синтезатор, папки для сканa. Тексты утвердил
+        // Серж 23.11.2026.
+        258 to listOf(
+            R.string.whats_new_258_1,
+            R.string.whats_new_258_2,
+            R.string.whats_new_258_3,
+            R.string.whats_new_258_4,
+            R.string.whats_new_258_5,
+        ),
     )
 
     private fun prefs(c: Context): SharedPreferences =

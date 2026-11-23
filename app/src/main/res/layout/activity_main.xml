@@ -181,13 +181,11 @@
                 android:text="🎤"
                 android:textSize="18sp" />
 
-            <Button
-                android:id="@+id/btnSearchGo"
-                android:layout_width="wrap_content"
-                android:layout_height="48dp"
-                android:layout_marginStart="4dp"
-                android:text="@string/search_find_btn"
-                android:textSize="15sp" />
+            <!-- 12.11.2026, решение Сержа: кнопку «Найти» убрали. Кнопок в окне и
+                 без того четыре (микрофон, Назад, Далее, Закрыть), а «Найти» и
+                 «Далее» делают одно и то же по очереди: «Далее» запускает поиск,
+                 когда его ещё не было, и шагает по совпадениям, когда поиск уже
+                 готов. -->
         </LinearLayout>
 
         <TextView
